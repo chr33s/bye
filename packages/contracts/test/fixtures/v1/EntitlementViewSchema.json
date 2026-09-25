@@ -1,0 +1,29 @@
+[
+  {
+    "plan": "C",
+    "interval": "monthly",
+    "status": "past_due",
+    "seats": -3.4417325465581585e-122,
+    "trialEndsAt": 1,
+    "periodEnd": 10,
+    "creditsCents": -2.5e-323
+  },
+  {
+    "plan": "\u0000",
+    "interval": "annual",
+    "status": "active",
+    "seats": 5.939344554868516e91,
+    "trialEndsAt": null,
+    "periodEnd": 2,
+    "creditsCents": 1.7976931348623127e308
+  },
+  {
+    "plan": "0",
+    "interval": "annual",
+    "status": "expired",
+    "seats": 1.7976931348623155e308,
+    "trialEndsAt": null,
+    "periodEnd": null,
+    "creditsCents": 1.7976931348623127e308
+  }
+]

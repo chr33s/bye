@@ -1,0 +1,11 @@
+[
+  {
+    "type": "WeekTasks",
+    "date": {
+      "year": -1,
+      "month": -1,
+      "day": -15
+    },
+    "firstWeekday": -13
+  }
+]

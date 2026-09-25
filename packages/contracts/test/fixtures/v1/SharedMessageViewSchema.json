@@ -1,0 +1,67 @@
+[
+  {
+    "messageRef": "s",
+    "from": {
+      "name": "\n",
+      "address": "Q@+.x"
+    },
+    "to": [
+      {
+        "name": "-1",
+        "address": "x@#.I"
+      },
+      {
+        "name": "\n",
+        "address": "@怗.♕"
+      },
+      {
+        "name": "",
+        "address": ")@2.૖"
+      },
+      {
+        "address": "@錫.靚"
+      }
+    ],
+    "cc": [],
+    "subject": ";",
+    "snippet": "8_uh",
+    "sentAt": 4
+  },
+  {
+    "messageRef": "7",
+    "from": {
+      "address": "-@頔.6"
+    },
+    "to": [],
+    "cc": [],
+    "subject": "",
+    "snippet": "0",
+    "sentAt": 1
+  },
+  {
+    "messageRef": "\t",
+    "from": {
+      "address": "$@X.I"
+    },
+    "to": [],
+    "cc": [
+      {
+        "name": "oi \"",
+        "address": "盦@c.ም"
+      },
+      {
+        "address": "砙@S."
+      },
+      {
+        "name": "\ud800",
+        "address": "潝@T.泸"
+      },
+      {
+        "address": "e@.G"
+      }
+    ],
+    "subject": "\udc00",
+    "snippet": "\t",
+    "sentAt": 3
+  }
+]

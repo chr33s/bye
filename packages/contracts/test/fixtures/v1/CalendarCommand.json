@@ -1,0 +1,18 @@
+[
+  {
+    "type": "UpdateCalendar",
+    "commandId": "",
+    "calendarId": "\n",
+    "expectedRevision": -2
+  },
+  {
+    "type": "StopTimer",
+    "commandId": " ckq"
+  },
+  {
+    "type": "RevokeCalendar",
+    "commandId": ".s",
+    "calendarId": "\udc00",
+    "grantee": ""
+  }
+]

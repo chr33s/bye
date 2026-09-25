@@ -1,0 +1,14 @@
+[
+  {
+    "secret": "\ud800",
+    "otpauthUri": "q"
+  },
+  {
+    "secret": "\n",
+    "otpauthUri": "-"
+  },
+  {
+    "secret": "{p|",
+    "otpauthUri": "\u0000"
+  }
+]

@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {},
+  "env": {
+    "builtin": true
+  },
+  "options": {
+    "typeAware": true,
+    "typeCheck": true
+  },
+  // tsgolint resolves Durable Object RPC stub results as non-thenable; tsc sees Promises.
+  "overrides": [
+    {
+      "files": ["workers/**/*.ts"],
+      "rules": {
+        "typescript/await-thenable": "off"
+      }
+    }
+  ]
+}

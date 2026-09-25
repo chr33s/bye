@@ -1,0 +1,13 @@
+[
+  {
+    "type": "AddWeekTask",
+    "commandId": "-1",
+    "date": {
+      "year": 15,
+      "month": 2,
+      "day": 0
+    },
+    "firstWeekday": -4,
+    "title": "uEG^"
+  }
+]

@@ -1,0 +1,18 @@
+From: Alice <alice@example.com>
+To: bob@example.org
+Subject: Signed
+Message-ID: <signed-1@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/signed; protocol="application/pkcs7-signature"; micalg=sha-256; boundary="sig"
+
+--sig
+Content-Type: text/plain; charset=utf-8
+
+Signed body text.
+--sig
+Content-Type: application/pkcs7-signature; name="smime.p7s"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="smime.p7s"
+
+AAECAwQF
+--sig--

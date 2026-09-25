@@ -1,0 +1,14 @@
+[
+  {
+    "scope": "domain",
+    "key": "\u0000"
+  },
+  {
+    "scope": "user",
+    "key": "\t"
+  },
+  {
+    "scope": "identity",
+    "key": "\ud800"
+  }
+]

@@ -1,0 +1,42 @@
+{
+  "name": "@bye/mobile",
+  "version": "0.2.0",
+  "private": true,
+  "description": "bye for iOS and Android (React Native). Installed with npm, outside the pnpm workspace.",
+  "scripts": {
+    "start": "react-native start",
+    "ios": "react-native run-ios",
+    "android": "react-native run-android",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "ios:project": "cd ios && xcodegen generate && pod install",
+    "ios:build-sim": "xcodebuild -workspace ios/ByeMobile.xcworkspace -scheme ByeMobile -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build",
+    "android:build": "cd android && ./gradlew assembleDebug",
+    "android:release": "cd android && ./gradlew bundleRelease",
+    "ios:archive": "xcodebuild -workspace ios/ByeMobile.xcworkspace -scheme ByeMobile -configuration Release -destination 'generic/platform=iOS' -archivePath build/ByeMobile.xcarchive CURRENT_PROJECT_VERSION=${BYE_BUILD_NUMBER:-1} archive && xcodebuild -exportArchive -archivePath build/ByeMobile.xcarchive -exportOptionsPlist ios/ExportOptions.plist -exportPath build/ipa"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "react": "19.1.4",
+    "react-native": "0.81.6",
+    "react-native-get-random-values": "2.0.0",
+    "react-native-safe-area-context": "5.10.0",
+    "react-native-url-polyfill": "4.0.0",
+    "react-native-webview": "14.0.1"
+  },
+  "devDependencies": {
+    "@babel/core": "7.29.7",
+    "@babel/preset-env": "7.29.7",
+    "@babel/runtime": "7.29.7",
+    "@react-native-community/cli": "20.0.0",
+    "@react-native-community/cli-platform-android": "20.0.0",
+    "@react-native-community/cli-platform-ios": "20.0.0",
+    "@react-native/babel-preset": "0.81.6",
+    "@react-native/metro-config": "0.81.6",
+    "@react-native/typescript-config": "0.81.6",
+    "@types/react": "19.1.17",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,25 @@
+[
+  {
+    "_tag": "SetNotificationSettings",
+    "commandId": "Z:T",
+    "quietHours": {
+      "start": "",
+      "end": "",
+      "timeZone": "😀"
+    },
+    "devices": {
+      "0": {
+        "enabled": true
+      },
+      "C,:+": {
+        "enabled": true
+      },
+      "😀": {
+        "enabled": true
+      },
+      "2xz-": {
+        "enabled": true
+      }
+    }
+  }
+]

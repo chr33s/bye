@@ -1,0 +1,14 @@
+[
+  {
+    "schemaVersion": 1,
+    "type": "ingest",
+    "eventId": "",
+    "ingestionId": "\t",
+    "mailboxId": "",
+    "recipient": "6Wc#",
+    "envelopeFrom": "",
+    "objectKey": "mWk",
+    "rawSize": -1.7976931348623151e308,
+    "receivedAt": -4.707725645946652e179
+  }
+]

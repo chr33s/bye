@@ -1,0 +1,34 @@
+[
+  {
+    "kind": "timed",
+    "local": {
+      "year": 2,
+      "month": -12,
+      "day": 16,
+      "hour": -6,
+      "minute": -10,
+      "second": 3
+    },
+    "tzid": "\n"
+  },
+  {
+    "kind": "date",
+    "date": {
+      "year": -3,
+      "month": 4,
+      "day": -3
+    }
+  },
+  {
+    "kind": "timed",
+    "local": {
+      "year": -8,
+      "month": -8,
+      "day": -1,
+      "hour": -14,
+      "minute": -14,
+      "second": 15
+    },
+    "tzid": "😀"
+  }
+]

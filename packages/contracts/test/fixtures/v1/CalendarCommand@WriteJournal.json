@@ -1,0 +1,13 @@
+[
+  {
+    "type": "WriteJournal",
+    "commandId": "😀",
+    "date": {
+      "year": -1,
+      "month": 3,
+      "day": -2
+    },
+    "body": "\t",
+    "expectedRevision": 6
+  }
+]

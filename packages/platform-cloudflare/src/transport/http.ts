@@ -1,0 +1,187 @@
+import { type Acceptance, type Submission, TransportFailure } from "@bye/application";
+import type { TransportCapabilities } from "@bye/domain";
+import { Effect } from "effect";
+import { encodeBase64 } from "@bye/mail-codec";
+import { loadRawBytes, type RawContentSource } from "./cloudflare.ts";
+import type { ProviderLookup, TransportAdapter } from "./router.ts";
+
+/** Minimal fetch signature so adapters are testable without a Worker environment. */
+export type FetchLike = (
+  input: string,
+  init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal },
+) => Promise<{ status: number; json(): Promise<unknown>; text(): Promise<string> }>;
+
+export interface HttpTransportConfig {
+  readonly endpoint: string;
+  /** Resolved from a Redacted config at construction; never logged. */
+  readonly apiKey: string;
+  readonly capabilities: TransportCapabilities;
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Generic HTTPS submission adapter for approved providers (personal, external
+ * send-as via provider API, forwarding). Sends the idempotency key when the provider supports it.
+ * Provider contract: POST JSON `{from, to, raw, rawEncoding: "base64", trafficClass}`.
+ * Status mapping: 2xx accepted; 4xx (except 408/429) rejected; 408/429 and connection errors before
+ * a response are retryable only when the provider is idempotent, otherwise Unknown.
+ */
+export const makeHttpTransport = (
+  config: HttpTransportConfig,
+  content: RawContentSource,
+  fetchFn: FetchLike,
+): TransportAdapter => ({
+  capabilities: config.capabilities,
+  submit: (submission: Submission) =>
+    Effect.gen(function* () {
+      const raw = yield* Effect.tryPromise({
+        try: async () => {
+          const bytes = await loadRawBytes(content, submission.contentKey);
+          if (bytes === null) throw new Error("rendered content missing");
+          return bytes;
+        },
+        catch: (e) =>
+          new TransportFailure({
+            kind: "RetryableBeforeAcceptance",
+            detail: e instanceof Error ? e.message : "content",
+          }),
+      });
+      const idempotent = config.capabilities.idempotentSubmission;
+      const response = yield* Effect.tryPromise({
+        try: () =>
+          fetchFn(config.endpoint, {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${config.apiKey}`,
+              "content-type": "application/json",
+              ...(idempotent ? { "idempotency-key": submission.sendJobId } : {}),
+            },
+            body: JSON.stringify({
+              from: submission.from,
+              to: submission.envelopeRecipients,
+              // Raw MIME bytes, base64: JSON cannot carry 8-bit octets losslessly.
+              raw: encodeBase64(raw),
+              rawEncoding: "base64",
+              trafficClass: submission.trafficClass,
+            }),
+            signal: AbortSignal.timeout(config.timeoutMs ?? 30_000),
+          }),
+        catch: (e) =>
+          new TransportFailure({
+            kind: idempotent ? "RetryableBeforeAcceptance" : "Unknown",
+            detail: e instanceof Error ? e.name : "network",
+          }),
+      });
+      if (response.status >= 200 && response.status < 300) {
+        const body = (yield* Effect.tryPromise({
+          try: () => response.json(),
+          catch: () => new TransportFailure({ kind: "Unknown", detail: "unreadable acceptance" }),
+        })) as {
+          id?: string;
+          messageId?: string;
+        };
+        const acceptance: Acceptance = {
+          providerId: body.id ?? submission.sendJobId,
+          ...(body.messageId ? { wireMessageId: body.messageId } : {}),
+        };
+        return acceptance;
+      }
+      if (response.status === 408 || response.status === 429 || response.status >= 500) {
+        return yield* new TransportFailure({
+          kind: idempotent || response.status === 429 ? "RetryableBeforeAcceptance" : "Unknown",
+          detail: `http ${response.status}`,
+        });
+      }
+      return yield* new TransportFailure({ kind: "Rejected", detail: `http ${response.status}` });
+    }).pipe(Effect.withSpan("transport.http.submit")),
+  ...(config.capabilities.reconciliation
+    ? {
+        // Provider contract: GET {endpoint}?idempotency_key=<sendJobId> → 200 {id, messageId?} when the
+        // submission was accepted, 404 when the provider has no record of it.
+        lookup: (sendJobId: string) =>
+          Effect.tryPromise({
+            try: async (): Promise<ProviderLookup> => {
+              const response = await fetchFn(
+                `${config.endpoint}?idempotency_key=${encodeURIComponent(sendJobId)}`,
+                {
+                  method: "GET",
+                  headers: { authorization: `Bearer ${config.apiKey}`, accept: "application/json" },
+                  signal: AbortSignal.timeout(config.timeoutMs ?? 30_000),
+                },
+              );
+              if (response.status === 404) return { _tag: "Absent" };
+              if (response.status !== 200) return { _tag: "Inconclusive" };
+              const body = (await response.json()) as { id?: string; messageId?: string };
+              return body.id
+                ? {
+                    _tag: "Accepted",
+                    providerId: body.id,
+                    ...(body.messageId ? { wireMessageId: body.messageId } : {}),
+                  }
+                : { _tag: "Inconclusive" };
+            },
+            catch: (e) =>
+              new TransportFailure({
+                kind: "Unknown",
+                detail: e instanceof Error ? e.name : "lookup",
+              }),
+          }),
+      }
+    : {}),
+});
+
+const base = {
+  maxAttachmentBytes: 25 * 1024 * 1024,
+  supportsCalendarMime: true,
+  supportsRawMime: true,
+  deliveryEvents: true,
+} as const;
+
+export const PERSONAL_MAIL_CAPABILITIES: TransportCapabilities = {
+  ...base,
+  name: "personal-mail",
+  trafficClasses: ["personal"],
+  maxMessageBytes: 25 * 1024 * 1024,
+  maxRecipients: 100,
+  idempotentSubmission: true,
+  reconciliation: true,
+  exposesWireMessageId: true,
+};
+
+export const EXTERNAL_IDENTITY_CAPABILITIES: TransportCapabilities = {
+  ...base,
+  name: "external-identity",
+  trafficClasses: ["external-identity"],
+  maxMessageBytes: 25 * 1024 * 1024,
+  maxRecipients: 100,
+  idempotentSubmission: false,
+  reconciliation: false,
+  exposesWireMessageId: true,
+};
+
+export const FORWARDING_CAPABILITIES: TransportCapabilities = {
+  ...base,
+  name: "forwarding",
+  trafficClasses: ["forwarding"],
+  maxMessageBytes: 25 * 1024 * 1024,
+  maxRecipients: 1,
+  idempotentSubmission: true,
+  reconciliation: false,
+  exposesWireMessageId: false,
+};
+
+export const makePersonalMailTransport = (
+  c: Omit<HttpTransportConfig, "capabilities">,
+  content: RawContentSource,
+  f: FetchLike,
+) => makeHttpTransport({ ...c, capabilities: PERSONAL_MAIL_CAPABILITIES }, content, f);
+export const makeExternalIdentityTransport = (
+  c: Omit<HttpTransportConfig, "capabilities">,
+  content: RawContentSource,
+  f: FetchLike,
+) => makeHttpTransport({ ...c, capabilities: EXTERNAL_IDENTITY_CAPABILITIES }, content, f);
+export const makeForwardingTransport = (
+  c: Omit<HttpTransportConfig, "capabilities">,
+  content: RawContentSource,
+  f: FetchLike,
+) => makeHttpTransport({ ...c, capabilities: FORWARDING_CAPABILITIES }, content, f);

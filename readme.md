@@ -1,0 +1,91 @@
+<img width="1280" height="320" alt="header" src="https://github.com/user-attachments/assets/54142617-c397-4d7f-b450-4d2c3ad1fa9b" />
+
+# Bye.
+
+### _Say bye to what matters, and hey to the rest._
+
+**Bye** is an open-source email and calendar platform inspired by HEY. It is built in TypeScript on Cloudflare primitives, with Effect v4 and Alchemy. Core flows have been validated locally in Node and workerd; the project has not been deployed to Cloudflare or validated in production.
+
+- **Email:** Imbox, The Feed, The Paper Trail, sender screening, search, drafts and more.
+- **Calendar:** events, invitations, tasks, reminders and time tracking.
+- **Client apps:** a PWA, CLI/TUI, and React Native apps for mobile and desktop.
+- **Open source:** the code is available here for you to inspect and run.
+
+---
+
+The product and architecture are specified in [`spec.md`](./spec.md); this repository implements that design on Cloudflare primitives. Alchemy v2 beta defines the deployment, which has not yet been run against Cloudflare.
+
+Pinned baseline: `effect@4.0.0-rc.117`, `alchemy@2.0.0-beta.79`, Node 24.18.1, pnpm 11.20.0 (see `.mise.toml`). Every dependency is an exact version; the Effect family is pinned through `pnpm-workspace.yaml` overrides.
+
+## Layout
+
+```text
+alchemy.run.ts                 stack entry (re-exports infra/stack.ts)
+infra/resources/               Workers, DO namespaces, D1, R2, Queues+DLQs, Workflows, email routing
+infra/policies/                version, boundary, bundle, plan, stage and telemetry gates
+infra/onboarding/              Cloudflare onboarding service: OAuth, reviewed deploys into an operator's account
+infra/migrations/d1/           ordered, expand-only control-plane SQL
+infra/migrations/durable/      DO class-migration manifest
+infra/tests/                   plan policy, inventory, bindings, parity ledger, repo checks
+workers/core/                  MailCore: HTTP API, email ingress, queue consumers, cron, DO hosts,
+                               Workflows, render origin, image proxy, PublicGateway RPC entrypoint
+workers/public/                published World sites and share links (no private bindings)
+packages/domain/               ids, routing precedence, send state machine, transport contract, parity ledger
+packages/contracts/            versioned Effect Schemas: mail/calendar/control/shared commands, queue payloads
+packages/application/          Effect v4 use cases and service interfaces (auth, mail, calendar, sharing)
+packages/platform-cloudflare/  SQLite DO stores (mailbox, calendar, shared space, World, search, ingress
+                               journal), durable kernel, D1 control plane, R2/Queue/transport adapters
+packages/mail-codec/           MIME parse/build, sanitizer, threading, Speakeasy, proxy signing, MBOX, vCard
+packages/calendar-engine/      time zones, RRULE, ICS, iTIP, layout, free time, reminders
+packages/testing/              node:sqlite DO storage, D1 shim, clocks, fixtures, workerd module shims
+apps/web/                      PWA (served as MailCore static assets)
+apps/cli/                      `bye` CLI and TUI for people and agents
+```
+
+## Commands
+
+```sh
+pnpm install --frozen-lockfile
+pnpm verify          # versions, boundaries, 6 typecheck programs, tests, Worker bundle gate
+pnpm test            # vitest across packages, workers, apps and infra
+pnpm build:web       # build the PWA into apps/web/dist
+pnpm build:deploy    # PWA + MIME container bundle (run by deploy, deploy:plan and drift)
+pnpm exec bye --help
+pnpm exec bye instance add https://mail.example.com   # validate and save a self-hosted instance
+```
+
+Clients are not built per server. The apps and CLI default to the hosted service and can add any compatible instance: they validate its `/.well-known/bye-instance` document and RFC 8414 metadata without credentials, then sign in there with PKCE and an issuer-checked callback (RFC 9207). Onboarding hands off with `bye://add-instance?url=<https URL>`. In the CLI, `BYE_API` overrides the saved default for one invocation.
+
+Operators without a CI pipeline can deploy into their own Cloudflare account through the onboarding service (`pnpm onboarding`; see [`infra/onboarding/README.md`](./infra/onboarding/README.md)). It has not yet been run against Cloudflare.
+
+Deployment goes through `pnpm deploy:plan` / `pnpm run deploy` with `STAGE` set to `dev-<id>`, `preview-<n>`, `staging` or `prod`. The scripts disable CLI telemetry, and production runs only from CI. Read [`infra/RUNBOOK.md`](./infra/RUNBOOK.md) first: bootstrapping the state backend is an explicit, authorized operation.
+
+## How it fits together
+
+- **Inbound:** Email Routing → `email()` resolves the recipient in D1 → registers the receipt in `IngressJournalDO` → streams the original to R2 → enqueues a reference. The queue consumer then parses and sanitizes the message, derives a safety verdict (trusting only our own `Authentication-Results`), and commits to `MailboxDO`. It acks only after the commit.
+- **Mailbox:** single-writer SQLite DO per mailbox. It covers screening, views, attention piles, Bubble Up, threading, rules, workflows, notes, contacts, drafts, send jobs, uploads, away replies, forwarding and retention. Commands are idempotent by command ID; every mutation writes a change event and a durable outbox.
+- **Outbound:**
+  - A draft revision is frozen into one send intent, which waits out the undo window or Send Later time as a persisted job with a generation.
+  - The dispatch consumer renders MIME with Bcc kept envelope-only, re-checks send-as authority, and submits through a transport router that enforces each traffic class's capability limits.
+  - A timeout after submission becomes `unknown`, never a blind retry.
+- **Calendar:** one `CalendarDO` per account, running on the calendar engine. Invitations from approved senders arrive through the propagate queue. Invitation replies leave as iTIP `text/calendar` messages through the owner's mailbox.
+- **Search:** per-mailbox FTS5 `SearchShardDO`, fed by index outbox events. Every hit is rehydrated from the mailbox, so a stale index can omit a result but never reveal one.
+- **Sharing and publishing:** `SharedSpaceDO` holds shared threads, collections, grants and public links. A per-handle World store holds posts and subscribers. The public Worker reaches them only through the narrow `PublicGateway` RPC entrypoint.
+- **Recovery:** DO alarms are re-derived from persisted jobs. A 5-minute cron walks a partitioned resource catalog to restore lost alarms and fence stale submissions, and republishes ingress receipts that were stored but never committed.
+
+## Parity status
+
+All 47 ledger rows in §2 have at least one tagged executable test; `infra/tests/parity.test.ts` fails otherwise. A tag records test coverage, not production acceptance. This repository has not been deployed to Cloudflare. Key open gates:
+
+| Area                           | Current status                                                                                                                                                                                                                                                 |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Native clients                 | iOS simulator, macOS and JavaScript bundles for all four platforms verified locally. Android and Windows builds run in CI. Device, signing, upgrade and some Windows credential tests remain open. Linux uses the PWA.                                         |
+| Personal and subscription mail | No provider is approved. Personal sending is off unless both `PERSONAL_MAIL_API_KEY` and `PERSONAL_MAIL_ENDPOINT` are set (the deploy refuses one without the other); World fanout stays pending. Cloudflare sending is limited here to transactional traffic. |
+| Scanning and MIME              | ClamAV scan flows pass local smoke tests; the scanner reaches only the private SigMirror (`enableInternet: false`, not yet asserted by a test). Messages over 8 MB parse in the bounded MIME container. Sandboxed attachment previews exist.                   |
+| External integrations          | Push (Web Push, APNs, FCM) and location autocomplete (Mapbox) have provider adapters; they stay off until their keys are configured. The billing ledger and signed webhook are implemented; the payments UI is not.                                            |
+| Previews                       | Each PR deploys an isolated `preview-<n>` stage on its own host (`pr-<n>.<PREVIEW_DOMAIN>`) with the mail sandbox, probes, and a gated destroy on close.                                                                                                       |
+| DNS rebinding                  | URL and redirect checks exist. Resolved-address checks need deployment egress controls.                                                                                                                                                                        |
+| Runtime validation             | Workerd tests cover inbound mail, search, calendar layout, draft dispatch and publishing. Production ingress retries, wire Message-ID, customer-zone onboarding and performance remain unverified.                                                             |
+| Strict Cloudflare-only profile | A self-hosted state backend (per-stage tokens, encrypted snapshots) is implemented but not deployed. The default Alchemy state backend uses an upstream Worker.                                                                                                |
+
+See [spec.md](./spec.md) for the full parity requirements and deployment gates, and [infra/RUNBOOK.md](./infra/RUNBOOK.md) for deployment and recovery procedures.

@@ -1,0 +1,29 @@
+[
+  {
+    "_tag": "SaveDraft",
+    "commandId": "xxvb",
+    "draftId": "9",
+    "expectedRevision": 12,
+    "content": {
+      "to": [],
+      "cc": [
+        {
+          "address": "˚@uS"
+        },
+        {
+          "address": "w@a"
+        },
+        {
+          "address": "겗+@6"
+        },
+        {
+          "address": "P즊@頫"
+        }
+      ],
+      "bcc": [],
+      "subject": "\udc00",
+      "text": "`j>^",
+      "attachments": ["aT"]
+    }
+  }
+]

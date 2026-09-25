@@ -1,0 +1,16 @@
+[
+  {
+    "kind": "webpush",
+    "endpoint": "L$Zu"
+  },
+  {
+    "kind": "fcm",
+    "endpoint": "-1",
+    "p256dh": "o",
+    "auth": "t,5"
+  },
+  {
+    "kind": "apns",
+    "endpoint": "Y"
+  }
+]

@@ -1,0 +1,20 @@
+[
+  {
+    "eventId": "n",
+    "identityId": "",
+    "recipient": "p@ፂ.R",
+    "kind": "hard-bounce"
+  },
+  {
+    "eventId": ">",
+    "identityId": "",
+    "recipient": "C@w.䒝",
+    "kind": "soft-bounce"
+  },
+  {
+    "eventId": "\u0000",
+    "identityId": "D?B'",
+    "recipient": "Z@K.3",
+    "kind": "unsubscribe"
+  }
+]

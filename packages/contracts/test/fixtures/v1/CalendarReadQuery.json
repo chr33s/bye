@@ -1,0 +1,19 @@
+[
+  {
+    "type": "Preferences"
+  },
+  {
+    "type": "Agenda",
+    "from": {
+      "year": 14,
+      "month": 4,
+      "day": 9
+    },
+    "days": 1
+  },
+  {
+    "type": "TimeEntries",
+    "from": -5.671089023094962e247,
+    "to": -2e-323
+  }
+]

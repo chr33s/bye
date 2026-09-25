@@ -1,0 +1,8 @@
+[
+  {
+    "_tag": "PutForwardingRule",
+    "commandId": "Y",
+    "destination": "b@E",
+    "keepCopy": false
+  }
+]

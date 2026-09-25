@@ -1,0 +1,28 @@
+{
+  "extends": "@react-native/typescript-config",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "types": ["react-native"],
+    "lib": ["ES2023", "DOM"],
+    "skipLibCheck": true,
+    "noEmit": true,
+    "strict": true,
+    "paths": {
+      "@bye/native-shared": ["../../packages/native-shared/src/client.ts"],
+      "@bye/native-shared/app": ["../../packages/native-shared/src/ui/App.tsx"],
+      "@bye/native-shared/auth": ["../../packages/native-shared/src/auth/index.ts"],
+      "@bye/native-shared/platform": ["../../packages/native-shared/src/ui/host.ts"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "*": ["./node_modules/*", "./node_modules/@types/*"]
+    }
+  },
+  "include": [
+    "App.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "../../packages/native-shared/src/**/*.ts",
+    "../../packages/native-shared/src/**/*.tsx"
+  ],
+  "exclude": ["**/node_modules", "**/Pods"]
+}

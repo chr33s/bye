@@ -1,0 +1,25 @@
+[
+  {
+    "schemaVersion": 1,
+    "type": "notify",
+    "eventId": "N+7r",
+    "userId": "U>j",
+    "kind": "*",
+    "resource": "/"
+  },
+  {
+    "schemaVersion": 1,
+    "type": "notify",
+    "eventId": "0",
+    "userId": "!plN",
+    "kind": "",
+    "resource": "n68P"
+  },
+  {
+    "schemaVersion": 1,
+    "type": "dispatch",
+    "eventId": "-1",
+    "mailboxId": "\n",
+    "sendJobId": "\u0000"
+  }
+]

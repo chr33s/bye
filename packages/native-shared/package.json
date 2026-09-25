@@ -1,0 +1,25 @@
+{
+  "name": "@bye/native-shared",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/client.ts",
+    "./deeplink": "./src/deeplink.ts",
+    "./drafts": "./src/drafts.ts",
+    "./errors": "./src/errors.ts",
+    "./wire": "./src/wire.ts",
+    "./auth": "./src/auth/index.ts",
+    "./instance": "./src/instance/index.ts",
+    "./calendar-form": "./src/calendar-form.ts",
+    "./views": "./src/views.ts",
+    "./platform": "./src/ui/host.ts",
+    "./routes": "./src/routes.ts",
+    "./app": "./src/ui/App.tsx"
+  },
+  "dependencies": {
+    "@bye/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@bye/contracts": "workspace:*"
+  }
+}

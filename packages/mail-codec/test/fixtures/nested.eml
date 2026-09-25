@@ -1,0 +1,38 @@
+From: "Doe, Jane" <jane@example.com>
+To: Undisclosed recipients:;
+Cc: team: a@example.com, "B (x)" <b@example.com>;, c@example.com (Carl)
+Subject: =?ISO-8859-1?Q?Caf=E9?= =?UTF-8?B?IOKYlSBtZW51?=
+Date: Fri, 25 Sep 2026 12:00:00 +0200 (CEST)
+Message-ID: <outer@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer"
+
+--outer
+Content-Type: multipart/related; boundary="rel"
+
+--rel
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+<p>Hello <img src=3D"cid:logo@x"> caf=C3=A9</p>
+--rel
+Content-Type: image/png
+Content-ID: <logo@x>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgo=
+--rel--
+--outer
+Content-Type: message/rfc822
+
+From: inner@example.net
+Subject: Forwarded thing
+Message-ID: <inner@example.net>
+
+Inner body
+--outer
+Content-Type: application/pdf
+Content-Disposition: attachment; filename*0*=UTF-8''r%C3%A9sum; filename*1*=%C3%A9.pdf
+
+JVBERi0=
+--outer--

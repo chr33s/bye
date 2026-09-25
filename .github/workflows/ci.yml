@@ -1,0 +1,671 @@
+# Release pipeline around the pinned Alchemy CLI (§15.10). The checks are implemented by this
+# project, not by the tool:
+#   verify          → versions, boundaries, bounded concurrency, format, lint, types, tests, bundle,
+#                     web build
+#   preview         → plan export → plan gate → locked deploy (mail sandbox) → post-deploy probes
+#   preview-destroy → destroy plan gated to preview-only resources, then destroy
+#   steady          → two clean deploys: the second plan must be a no-op (§15.10)
+#   release-plan    → plan export + gate + release manifest (artifact)
+#   release-deploy  → approval, manifest re-verified against a fresh plan, canary, probes, promote
+# Every Alchemy invocation runs behind the egress inspection proxy (§13), and state goes through
+# the self-hosted HTTP backend (STATE_BACKEND=http) whose Worker hash is checked first.
+#
+# State credentials are tiered: nonprod jobs (preview, steady, staging) use BYE_STATE_URL /
+# BYE_STATE_TOKEN; only the prod-plan/prod environments hold PROD_BYE_STATE_URL /
+# PROD_BYE_STATE_TOKEN. The nonprod token must be a stage-scoped grant (`staging|preview-*|dev-*=`,
+# infra/state/core.ts parseStateGrants) or a separate backend, so PR code can never reach prod state.
+# Every action is pinned to a commit SHA (Dependabot keeps the pins current).
+name: ci
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Stage to deploy (staging or prod)"
+        required: true
+        type: choice
+        options: [staging, prod]
+      canary_percent:
+        description: "Initial MailCore traffic percent (100 = full; forced to 100 when DO class migrations change)"
+        required: false
+        default: "10"
+
+permissions:
+  contents: read
+
+env:
+  ALCHEMY_TELEMETRY_DISABLED: "1"
+  DO_NOT_TRACK: "1"
+  NO_TRACK: "1"
+  NODE_VERSION: 24.18.1
+  PNPM_VERSION: 11.20.0
+  # Every `alchemy` call is wrapped: node --experimental-strip-types infra/policies/egress-proxy.ts -- …
+  EGRESS: node --experimental-strip-types infra/policies/egress-proxy.ts --
+
+jobs:
+  verify:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Resolve (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+      - name: Exact version and peer checks
+        run: pnpm check:versions
+      - name: Platform import boundaries
+        run: pnpm check:boundaries
+      - name: Bounded concurrency lint
+        run: pnpm check:concurrency
+      - name: Format check
+        run: pnpm fmt:check
+      - name: Lint (type-aware)
+        run: pnpm lint
+      - name: Strict type-check (packages, workers, infra)
+        run: pnpm typecheck
+      - name: Contract fixtures, adapter, adversarial, infra-policy, a11y and parity tests
+        run: pnpm test
+      - name: Worker bundle gate
+        run: pnpm check:bundle
+      # Not a deploy build (STAGE unset, so not strict): the same public inputs the deploy builds
+      # use, so the CSP/sitekey injection path is exercised whenever repository vars provide them.
+      - name: Build web client
+        env:
+          TURNSTILE_SITEKEY: ${{ vars.TURNSTILE_SITEKEY }}
+          APP_ORIGIN: ${{ vars.APP_ORIGIN }}
+          MAIL_RENDER_ORIGIN: ${{ vars.MAIL_RENDER_ORIGIN }}
+        run: pnpm build:web
+
+  preview:
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: preview
+    # One writer per stack/stage (§15.6): the GitHub concurrency group plus the state-backend lease.
+    concurrency:
+      group: deploy-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env: &deploy-env
+      STAGE: preview-${{ github.event.pull_request.number }}
+      CI: "true"
+      STATE_BACKEND: http
+      # Nonprod state grant only (never the prod token): PR code runs in this job.
+      BYE_STATE_URL: ${{ vars.BYE_STATE_URL }}
+      BYE_STATE_TOKEN: ${{ secrets.BYE_STATE_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.NONPROD_CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.NONPROD_CLOUDFLARE_API_TOKEN }}
+      # Previews only deliver to allow-listed test domains (§15.8 preview mail sandbox).
+      MAIL_SANDBOX_DOMAINS: ${{ vars.MAIL_SANDBOX_DOMAINS }}
+      # Per-PR hosts under vars.PREVIEW_DOMAIN, so concurrent previews never share a custom domain
+      # (Worker custom domains are exclusive). Empty PREVIEW_DOMAIN → APP_ORIGIN is empty and
+      # check-config refuses the preview. The public site stays on workers.dev for previews.
+      APP_DOMAIN: ${{ vars.PREVIEW_DOMAIN && format('pr-{0}.{1}', github.event.pull_request.number, vars.PREVIEW_DOMAIN) || '' }}
+      APP_ORIGIN: ${{ vars.PREVIEW_DOMAIN && format('https://pr-{0}.{1}', github.event.pull_request.number, vars.PREVIEW_DOMAIN) || '' }}
+      MAIL_RENDER_ORIGIN: ${{ vars.PREVIEW_DOMAIN && format('https://render-pr-{0}.{1}', github.event.pull_request.number, vars.PREVIEW_DOMAIN) || '' }}
+      # Public Turnstile sitekey for apps/web/build.ts (every job inheriting this env runs
+      # build:deploy with STAGE, APP_ORIGIN and MAIL_RENDER_ORIGIN from here too).
+      TURNSTILE_SITEKEY: ${{ vars.TURNSTILE_SITEKEY }}
+      PUBLIC_DOMAIN: ""
+      SESSION_KEY: ${{ secrets.SESSION_KEY }}
+      PROXY_SIGNING_KEY: ${{ secrets.PROXY_SIGNING_KEY }}
+      BILLING_WEBHOOK_SECRET: ${{ secrets.BILLING_WEBHOOK_SECRET }}
+      TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
+      PERSONAL_MAIL_API_KEY: ${{ secrets.PERSONAL_MAIL_API_KEY }}
+      PERSONAL_MAIL_ENDPOINT: ${{ vars.PERSONAL_MAIL_ENDPOINT }}
+      SEND_EVENTS_WEBHOOK_SECRET: ${{ secrets.SEND_EVENTS_WEBHOOK_SECRET }}
+      SIGMIRROR_WRITE_TOKEN: ${{ secrets.SIGMIRROR_WRITE_TOKEN }}
+      PROBE_TOKEN: ${{ secrets.PROBE_TOKEN }}
+      # Optional stage config (§15.5): every name the stack declares is mapped here, so a feature is
+      # off only because the environment leaves it empty, never because CI forgot it. Enforced by
+      # infra/tests/check-config.test.ts (`unmappedInCi`).
+      MAIL_ZONE: ${{ vars.MAIL_ZONE }}
+      BYE_MX_CUTOVER: ""
+      BYE_CANARY_PERCENT: ""
+      OPERATOR_USER_IDS: ${{ vars.OPERATOR_USER_IDS }}
+      OPS_TOKEN: ${{ secrets.OPS_TOKEN }}
+      LOCATION_API_KEY: ${{ secrets.LOCATION_API_KEY }}
+      VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+      VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
+      VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+      APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
+      APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
+      APNS_TOPIC: ${{ vars.APNS_TOPIC }}
+      APNS_KEY_P8: ${{ secrets.APNS_KEY_P8 }}
+      FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+      FORWARDING_ENDPOINT: ${{ vars.FORWARDING_ENDPOINT }}
+      FORWARDING_DOMAIN: ${{ vars.FORWARDING_DOMAIN }}
+      FORWARDING_API_KEY: ${{ secrets.FORWARDING_API_KEY }}
+      SRS_SECRET: ${{ secrets.SRS_SECRET }}
+      ARC_SELECTOR: ${{ vars.ARC_SELECTOR }}
+      ARC_SIGNING_KEY: ${{ secrets.ARC_SIGNING_KEY }}
+      MAIL_TRAFFIC_CLASSES: ${{ vars.MAIL_TRAFFIC_CLASSES }}
+      NEWSLETTER_PROVIDER: ${{ vars.NEWSLETTER_PROVIDER }}
+      NEWSLETTER_ACCOUNT: ${{ vars.NEWSLETTER_ACCOUNT }}
+      NEWSLETTER_QUALIFIED: ${{ vars.NEWSLETTER_QUALIFIED }}
+      NEWSLETTER_API_KEY: ${{ secrets.NEWSLETTER_API_KEY }}
+      NEWSLETTER_WEBHOOK_SECRET: ${{ secrets.NEWSLETTER_WEBHOOK_SECRET }}
+      EXTERNAL_IDENTITY_SEAL_KEY: ${{ secrets.EXTERNAL_IDENTITY_SEAL_KEY }}
+      CF_DNS_API_TOKEN: ${{ secrets.CF_DNS_API_TOKEN }}
+      CF_CACHE_PURGE_TOKEN: ${{ secrets.CF_CACHE_PURGE_TOKEN }}
+      CF_PUBLIC_ZONE_ID: ${{ vars.CF_PUBLIC_ZONE_ID }}
+      MAIL_WORKER_NAME: ${{ vars.MAIL_WORKER_NAME }}
+      MAIL_DKIM_PUBLIC_KEY: ${{ vars.MAIL_DKIM_PUBLIC_KEY }}
+      BILLING_CHECKOUT_URL: ${{ vars.BILLING_CHECKOUT_URL }}
+      BILLING_API_KEY: ${{ secrets.BILLING_API_KEY }}
+      # Deploy-time scanner signature source (infra/resources/scanner-source.ts); empty = mirror.
+      SCANNER_SIGNATURES: ${{ vars.SCANNER_SIGNATURES }}
+      SCANNER_IMAGE: ${{ vars.SCANNER_IMAGE }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Required config present (names only)
+        run: node --experimental-strip-types infra/policies/check-config.ts
+      - name: State Worker is the reviewed build
+        run: node --experimental-strip-types infra/state/verify-worker.ts
+      - name: Acquire stage lease
+        run: |
+          node --experimental-strip-types infra/state/lease.ts acquire MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}"
+          # Keep the lease alive for the whole job (renewed every 5 min; the runner reaps it at job end).
+          nohup node --experimental-strip-types infra/state/lease.ts heartbeat MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}" > lease-heartbeat.log 2>&1 &
+      - name: Plan export (Alchemy engine; web and MIME container bundles built first)
+        run: pnpm build:deploy && $EGRESS node --experimental-strip-types infra/policies/plan-export.ts plan-out deploy
+      - name: Plan gate
+        run: pnpm check:plan --mode deploy plan-out/plan-export.json
+      - name: Lease still held
+        run: node --experimental-strip-types infra/state/lease.ts renew MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}"
+      - name: Deploy isolated preview
+        run: $EGRESS pnpm run deploy
+      - name: Post-deploy probes
+        env:
+          PROBE_BASE_URL: ${{ env.APP_ORIGIN }}
+        run: node --experimental-strip-types infra/probes/run.ts > probe-report.json; status=$?; cat probe-report.json; exit $status
+      - name: Release stage lease
+        if: always()
+        run: |
+          # Stop the heartbeat and wait for it to exit, so no in-flight renewal re-acquires the lease.
+          pkill -f "lease.ts heartbeat" || true
+          for _ in $(seq 30); do pgrep -f "lease.ts heartbeat" > /dev/null || break; sleep 1; done
+          node --experimental-strip-types infra/state/lease.ts release MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: preview-${{ github.event.pull_request.number }}-${{ github.sha }}
+          path: |
+            plan-out/
+            probe-report.json
+            lease-heartbeat.log
+
+  preview-destroy:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    environment: preview
+    concurrency:
+      group: deploy-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env: *deploy-env
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: State Worker is the reviewed build
+        run: node --experimental-strip-types infra/state/verify-worker.ts
+      - name: Acquire stage lease
+        run: |
+          node --experimental-strip-types infra/state/lease.ts acquire MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}"
+          # Keep the lease alive for the whole job (renewed every 5 min; the runner reaps it at job end).
+          nohup node --experimental-strip-types infra/state/lease.ts heartbeat MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}" > lease-heartbeat.log 2>&1 &
+      - name: Destroy plan export
+        run: $EGRESS node --experimental-strip-types infra/policies/plan-export.ts plan-out destroy
+      - name: Destroy gate (only preview-scoped resources; never foundation or retained data)
+        run: pnpm check:plan --mode destroy plan-out/plan-export.json
+      - name: Destroy preview
+        run: $EGRESS pnpm destroy:preview
+      - name: Release stage lease
+        if: always()
+        run: |
+          # Stop the heartbeat and wait for it to exit, so no in-flight renewal re-acquires the lease.
+          pkill -f "lease.ts heartbeat" || true
+          for _ in $(seq 30); do pgrep -f "lease.ts heartbeat" > /dev/null || break; sleep 1; done
+          node --experimental-strip-types infra/state/lease.ts release MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}"
+
+  # Two clean deploys (§15.10): deploy an ephemeral stage twice; the second plan must be empty.
+  # The stage is `dev-<run id>`: an ephemeral, non-persistent class that classifyStage, guard-stage
+  # and the destroy gate all accept (a `steady-*` name is rejected by every one of them).
+  steady:
+    if: github.event_name == 'push'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: preview
+    concurrency:
+      group: deploy-steady
+      cancel-in-progress: false
+    env:
+      CI: "true"
+      STATE_BACKEND: http
+      BYE_STATE_URL: ${{ vars.BYE_STATE_URL }}
+      BYE_STATE_TOKEN: ${{ secrets.BYE_STATE_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.NONPROD_CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.NONPROD_CLOUDFLARE_API_TOKEN }}
+      MAIL_SANDBOX_DOMAINS: ${{ vars.MAIL_SANDBOX_DOMAINS }}
+      TURNSTILE_SITEKEY: ${{ vars.TURNSTILE_SITEKEY }}
+      PUBLIC_DOMAIN: ""
+      SESSION_KEY: ${{ secrets.SESSION_KEY }}
+      PROXY_SIGNING_KEY: ${{ secrets.PROXY_SIGNING_KEY }}
+      BILLING_WEBHOOK_SECRET: ${{ secrets.BILLING_WEBHOOK_SECRET }}
+      TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
+      PERSONAL_MAIL_API_KEY: ${{ secrets.PERSONAL_MAIL_API_KEY }}
+      PERSONAL_MAIL_ENDPOINT: ${{ vars.PERSONAL_MAIL_ENDPOINT }}
+      SEND_EVENTS_WEBHOOK_SECRET: ${{ secrets.SEND_EVENTS_WEBHOOK_SECRET }}
+      SIGMIRROR_WRITE_TOKEN: ${{ secrets.SIGMIRROR_WRITE_TOKEN }}
+      PROBE_TOKEN: ${{ secrets.PROBE_TOKEN }}
+      MAIL_ZONE: ${{ vars.MAIL_ZONE }}
+      BYE_MX_CUTOVER: ""
+      BYE_CANARY_PERCENT: ""
+      OPERATOR_USER_IDS: ${{ vars.OPERATOR_USER_IDS }}
+      OPS_TOKEN: ${{ secrets.OPS_TOKEN }}
+      LOCATION_API_KEY: ${{ secrets.LOCATION_API_KEY }}
+      VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+      VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
+      VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+      APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
+      APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
+      APNS_TOPIC: ${{ vars.APNS_TOPIC }}
+      APNS_KEY_P8: ${{ secrets.APNS_KEY_P8 }}
+      FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+      FORWARDING_ENDPOINT: ${{ vars.FORWARDING_ENDPOINT }}
+      FORWARDING_DOMAIN: ${{ vars.FORWARDING_DOMAIN }}
+      FORWARDING_API_KEY: ${{ secrets.FORWARDING_API_KEY }}
+      SRS_SECRET: ${{ secrets.SRS_SECRET }}
+      ARC_SELECTOR: ${{ vars.ARC_SELECTOR }}
+      ARC_SIGNING_KEY: ${{ secrets.ARC_SIGNING_KEY }}
+      MAIL_TRAFFIC_CLASSES: ${{ vars.MAIL_TRAFFIC_CLASSES }}
+      NEWSLETTER_PROVIDER: ${{ vars.NEWSLETTER_PROVIDER }}
+      NEWSLETTER_ACCOUNT: ${{ vars.NEWSLETTER_ACCOUNT }}
+      NEWSLETTER_QUALIFIED: ${{ vars.NEWSLETTER_QUALIFIED }}
+      NEWSLETTER_API_KEY: ${{ secrets.NEWSLETTER_API_KEY }}
+      NEWSLETTER_WEBHOOK_SECRET: ${{ secrets.NEWSLETTER_WEBHOOK_SECRET }}
+      EXTERNAL_IDENTITY_SEAL_KEY: ${{ secrets.EXTERNAL_IDENTITY_SEAL_KEY }}
+      CF_DNS_API_TOKEN: ${{ secrets.CF_DNS_API_TOKEN }}
+      CF_CACHE_PURGE_TOKEN: ${{ secrets.CF_CACHE_PURGE_TOKEN }}
+      CF_PUBLIC_ZONE_ID: ${{ vars.CF_PUBLIC_ZONE_ID }}
+      MAIL_WORKER_NAME: ${{ vars.MAIL_WORKER_NAME }}
+      MAIL_DKIM_PUBLIC_KEY: ${{ vars.MAIL_DKIM_PUBLIC_KEY }}
+      BILLING_CHECKOUT_URL: ${{ vars.BILLING_CHECKOUT_URL }}
+      BILLING_API_KEY: ${{ secrets.BILLING_API_KEY }}
+      SCANNER_SIGNATURES: ${{ vars.SCANNER_SIGNATURES }}
+      SCANNER_IMAGE: ${{ vars.SCANNER_IMAGE }}
+      STAGE: dev-${{ github.run_id }}
+      # No custom domains and no probes on the ephemeral steady stage; the origins are required
+      # Worker config, so they name reserved `.invalid` hosts that nothing serves.
+      APP_DOMAIN: ""
+      APP_ORIGIN: https://dev-${{ github.run_id }}.invalid
+      MAIL_RENDER_ORIGIN: https://render-dev-${{ github.run_id }}.invalid
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --experimental-strip-types infra/policies/check-config.ts
+      - run: node --experimental-strip-types infra/state/verify-worker.ts
+      - name: Acquire stage lease
+        run: |
+          node --experimental-strip-types infra/state/lease.ts acquire MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}"
+          # Keep the lease alive for the whole job (renewed every 5 min; the runner reaps it at job end).
+          nohup node --experimental-strip-types infra/state/lease.ts heartbeat MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}" > lease-heartbeat.log 2>&1 &
+      - name: First deploy
+        run: $EGRESS pnpm run deploy
+      - name: Second plan must be a no-op
+        run: |
+          $EGRESS node --experimental-strip-types infra/policies/plan-export.ts plan-out deploy
+          pnpm check:plan --mode steady plan-out/plan-export.json
+      # Teardown: the destroy plan is gated like preview cleanup. A REJECTED plan blocks the destroy
+      # (and fails the job); a plan that can't be PRODUCED (e.g. egress trouble) falls back to the
+      # stage-guarded destroy, which refuses persistent stages, so the ephemeral stage never leaks.
+      - name: Destroy plan gate
+        id: destroy-gate
+        if: always()
+        run: |
+          if ! $EGRESS node --experimental-strip-types infra/policies/plan-export.ts plan-out-destroy destroy; then
+            echo "::warning::destroy plan export failed; falling back to the stage-guarded destroy"
+            echo "gate=unavailable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! pnpm check:plan --mode destroy plan-out-destroy/plan-export.json; then
+            echo "gate=rejected" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "gate=passed" >> "$GITHUB_OUTPUT"
+      - name: Tear down ephemeral stage
+        if: always() && steps.destroy-gate.outputs.gate != 'rejected'
+        run: $EGRESS pnpm destroy:preview
+      - if: always()
+        run: |
+          # Stop the heartbeat and wait for it to exit, so no in-flight renewal re-acquires the lease.
+          pkill -f "lease.ts heartbeat" || true
+          for _ in $(seq 30); do pgrep -f "lease.ts heartbeat" > /dev/null || break; sleep 1; done
+          node --experimental-strip-types infra/state/lease.ts release MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}"
+
+  # Releases run only from main (also restrict the staging/prod environments' deployment branches
+  # to main in the repository settings; workflow_dispatch can otherwise target any branch).
+  release-plan:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    # Plan-time reads use the stage's credentials; the approval gate sits on release-deploy.
+    environment: ${{ inputs.stage }}-plan
+    env: &release-env
+      CI: "true"
+      STATE_BACKEND: http
+      TURNSTILE_SITEKEY: ${{ vars.TURNSTILE_SITEKEY }}
+      SESSION_KEY: ${{ secrets.SESSION_KEY }}
+      PROXY_SIGNING_KEY: ${{ secrets.PROXY_SIGNING_KEY }}
+      BILLING_WEBHOOK_SECRET: ${{ secrets.BILLING_WEBHOOK_SECRET }}
+      TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
+      PERSONAL_MAIL_API_KEY: ${{ secrets.PERSONAL_MAIL_API_KEY }}
+      PERSONAL_MAIL_ENDPOINT: ${{ vars.PERSONAL_MAIL_ENDPOINT }}
+      SEND_EVENTS_WEBHOOK_SECRET: ${{ secrets.SEND_EVENTS_WEBHOOK_SECRET }}
+      SIGMIRROR_WRITE_TOKEN: ${{ secrets.SIGMIRROR_WRITE_TOKEN }}
+      PROBE_TOKEN: ${{ secrets.PROBE_TOKEN }}
+      MAIL_ZONE: ${{ vars.MAIL_ZONE }}
+      OPERATOR_USER_IDS: ${{ vars.OPERATOR_USER_IDS }}
+      OPS_TOKEN: ${{ secrets.OPS_TOKEN }}
+      LOCATION_API_KEY: ${{ secrets.LOCATION_API_KEY }}
+      VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+      VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
+      VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+      APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
+      APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
+      APNS_TOPIC: ${{ vars.APNS_TOPIC }}
+      APNS_KEY_P8: ${{ secrets.APNS_KEY_P8 }}
+      FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+      FORWARDING_ENDPOINT: ${{ vars.FORWARDING_ENDPOINT }}
+      FORWARDING_DOMAIN: ${{ vars.FORWARDING_DOMAIN }}
+      FORWARDING_API_KEY: ${{ secrets.FORWARDING_API_KEY }}
+      SRS_SECRET: ${{ secrets.SRS_SECRET }}
+      ARC_SELECTOR: ${{ vars.ARC_SELECTOR }}
+      ARC_SIGNING_KEY: ${{ secrets.ARC_SIGNING_KEY }}
+      MAIL_TRAFFIC_CLASSES: ${{ vars.MAIL_TRAFFIC_CLASSES }}
+      NEWSLETTER_PROVIDER: ${{ vars.NEWSLETTER_PROVIDER }}
+      NEWSLETTER_ACCOUNT: ${{ vars.NEWSLETTER_ACCOUNT }}
+      NEWSLETTER_QUALIFIED: ${{ vars.NEWSLETTER_QUALIFIED }}
+      NEWSLETTER_API_KEY: ${{ secrets.NEWSLETTER_API_KEY }}
+      NEWSLETTER_WEBHOOK_SECRET: ${{ secrets.NEWSLETTER_WEBHOOK_SECRET }}
+      EXTERNAL_IDENTITY_SEAL_KEY: ${{ secrets.EXTERNAL_IDENTITY_SEAL_KEY }}
+      CF_DNS_API_TOKEN: ${{ secrets.CF_DNS_API_TOKEN }}
+      CF_CACHE_PURGE_TOKEN: ${{ secrets.CF_CACHE_PURGE_TOKEN }}
+      CF_PUBLIC_ZONE_ID: ${{ vars.CF_PUBLIC_ZONE_ID }}
+      MAIL_WORKER_NAME: ${{ vars.MAIL_WORKER_NAME }}
+      MAIL_DKIM_PUBLIC_KEY: ${{ vars.MAIL_DKIM_PUBLIC_KEY }}
+      BILLING_CHECKOUT_URL: ${{ vars.BILLING_CHECKOUT_URL }}
+      BILLING_API_KEY: ${{ secrets.BILLING_API_KEY }}
+      SCANNER_SIGNATURES: ${{ vars.SCANNER_SIGNATURES }}
+      SCANNER_IMAGE: ${{ vars.SCANNER_IMAGE }}
+      STAGE: ${{ inputs.stage }}
+      # `(prod && P) || (!prod && N) || ''`: an unset prod secret is empty, never the nonprod one.
+      CLOUDFLARE_ACCOUNT_ID: ${{ inputs.stage == 'prod' && secrets.PROD_CLOUDFLARE_ACCOUNT_ID || inputs.stage != 'prod' && secrets.NONPROD_CLOUDFLARE_ACCOUNT_ID || '' }}
+      CLOUDFLARE_API_TOKEN: ${{ inputs.stage == 'prod' && secrets.PROD_CLOUDFLARE_API_TOKEN || inputs.stage != 'prod' && secrets.NONPROD_CLOUDFLARE_API_TOKEN || '' }}
+      # Prod state credentials exist only in the prod-plan/prod environments.
+      BYE_STATE_URL: ${{ inputs.stage == 'prod' && vars.PROD_BYE_STATE_URL || inputs.stage != 'prod' && vars.BYE_STATE_URL || '' }}
+      BYE_STATE_TOKEN: ${{ inputs.stage == 'prod' && secrets.PROD_BYE_STATE_TOKEN || inputs.stage != 'prod' && secrets.BYE_STATE_TOKEN || '' }}
+      # Shared stages use their environment's reviewed custom domains.
+      APP_DOMAIN: ${{ vars.APP_DOMAIN }}
+      PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN }}
+      APP_ORIGIN: ${{ vars.APP_ORIGIN }}
+      MAIL_RENDER_ORIGIN: ${{ vars.MAIL_RENDER_ORIGIN }}
+      MAIL_SANDBOX_DOMAINS: ""
+      BYE_CANARY_PERCENT: ${{ inputs.canary_percent }}
+      BYE_MX_CUTOVER: ${{ vars.BYE_MX_CUTOVER }}
+      # Operator attestation that provider sent-email previews are off (§10; RUNBOOK).
+      PROVIDER_SENT_PREVIEWS: ${{ vars.PROVIDER_SENT_PREVIEWS }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --experimental-strip-types infra/policies/check-config.ts
+      - run: node --experimental-strip-types infra/state/verify-worker.ts
+      - name: Plan export (Alchemy engine; web and MIME container bundles built first)
+        run: pnpm build:deploy && $EGRESS node --experimental-strip-types infra/policies/plan-export.ts plan-out deploy
+      - name: Plan gate
+        run: pnpm check:plan --mode deploy plan-out/plan-export.json
+      - name: Release manifest (commit, lockfile, plan, config presence hash)
+        run: node --experimental-strip-types infra/policies/release-manifest.ts create plan-out/plan-export.json plan-out/release-manifest.json
+      # Baseline = the last successful release of this stage (release-deploy pushes the tag). With no
+      # tag yet (first release) the baseline is the root commit, recorded as `root`, and the canary
+      # step forces 100%.
+      - name: Changed files since the last release tag
+        run: |
+          if base="$(git describe --tags --abbrev=0 --match "release-${STAGE}-*" 2>/dev/null)"; then
+            echo "$base" > plan-out/baseline.txt
+          else
+            base="$(git rev-list --max-parents=0 HEAD)"
+            echo root > plan-out/baseline.txt
+          fi
+          git diff --name-only "$base" HEAD > plan-out/changed-files.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-plan-${{ inputs.stage }}-${{ github.sha }}
+          path: plan-out/
+
+  release-deploy:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: release-plan
+    runs-on: ubuntu-latest
+    # contents: write only to push the `release-<stage>-<run id>` tag after a promoted release.
+    permissions:
+      contents: write
+    # Required reviewers are configured on the `staging`/`prod` environments.
+    environment: ${{ inputs.stage }}
+    concurrency:
+      group: deploy-${{ inputs.stage }}
+      cancel-in-progress: false
+    env: *release-env
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-plan-${{ inputs.stage }}-${{ github.sha }}
+          path: approved/
+      # Fail before deploying when the probes can't run: a probe run without a token or base URL
+      # reports failure, and the canary step would then roll back a healthy release.
+      - name: Probe prerequisites
+        env:
+          PROBE_BASE_URL: ${{ vars.APP_ORIGIN }}
+        run: |
+          [ -n "$PROBE_TOKEN" ] || { echo "::error::PROBE_TOKEN is not set for ${STAGE}"; exit 1; }
+          [ -n "$PROBE_BASE_URL" ] || { echo "::error::vars.APP_ORIGIN (probe base URL) is not set for ${STAGE}"; exit 1; }
+      - run: node --experimental-strip-types infra/state/verify-worker.ts
+      - name: Acquire stage lease
+        run: |
+          node --experimental-strip-types infra/state/lease.ts acquire MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}"
+          # Keep the lease alive for the whole job (renewed every 5 min; the runner reaps it at job end).
+          nohup node --experimental-strip-types infra/state/lease.ts heartbeat MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}" > lease-heartbeat.log 2>&1 &
+      - name: Re-plan and verify inputs are unchanged since approval
+        run: |
+          pnpm build:deploy
+          $EGRESS node --experimental-strip-types infra/policies/plan-export.ts plan-out deploy
+          node --experimental-strip-types infra/policies/release-manifest.ts verify approved/release-manifest.json plan-out/plan-export.json
+          echo "BYE_RELEASE_MANIFEST_VERIFIED=1" >> "$GITHUB_ENV"
+      - name: Canary percent (100 on the first release and when Durable Object class migrations change)
+        run: |
+          requested="$BYE_CANARY_PERCENT"
+          if [ "$(cat approved/baseline.txt 2>/dev/null)" = "root" ]; then
+            echo "::notice::first release of ${STAGE}: deploying at 100%"
+            requested=100
+          fi
+          echo "BYE_CANARY_PERCENT=$(node --experimental-strip-types infra/policies/canary.ts percent "$requested" approved/changed-files.txt)" >> "$GITHUB_ENV"
+      - name: Lease still held
+        run: node --experimental-strip-types infra/state/lease.ts renew MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}"
+      - name: Deploy
+        run: $EGRESS pnpm run deploy
+      # During a canary, pin every probe to the new MailCore version; at 100% no override is needed.
+      - name: New version id (canary only)
+        if: env.BYE_CANARY_PERCENT != '100'
+        run: node --experimental-strip-types infra/state/output.ts MailboxPlatform "$STAGE" coreWorkerName=PROBE_WORKER_NAME coreVersionId=PROBE_VERSION_ID >> "$GITHUB_ENV"
+      - name: Post-deploy probes (HTTP, queue round trip, DO alarm, Workflow checkpoint)
+        env:
+          PROBE_BASE_URL: ${{ vars.APP_ORIGIN }}
+        run: |
+          # A failed probe is a canary decision (next step); a usage error (exit 2) is not.
+          set +e
+          node --experimental-strip-types infra/probes/run.ts > probe-report.json
+          status=$?
+          set -e
+          cat probe-report.json
+          [ "$status" -ne 2 ] || exit 1
+      - name: Promote or roll back
+        run: |
+          node --experimental-strip-types infra/state/lease.ts renew MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}"
+          if node --experimental-strip-types infra/policies/canary.ts decide probe-report.json; then
+            [ "$BYE_CANARY_PERCENT" = "100" ] || BYE_CANARY_PERCENT=100 $EGRESS pnpm run deploy
+          else
+            BYE_CANARY_PERCENT=0 $EGRESS pnpm run deploy
+            exit 1
+          fi
+      # The next release's changed-files baseline (release-plan) and the canary's first-release check.
+      - name: Tag the release
+        run: |
+          tag="release-${STAGE}-${GITHUB_RUN_ID}"
+          git tag "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+      - name: Release stage lease
+        if: always()
+        run: |
+          # Stop the heartbeat and wait for it to exit, so no in-flight renewal re-acquires the lease.
+          pkill -f "lease.ts heartbeat" || true
+          for _ in $(seq 30); do pgrep -f "lease.ts heartbeat" > /dev/null || break; sleep 1; done
+          node --experimental-strip-types infra/state/lease.ts release MailboxPlatform "$STAGE" "gha-${GITHUB_RUN_ID}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: release-${{ inputs.stage }}-${{ github.sha }}
+          path: |
+            approved/release-manifest.json
+            plan-out/plan-export.json
+            probe-report.json
+            lease-heartbeat.log
+
+  # ---- Native clients (X01). React Native hosts install with npm outside the pnpm workspace. ----
+  native-ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.1
+      - name: Install (exact lockfile)
+        working-directory: apps/mobile
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck shared screens and host
+        working-directory: apps/mobile
+        run: npm run typecheck
+      - name: CocoaPods
+        working-directory: apps/mobile/ios
+        run: pod install
+      - name: Build app, widget and share extension for the simulator
+        working-directory: apps/mobile
+        run: npm run ios:build-sim
+
+  native-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.1
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install (exact lockfile)
+        working-directory: apps/mobile
+        run: npm ci --no-audit --no-fund
+      - name: Assemble debug APK
+        working-directory: apps/mobile
+        run: npm run android:build
+
+  native-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.1
+      - name: Install (exact lockfile)
+        working-directory: apps/desktop
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck shared screens and host
+        working-directory: apps/desktop
+        run: npm run typecheck
+      - name: CocoaPods
+        working-directory: apps/desktop/macos
+        run: pod install
+      - name: Build macOS app
+        working-directory: apps/desktop
+        run: npm run macos:build
+
+  native-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.1
+      - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2.0.0
+      - name: Install (exact lockfile)
+        working-directory: apps/desktop
+        run: npm ci --no-audit --no-fund
+      - name: Build Windows app (no launch)
+        working-directory: apps/desktop
+        run: npm run windows:build

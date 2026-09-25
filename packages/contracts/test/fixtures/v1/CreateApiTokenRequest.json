@@ -1,0 +1,16 @@
+[
+  {
+    "kind": "agent",
+    "label": "0",
+    "expiresAt": 1
+  },
+  {
+    "kind": "cli",
+    "label": "!QR4",
+    "expiresAt": 3
+  },
+  {
+    "kind": "agent",
+    "label": "8?{)"
+  }
+]

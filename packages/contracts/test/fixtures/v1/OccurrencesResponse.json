@@ -1,0 +1,168 @@
+[
+  {
+    "schemaVersion": 1,
+    "occurrences": []
+  },
+  {
+    "schemaVersion": 1,
+    "occurrences": []
+  },
+  {
+    "schemaVersion": 1,
+    "occurrences": [
+      {
+        "eventId": "xty:",
+        "calendarId": "\udc00",
+        "uid": "\udc00",
+        "key": "😀",
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": -15,
+            "month": -3,
+            "day": -16
+          }
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 9,
+            "month": -12,
+            "day": -1
+          }
+        },
+        "startMs": -8.4e-323,
+        "endMs": -2e-323,
+        "allDay": false,
+        "recurring": true,
+        "isException": false,
+        "highlight": true,
+        "countdown": true,
+        "data": {
+          "summary": "\udc00"
+        }
+      },
+      {
+        "eventId": "😀",
+        "calendarId": "|^BL",
+        "uid": "😀",
+        "key": "😀",
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": -1,
+            "month": -1,
+            "day": 14
+          }
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": -1,
+            "month": -14,
+            "day": 4,
+            "hour": 4,
+            "minute": 6,
+            "second": 2
+          },
+          "tzid": ""
+        },
+        "startMs": -6e-323,
+        "endMs": -8.310342623652071e-122,
+        "allDay": false,
+        "recurring": true,
+        "isException": false,
+        "highlight": true,
+        "countdown": true,
+        "data": {
+          "summary": "\t",
+          "location": "",
+          "url": "P=+*"
+        }
+      },
+      {
+        "eventId": " ",
+        "calendarId": "0I+",
+        "uid": "?3he",
+        "key": "\n",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 4,
+            "month": 7,
+            "day": 2,
+            "hour": 2,
+            "minute": -11,
+            "second": -1
+          },
+          "tzid": "-1"
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": 2,
+            "month": 15,
+            "day": -2,
+            "hour": 15,
+            "minute": 7,
+            "second": 3
+          },
+          "tzid": "@hll"
+        },
+        "startMs": 5.4e-323,
+        "endMs": -1.0103196994495149e198,
+        "allDay": false,
+        "recurring": true,
+        "isException": true,
+        "highlight": false,
+        "countdown": false,
+        "data": {
+          "summary": "-1"
+        }
+      },
+      {
+        "eventId": "\n",
+        "calendarId": "\udc00",
+        "uid": "",
+        "key": "\udc00",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 6,
+            "month": -9,
+            "day": -12,
+            "hour": 16,
+            "minute": -2,
+            "second": 14
+          },
+          "tzid": "0"
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": -12,
+            "month": -3,
+            "day": -15,
+            "hour": -11,
+            "minute": -3,
+            "second": -12
+          },
+          "tzid": "$g9>"
+        },
+        "startMs": -2e-323,
+        "endMs": 7.025652361165428e300,
+        "allDay": false,
+        "recurring": false,
+        "isException": true,
+        "highlight": false,
+        "countdown": false,
+        "data": {
+          "summary": "-1",
+          "description": "",
+          "url": "\t",
+          "transparent": false
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,23 @@
+[
+  {
+    "schemaVersion": 1,
+    "type": "dispatch",
+    "eventId": "?PS",
+    "mailboxId": "\ud800",
+    "sendJobId": ""
+  },
+  {
+    "schemaVersion": 1,
+    "type": "dispatch",
+    "eventId": "😀",
+    "mailboxId": "\n",
+    "sendJobId": ""
+  },
+  {
+    "schemaVersion": 1,
+    "type": "dispatch",
+    "eventId": "😀",
+    "mailboxId": "W&zq",
+    "sendJobId": "HD[<"
+  }
+]

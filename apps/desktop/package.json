@@ -1,0 +1,46 @@
+{
+  "name": "@bye/desktop",
+  "version": "0.2.0",
+  "private": true,
+  "description": "bye for macOS and Windows (React Native macOS/Windows). Installed with npm, outside the pnpm workspace.",
+  "scripts": {
+    "start": "react-native start",
+    "macos": "react-native run-macos",
+    "windows": "react-native run-windows",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "macos:pods": "cd macos && pod install",
+    "macos:build": "xcodebuild -workspace macos/ByeDesktop.xcworkspace -scheme ByeDesktop-macOS -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build",
+    "windows:build": "react-native run-windows --no-launch --no-packager --logging"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "react": "19.1.4",
+    "react-native": "0.81.6",
+    "react-native-get-random-values": "2.0.0",
+    "react-native-macos": "0.81.9",
+    "react-native-url-polyfill": "4.0.0",
+    "react-native-webview": "14.0.1",
+    "react-native-windows": "0.81.37"
+  },
+  "devDependencies": {
+    "@babel/core": "7.29.7",
+    "@babel/preset-env": "7.29.7",
+    "@babel/runtime": "7.29.7",
+    "@react-native-community/cli": "20.0.0",
+    "@react-native/babel-preset": "0.81.6",
+    "@react-native/metro-config": "0.81.6",
+    "@react-native/typescript-config": "0.81.6",
+    "@types/react": "19.1.17",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "react-native-windows": {
+    "init-windows": {
+      "name": "ByeDesktop",
+      "namespace": "Bye.Desktop",
+      "template": "cpp-app"
+    }
+  }
+}

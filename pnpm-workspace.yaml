@@ -1,0 +1,18 @@
+packages:
+  - packages/*
+  - workers/*
+  - apps/*
+  # React Native hosts install with npm (flat node_modules for native autolinking/CocoaPods).
+  - "!apps/mobile"
+  - "!apps/desktop"
+  - infra
+allowBuilds:
+  workerd: true
+minimumReleaseAgeExclude:
+  - "@cloudflare/workers-types@5.20260925.1"
+overrides:
+  "@effect/sql-d1": 4.0.0-rc.117
+  "@effect/sql-sqlite-do": 4.0.0-rc.117
+  "@effect/platform-node-shared": 4.0.0-rc.117
+  "@effect/vitest": 4.0.0-rc.117
+  effect: 4.0.0-rc.117

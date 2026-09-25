@@ -1,0 +1,17 @@
+[
+  {
+    "check": "dkim",
+    "status": "warn",
+    "detail": "Y"
+  },
+  {
+    "check": "ownership",
+    "status": "warn",
+    "detail": ""
+  },
+  {
+    "check": "ownership",
+    "status": "pass",
+    "detail": ""
+  }
+]

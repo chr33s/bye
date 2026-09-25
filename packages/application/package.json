@@ -1,0 +1,15 @@
+{
+  "name": "@bye/application",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bye/calendar-engine": "workspace:*",
+    "@bye/contracts": "workspace:*",
+    "@bye/domain": "workspace:*",
+    "@bye/mail-codec": "workspace:*",
+    "effect": "4.0.0-rc.117"
+  }
+}

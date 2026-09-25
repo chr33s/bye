@@ -1,0 +1,112 @@
+[
+  {
+    "eventId": "iM",
+    "calendarId": "\udc00",
+    "uid": "",
+    "key": " ",
+    "start": {
+      "kind": "date",
+      "date": {
+        "year": 0,
+        "month": 3,
+        "day": -15
+      }
+    },
+    "end": {
+      "kind": "date",
+      "date": {
+        "year": -15,
+        "month": 16,
+        "day": -13
+      }
+    },
+    "startMs": -1.7976931348623153e308,
+    "endMs": -1.7976931348623141e308,
+    "allDay": true,
+    "recurring": false,
+    "isException": false,
+    "highlight": true,
+    "countdown": true,
+    "data": {
+      "summary": "",
+      "status": "cancelled"
+    }
+  },
+  {
+    "eventId": "SmE5",
+    "calendarId": "",
+    "uid": "]C",
+    "key": "\u0000",
+    "start": {
+      "kind": "date",
+      "date": {
+        "year": 13,
+        "month": 15,
+        "day": -10
+      }
+    },
+    "end": {
+      "kind": "timed",
+      "local": {
+        "year": 3,
+        "month": 10,
+        "day": 4,
+        "hour": -2,
+        "minute": 16,
+        "second": 4
+      },
+      "tzid": "ElD;"
+    },
+    "startMs": 3.39309936329797e246,
+    "endMs": -1.7976931348623135e308,
+    "allDay": false,
+    "recurring": true,
+    "isException": true,
+    "highlight": false,
+    "countdown": true,
+    "data": {
+      "summary": "",
+      "description": "0vIh"
+    }
+  },
+  {
+    "eventId": "y$?W",
+    "calendarId": "0",
+    "uid": "",
+    "key": "0",
+    "start": {
+      "kind": "timed",
+      "local": {
+        "year": -6,
+        "month": 4,
+        "day": 7,
+        "hour": 0,
+        "minute": 12,
+        "second": -1
+      },
+      "tzid": "0"
+    },
+    "end": {
+      "kind": "timed",
+      "local": {
+        "year": 6,
+        "month": -9,
+        "day": 4,
+        "hour": 0,
+        "minute": 0,
+        "second": 1
+      },
+      "tzid": ""
+    },
+    "startMs": -2.627900557806005e254,
+    "endMs": 4.4e-323,
+    "allDay": true,
+    "recurring": false,
+    "isException": true,
+    "highlight": false,
+    "countdown": false,
+    "data": {
+      "summary": "2D*+"
+    }
+  }
+]

@@ -1,0 +1,47 @@
+# Fallback signature path (§10): a daily scanner image with ClamAV signatures baked in at build
+# time. Deploying it (SCANNER_SIGNATURES=baked, SCANNER_IMAGE=<digest>) needs no runtime egress and
+# no mirror; freshness equals this rebuild cadence. Kept out of ci.yml so the schedule does not
+# re-run the full verify/native matrix every day.
+name: scanner-image
+
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+# Workflow default is read-only; only the job that pushes the image gets packages: write.
+permissions:
+  contents: read
+
+concurrency:
+  group: scanner-image
+  cancel-in-progress: false
+
+jobs:
+  scanner-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (SCANNER_SIGNATURES=baked)
+        run: |
+          docker build --pull --build-arg SCANNER_SIGNATURES=baked \
+            -t "ghcr.io/${GITHUB_REPOSITORY}/scanner:baked-$(date -u +%Y%m%d)" containers/scanner
+      - name: Smoke (clean, EICAR, zipped EICAR, size limit, non-root)
+        run: CONTAINER_CLI=docker sh containers/scanner/smoke.sh
+      - name: Push and record digest
+        run: |
+          tag="ghcr.io/${GITHUB_REPOSITORY}/scanner:baked-$(date -u +%Y%m%d)"
+          docker push "$tag"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$tag")"
+          echo "SCANNER_IMAGE=$digest" | tee -a "$GITHUB_STEP_SUMMARY"

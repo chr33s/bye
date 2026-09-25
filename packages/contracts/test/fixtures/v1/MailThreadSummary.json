@@ -1,0 +1,87 @@
+[
+  {
+    "threadId": "X",
+    "subject": "",
+    "originalSubject": "-1",
+    "sender": "qv5|",
+    "destination": "imbox",
+    "disposition": "screened-out",
+    "quarantined": false,
+    "bundleKey": null,
+    "bundleCount": 8,
+    "newForYou": true,
+    "revision": 15,
+    "seenRevision": 4,
+    "lastActivityAt": 5.416311926637279e-149,
+    "messageCount": 6,
+    "attention": {
+      "replyLater": true,
+      "setAside": true,
+      "unfollowed": false,
+      "bubble": {
+        "_tag": "Scheduled",
+        "at": 0,
+        "generation": 8
+      }
+    },
+    "labels": [],
+    "mergedInto": "\t",
+    "newSinceVisit": false
+  },
+  {
+    "threadId": "3",
+    "subject": "\u0000",
+    "originalSubject": "\u0000",
+    "sender": "",
+    "destination": "paper-trail",
+    "disposition": "trash",
+    "quarantined": false,
+    "bundleKey": null,
+    "bundleCount": 12,
+    "newForYou": true,
+    "revision": 4,
+    "seenRevision": 8,
+    "lastActivityAt": 4.068608029615258e-235,
+    "messageCount": 16,
+    "attention": {
+      "replyLater": true,
+      "setAside": true,
+      "unfollowed": false,
+      "bubble": {
+        "_tag": "Scheduled",
+        "at": 4.008346144269829e-191,
+        "generation": 10
+      }
+    },
+    "labels": ["", "", "Ck?<", "😀"],
+    "mergedInto": "0",
+    "newSinceVisit": false
+  },
+  {
+    "threadId": "S",
+    "subject": " ",
+    "originalSubject": "\ud800",
+    "sender": "",
+    "destination": "paper-trail",
+    "disposition": "screened-out",
+    "quarantined": false,
+    "bundleKey": "",
+    "bundleCount": 13,
+    "newForYou": false,
+    "revision": 11,
+    "seenRevision": 0,
+    "lastActivityAt": 1.7976931348623127e308,
+    "messageCount": 1,
+    "attention": {
+      "replyLater": true,
+      "setAside": false,
+      "unfollowed": false,
+      "bubble": {
+        "_tag": "Pinned"
+      }
+    },
+    "labels": ["P", "\u0000"],
+    "mergedInto": "-1",
+    "newSinceVisit": true
+  }
+]

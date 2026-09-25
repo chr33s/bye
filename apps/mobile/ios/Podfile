@@ -1,0 +1,54 @@
+# Resolve react_native_pods.rb with node to allow for hoisting
+require Pod::Executable.execute_command('node', ['-p',
+  'require.resolve(
+    "react-native/scripts/react_native_pods.rb",
+    {paths: [process.argv[1]]},
+  )', __dir__]).strip
+
+platform :ios, min_ios_version_supported
+prepare_react_native_project!
+
+linkage = ENV['USE_FRAMEWORKS']
+if linkage != nil
+  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
+  use_frameworks! :linkage => linkage.to_sym
+end
+
+target 'ByeMobile' do
+  config = use_native_modules!
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    # https://github.com/facebook/react-native/blob/main/packages/react-native/scripts/react_native_pods.rb#L197-L202
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      # :ccache_enabled => true
+    )
+    # fmt 11.0.2 (pulled in by React Native 0.81) uses consteval format strings that Apple clang in
+    # Xcode 26.4+ rejects. Disable fmt's consteval path; formatting falls back to runtime checks.
+    fmt_base = File.join(installer.sandbox.root, 'fmt', 'include', 'fmt', 'base.h')
+    if File.exist?(fmt_base)
+      source = File.read(fmt_base)
+      patched = source.sub('#if !defined(__cpp_lib_is_constant_evaluated)', '#if 1 // bye: consteval disabled for Apple clang (see Podfile)')
+      if patched != source
+        File.chmod(0644, fmt_base)
+        File.write(fmt_base, patched)
+      end
+    end
+    # Xcode 27 rejects deployment targets below 15.0 (some resource-bundle pods declare 13.4).
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |c|
+        if Gem::Version.new(c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] || '15.1') < Gem::Version.new('15.1')
+          c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'
+        end
+      end
+    end
+  end
+end

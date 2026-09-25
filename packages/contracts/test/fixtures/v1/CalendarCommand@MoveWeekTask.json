@@ -1,0 +1,13 @@
+[
+  {
+    "type": "MoveWeekTask",
+    "commandId": "",
+    "taskId": "",
+    "date": {
+      "year": 9,
+      "month": -4,
+      "day": -4
+    },
+    "firstWeekday": -1
+  }
+]

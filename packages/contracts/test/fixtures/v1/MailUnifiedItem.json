@@ -1,0 +1,103 @@
+[
+  {
+    "mailboxId": "H5V:",
+    "identity": null,
+    "thread": {
+      "threadId": "n",
+      "subject": "",
+      "originalSubject": "\n",
+      "sender": "fso:",
+      "destination": "imbox",
+      "disposition": "screening",
+      "quarantined": false,
+      "bundleKey": null,
+      "bundleCount": 2,
+      "newForYou": true,
+      "revision": 4,
+      "seenRevision": 4,
+      "lastActivityAt": 0,
+      "messageCount": 9,
+      "attention": {
+        "replyLater": true,
+        "setAside": true,
+        "unfollowed": true,
+        "bubble": {
+          "_tag": "None"
+        }
+      },
+      "labels": ["\ud800", "😀"],
+      "mergedInto": "0",
+      "newSinceVisit": false
+    }
+  },
+  {
+    "mailboxId": "-Wd",
+    "identity": {
+      "address": "L!BJ",
+      "name": null
+    },
+    "thread": {
+      "threadId": "A",
+      "subject": "-1",
+      "originalSubject": "",
+      "sender": "{;8g",
+      "destination": "feed",
+      "disposition": "screening",
+      "quarantined": false,
+      "bundleKey": null,
+      "bundleCount": 4,
+      "newForYou": true,
+      "revision": 3,
+      "seenRevision": 4,
+      "lastActivityAt": 0,
+      "messageCount": 14,
+      "attention": {
+        "replyLater": false,
+        "setAside": false,
+        "unfollowed": false,
+        "bubble": {
+          "_tag": "None"
+        }
+      },
+      "labels": ["", " ", "", "g"],
+      "mergedInto": "",
+      "newSinceVisit": true
+    }
+  },
+  {
+    "mailboxId": "-",
+    "identity": {
+      "address": "",
+      "name": "j3UO"
+    },
+    "thread": {
+      "threadId": "Eq0d",
+      "subject": "[_/'",
+      "originalSubject": " ",
+      "sender": "0W9",
+      "destination": "paper-trail",
+      "disposition": "active",
+      "quarantined": true,
+      "bundleKey": "😀",
+      "bundleCount": 10,
+      "newForYou": false,
+      "revision": 4,
+      "seenRevision": 16,
+      "lastActivityAt": 6e-323,
+      "messageCount": 9,
+      "attention": {
+        "replyLater": false,
+        "setAside": false,
+        "unfollowed": false,
+        "bubble": {
+          "_tag": "Scheduled",
+          "at": 3.0980499457765942e-173,
+          "generation": 2
+        }
+      },
+      "labels": [],
+      "mergedInto": null,
+      "newSinceVisit": false
+    }
+  }
+]

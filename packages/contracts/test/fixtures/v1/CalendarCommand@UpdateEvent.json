@@ -1,0 +1,19 @@
+[
+  {
+    "type": "UpdateEvent",
+    "commandId": "^Zp",
+    "eventId": "j#=T",
+    "expectedRevision": -3,
+    "scope": "series",
+    "changes": {
+      "start": {
+        "kind": "date",
+        "date": {
+          "year": -1,
+          "month": -2,
+          "day": -3
+        }
+      }
+    }
+  }
+]

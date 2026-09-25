@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">bye</string>
+    <string name="widget_description">Your next event and running timer.</string>
+    <string name="widget_nothing_scheduled">Nothing scheduled</string>
+    <plurals name="widget_unseen">
+        <item quantity="one">%d new for you</item>
+        <item quantity="other">%d new for you</item>
+    </plurals>
+</resources>

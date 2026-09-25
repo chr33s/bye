@@ -1,0 +1,28 @@
+[
+  {
+    "_tag": "CreateDraft",
+    "commandId": "AcXH",
+    "content": {
+      "to": [],
+      "cc": [
+        {
+          "address": "ఁ@䌩"
+        },
+        {
+          "address": "6@术"
+        },
+        {
+          "name": "",
+          "address": "耖@G"
+        },
+        {
+          "address": "Q@w"
+        }
+      ],
+      "bcc": [],
+      "subject": "",
+      "text": "",
+      "attachments": ["j5", "u1", "T-", "."]
+    }
+  }
+]

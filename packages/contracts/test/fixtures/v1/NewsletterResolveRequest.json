@@ -1,0 +1,18 @@
+[
+  {
+    "opId": "😀",
+    "resolution": "not-accepted",
+    "note": "\udc00"
+  },
+  {
+    "opId": "\n",
+    "resolution": "not-accepted",
+    "note": "😀",
+    "providerRef": "@"
+  },
+  {
+    "opId": "",
+    "resolution": "not-accepted",
+    "note": " "
+  }
+]

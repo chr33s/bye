@@ -1,0 +1,39 @@
+[
+  {
+    "schemaVersion": 1,
+    "hits": []
+  },
+  {
+    "schemaVersion": 1,
+    "hits": []
+  },
+  {
+    "schemaVersion": 1,
+    "hits": [
+      {
+        "docId": "B",
+        "kind": "task",
+        "ref": "\n",
+        "snippet": "xk&>"
+      },
+      {
+        "docId": "😀",
+        "kind": "time",
+        "ref": ".t",
+        "snippet": "(L"
+      },
+      {
+        "docId": "-1",
+        "kind": "habit",
+        "ref": "\u0000",
+        "snippet": "\udc00"
+      },
+      {
+        "docId": "!J8`",
+        "kind": "task",
+        "ref": "\ud800",
+        "snippet": "xM8*"
+      }
+    ]
+  }
+]

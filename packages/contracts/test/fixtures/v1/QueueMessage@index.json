@@ -1,0 +1,15 @@
+[
+  {
+    "schemaVersion": 1,
+    "type": "index",
+    "eventId": "\udc00",
+    "scope": " ",
+    "op": "upsert",
+    "docId": "2H",
+    "source": {
+      "mailboxId": "",
+      "kind": "KPM]",
+      "id": "0"
+    }
+  }
+]

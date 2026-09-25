@@ -1,0 +1,17 @@
+{
+  "name": "@bye/testing",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bye/application": "workspace:*",
+    "@bye/calendar-engine": "workspace:*",
+    "@bye/contracts": "workspace:*",
+    "@bye/domain": "workspace:*",
+    "@bye/mail-codec": "workspace:*",
+    "@bye/platform-cloudflare": "workspace:*",
+    "effect": "4.0.0-rc.117"
+  }
+}

@@ -1,0 +1,29 @@
+[
+  {
+    "challengeId": " ",
+    "response": {
+      "credentialId": "ud4",
+      "clientDataJSON": "XAgg",
+      "authenticatorData": "M",
+      "signature": "8Gc"
+    }
+  },
+  {
+    "challengeId": ".Bp",
+    "response": {
+      "credentialId": "U4wf",
+      "clientDataJSON": "Q",
+      "authenticatorData": "GKH",
+      "signature": "Ca39"
+    }
+  },
+  {
+    "challengeId": "\ud800",
+    "response": {
+      "credentialId": "1",
+      "clientDataJSON": "KX",
+      "authenticatorData": "vBcJ",
+      "signature": "sBaM"
+    }
+  }
+]

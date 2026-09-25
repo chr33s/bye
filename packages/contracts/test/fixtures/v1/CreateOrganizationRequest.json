@@ -1,0 +1,18 @@
+[
+  {
+    "name": "\n",
+    "kind": "domain",
+    "seatLimit": 16,
+    "reassignmentPolicy": "forward-then-close"
+  },
+  {
+    "name": "😀",
+    "kind": "domain",
+    "seatLimit": 5
+  },
+  {
+    "name": "\udc00",
+    "kind": "family",
+    "seatLimit": 10
+  }
+]

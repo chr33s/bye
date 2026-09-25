@@ -1,0 +1,118 @@
+[
+  {
+    "mailboxId": "jZCk",
+    "commandId": "p",
+    "content": {
+      "to": [
+        {
+          "address": "i@#Z"
+        },
+        {
+          "address": "R@鿟"
+        },
+        {
+          "address": "᧒@Ω"
+        },
+        {
+          "name": "\ud800",
+          "address": "~@篬P"
+        }
+      ],
+      "cc": [
+        {
+          "name": "ksI ",
+          "address": "ҝ@ڐ"
+        }
+      ],
+      "bcc": [
+        {
+          "address": "G@腿"
+        },
+        {
+          "address": "G@"
+        },
+        {
+          "name": "5(zD",
+          "address": "㸣@i젥"
+        }
+      ],
+      "subject": "",
+      "text": "\t",
+      "attachments": ["hJWX", "0QK7", "uJ", "S5K"]
+    }
+  },
+  {
+    "mailboxId": "-2",
+    "commandId": "qz",
+    "content": {
+      "to": [
+        {
+          "address": "䬷5@?"
+        },
+        {
+          "address": "ꅋ'@Q"
+        }
+      ],
+      "cc": [
+        {
+          "name": "",
+          "address": "彳ꢓ@䔱"
+        },
+        {
+          "address": "怺@7"
+        },
+        {
+          "address": "㈣@s"
+        },
+        {
+          "address": "切@"
+        }
+      ],
+      "bcc": [
+        {
+          "address": "謽๺@Y"
+        },
+        {
+          "address": "定@Vé"
+        },
+        {
+          "name": "\t",
+          "address": ".@瓪"
+        },
+        {
+          "address": "!e@o"
+        }
+      ],
+      "subject": "",
+      "text": "",
+      "attachments": []
+    }
+  },
+  {
+    "mailboxId": ".",
+    "commandId": "Z",
+    "content": {
+      "to": [],
+      "cc": [
+        {
+          "address": "เ@L"
+        },
+        {
+          "name": "['80",
+          "address": "ꙑ@f"
+        },
+        {
+          "address": "ծa@ⶮ"
+        },
+        {
+          "name": "0",
+          "address": "䮬@eu"
+        }
+      ],
+      "bcc": [],
+      "subject": "",
+      "text": "",
+      "attachments": []
+    }
+  }
+]

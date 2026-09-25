@@ -1,0 +1,17 @@
+[
+  {
+    "orgId": "\u0000",
+    "cents": 6,
+    "reason": "goodwill"
+  },
+  {
+    "orgId": "H",
+    "cents": 4,
+    "reason": "refund"
+  },
+  {
+    "orgId": "\t",
+    "cents": 9,
+    "reason": "refund"
+  }
+]

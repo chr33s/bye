@@ -1,0 +1,13 @@
+[
+  {
+    "type": "SetHabitCompletion",
+    "commandId": "",
+    "habitId": "😀",
+    "date": {
+      "year": 0,
+      "month": -4,
+      "day": -9
+    },
+    "completed": false
+  }
+]

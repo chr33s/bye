@@ -1,0 +1,299 @@
+[
+  {
+    "view": "",
+    "items": [],
+    "cursors": {
+      "": "\ud800",
+      "\udc00": "😀",
+      "(O1": "\u0000",
+      "9=zp": "k.["
+    }
+  },
+  {
+    "view": "\u0000",
+    "items": [
+      {
+        "mailboxId": "0qn9",
+        "identity": {
+          "address": "",
+          "name": ">7*Y"
+        },
+        "thread": {
+          "threadId": "aT8h",
+          "subject": "",
+          "originalSubject": "\n",
+          "sender": "pF3r",
+          "destination": "paper-trail",
+          "disposition": "screening",
+          "quarantined": true,
+          "bundleKey": "\u0000",
+          "bundleCount": 15,
+          "newForYou": true,
+          "revision": 3,
+          "seenRevision": 12,
+          "lastActivityAt": 5.4e-323,
+          "messageCount": 7,
+          "attention": {
+            "replyLater": true,
+            "setAside": false,
+            "unfollowed": true,
+            "bubble": {
+              "_tag": "None"
+            }
+          },
+          "labels": [],
+          "mergedInto": "😀",
+          "newSinceVisit": true
+        }
+      },
+      {
+        "mailboxId": "QP",
+        "identity": {
+          "address": "",
+          "name": null
+        },
+        "thread": {
+          "threadId": "yyxH",
+          "subject": "0",
+          "originalSubject": "\n",
+          "sender": "\udc00",
+          "destination": "feed",
+          "disposition": "active",
+          "quarantined": true,
+          "bundleKey": "\n",
+          "bundleCount": 0,
+          "newForYou": true,
+          "revision": 5,
+          "seenRevision": 5,
+          "lastActivityAt": 3e-323,
+          "messageCount": 0,
+          "attention": {
+            "replyLater": true,
+            "setAside": false,
+            "unfollowed": false,
+            "bubble": {
+              "_tag": "Scheduled",
+              "at": 1.7976931348623151e308,
+              "generation": 2
+            }
+          },
+          "labels": ["\t", "\u0000", "5", "\"0"],
+          "mergedInto": null,
+          "newSinceVisit": true
+        }
+      },
+      {
+        "mailboxId": "qX",
+        "identity": {
+          "address": "",
+          "name": null
+        },
+        "thread": {
+          "threadId": "Hs",
+          "subject": "u",
+          "originalSubject": "{qm=",
+          "sender": "m5N2",
+          "destination": "paper-trail",
+          "disposition": "spam",
+          "quarantined": true,
+          "bundleKey": "\udc00",
+          "bundleCount": 6,
+          "newForYou": false,
+          "revision": 0,
+          "seenRevision": 14,
+          "lastActivityAt": 2.313540595035953e252,
+          "messageCount": 5,
+          "attention": {
+            "replyLater": false,
+            "setAside": true,
+            "unfollowed": true,
+            "bubble": {
+              "_tag": "None"
+            }
+          },
+          "labels": ["", "V5", "", "B3 $"],
+          "mergedInto": "QcK*",
+          "newSinceVisit": true
+        }
+      },
+      {
+        "mailboxId": "VpNd",
+        "identity": {
+          "address": "",
+          "name": ""
+        },
+        "thread": {
+          "threadId": "1rCW",
+          "subject": "\udc00",
+          "originalSubject": "@x$}",
+          "sender": "\u0000",
+          "destination": "feed",
+          "disposition": "screening",
+          "quarantined": false,
+          "bundleKey": "AZ`R",
+          "bundleCount": 16,
+          "newForYou": false,
+          "revision": 0,
+          "seenRevision": 7,
+          "lastActivityAt": 0,
+          "messageCount": 2,
+          "attention": {
+            "replyLater": false,
+            "setAside": false,
+            "unfollowed": true,
+            "bubble": {
+              "_tag": "Pinned"
+            }
+          },
+          "labels": ["", "-1", "", ""],
+          "mergedInto": null,
+          "newSinceVisit": true
+        }
+      }
+    ],
+    "cursors": {
+      "\ud800": "\t",
+      "": "!^z",
+      "(": "\udc00",
+      "-:r": "😀"
+    }
+  },
+  {
+    "view": "😀",
+    "items": [
+      {
+        "mailboxId": "6",
+        "identity": null,
+        "thread": {
+          "threadId": "PjbG",
+          "subject": "5jVJ",
+          "originalSubject": "\ud800",
+          "sender": "\u0000",
+          "destination": "imbox",
+          "disposition": "trash",
+          "quarantined": true,
+          "bundleKey": "\t",
+          "bundleCount": 7,
+          "newForYou": false,
+          "revision": 15,
+          "seenRevision": 5,
+          "lastActivityAt": 29459278432298010,
+          "messageCount": 4,
+          "attention": {
+            "replyLater": true,
+            "setAside": true,
+            "unfollowed": true,
+            "bubble": {
+              "_tag": "Scheduled",
+              "at": 1.1998424446484152e141,
+              "generation": 2
+            }
+          },
+          "labels": [" "],
+          "mergedInto": "\udc00",
+          "newSinceVisit": true
+        }
+      },
+      {
+        "mailboxId": "BWK0",
+        "identity": null,
+        "thread": {
+          "threadId": "f1Q",
+          "subject": "-1",
+          "originalSubject": "😀",
+          "sender": ".k(9",
+          "destination": "feed",
+          "disposition": "screened-out",
+          "quarantined": false,
+          "bundleKey": "_",
+          "bundleCount": 4,
+          "newForYou": true,
+          "revision": 4,
+          "seenRevision": 7,
+          "lastActivityAt": 3.903837001816791e196,
+          "messageCount": 1,
+          "attention": {
+            "replyLater": true,
+            "setAside": false,
+            "unfollowed": false,
+            "bubble": {
+              "_tag": "Pinned"
+            }
+          },
+          "labels": ["\u0000", "", "^'D8", "FP"],
+          "mergedInto": "\udc00",
+          "newSinceVisit": true
+        }
+      },
+      {
+        "mailboxId": "4h",
+        "identity": {
+          "address": "fkU",
+          "name": null
+        },
+        "thread": {
+          "threadId": "YBMw",
+          "subject": "Ts4",
+          "originalSubject": "",
+          "sender": "<",
+          "destination": "paper-trail",
+          "disposition": "active",
+          "quarantined": true,
+          "bundleKey": null,
+          "bundleCount": 3,
+          "newForYou": false,
+          "revision": 15,
+          "seenRevision": 14,
+          "lastActivityAt": 2.937074026688701e-49,
+          "messageCount": 10,
+          "attention": {
+            "replyLater": true,
+            "setAside": true,
+            "unfollowed": false,
+            "bubble": {
+              "_tag": "Pinned"
+            }
+          },
+          "labels": ["izY\"", "", "", "7O("],
+          "mergedInto": null,
+          "newSinceVisit": true
+        }
+      },
+      {
+        "mailboxId": "K",
+        "identity": {
+          "address": "0",
+          "name": null
+        },
+        "thread": {
+          "threadId": "L",
+          "subject": "",
+          "originalSubject": "Ih=",
+          "sender": "",
+          "destination": "feed",
+          "disposition": "active",
+          "quarantined": true,
+          "bundleKey": "<b",
+          "bundleCount": 4,
+          "newForYou": true,
+          "revision": 14,
+          "seenRevision": 4,
+          "lastActivityAt": 0,
+          "messageCount": 14,
+          "attention": {
+            "replyLater": false,
+            "setAside": false,
+            "unfollowed": true,
+            "bubble": {
+              "_tag": "None"
+            }
+          },
+          "labels": [],
+          "mergedInto": "",
+          "newSinceVisit": false
+        }
+      }
+    ],
+    "cursors": {}
+  }
+]

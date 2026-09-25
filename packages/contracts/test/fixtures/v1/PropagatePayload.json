@@ -1,0 +1,19 @@
+[
+  {
+    "topic": "calendar.photo-scan",
+    "key": "",
+    "calendarId": "lx",
+    "ownerId": "😀"
+  },
+  {
+    "topic": "calendar.photo-scan",
+    "key": "",
+    "calendarId": "😀",
+    "ownerId": "84h}"
+  },
+  {
+    "topic": "scan-message",
+    "messageKey": "\udc00",
+    "deliveryId": "\udc00"
+  }
+]

@@ -1,0 +1,46 @@
+require 'pathname'
+
+ws_dir = Pathname.new(__dir__)
+ws_dir = ws_dir.parent until
+  File.exist?("#{ws_dir}/node_modules/react-native-macos/scripts/react_native_pods.rb") ||
+  ws_dir.expand_path.to_s == '/'
+require "#{ws_dir}/node_modules/react-native-macos/scripts/react_native_pods.rb"
+
+prepare_react_native_project!
+
+target 'ByeDesktop-macOS' do
+  platform :macos, '14.0'
+  use_native_modules!
+
+  # Flags change depending on the env values.
+  flags = get_default_flags()
+
+  use_react_native!(
+    :path => '../node_modules/react-native-macos',
+    :fabric_enabled => ENV['RCT_NEW_ARCH_ENABLED'] == '1',
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    react_native_post_install(installer)
+    # Xcode 27 rejects macOS deployment targets below 12.0 (resource-bundle pods declare 10.15).
+    installer.pods_project.targets.each do |t|
+      t.build_configurations.each do |c|
+        if Gem::Version.new(c.build_settings['MACOSX_DEPLOYMENT_TARGET'] || '14.0') < Gem::Version.new('14.0')
+          c.build_settings['MACOSX_DEPLOYMENT_TARGET'] = '14.0'
+        end
+      end
+    end
+    # fmt 11.0.2 consteval format strings are rejected by Apple clang in Xcode 26.4+ (see apps/mobile/ios/Podfile).
+    fmt_base = File.join(installer.sandbox.root, 'fmt', 'include', 'fmt', 'base.h')
+    if File.exist?(fmt_base)
+      source = File.read(fmt_base)
+      patched = source.sub('#if !defined(__cpp_lib_is_constant_evaluated)', '#if 1 // bye: consteval disabled for Apple clang (see Podfile)')
+      if patched != source
+        File.chmod(0644, fmt_base)
+        File.write(fmt_base, patched)
+      end
+    end
+  end
+end

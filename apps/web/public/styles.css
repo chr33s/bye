@@ -1,0 +1,236 @@
+:root {
+  --bg: #fbfaf7;
+  --fg: #1d1d1b;
+  --muted: #6b6860;
+  --accent: #1f3a5f;
+  --line: #e4e1d8;
+  --unseen: #fff6d6;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --fg: #ecebe6;
+    --muted: #a09d94;
+    --accent: #8fb3e0;
+    --line: #2d2c29;
+    --unseen: #2b2717;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font:
+    16px/1.5 system-ui,
+    sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+header {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  z-index: 1;
+}
+nav {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  padding: 0.5rem 1rem;
+}
+nav a {
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.5rem;
+  color: var(--fg);
+  text-decoration: none;
+  white-space: nowrap;
+}
+nav a[aria-current="page"],
+nav a:hover {
+  background: var(--line);
+}
+nav a.primary {
+  margin-left: auto;
+  background: var(--accent);
+  color: var(--bg);
+}
+main {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+.threads {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.thread {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+}
+.thread.unseen {
+  background: var(--unseen);
+}
+.thread a {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 12rem 1fr;
+  gap: 0 1rem;
+  padding: 0.6rem 0.5rem;
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+}
+.thread .snippet {
+  grid-column: 2;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread .from,
+.thread .subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row-actions button,
+button {
+  font: inherit;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.empty {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--muted);
+}
+.message iframe {
+  width: 100%;
+  min-height: 20rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: #fff;
+}
+.compose {
+  display: grid;
+  gap: 0.75rem;
+}
+.compose label {
+  display: grid;
+  gap: 0.25rem;
+}
+.compose input,
+.compose textarea,
+input[type="search"] {
+  font: inherit;
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: inherit;
+  width: 100%;
+}
+.week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+  background: var(--line);
+}
+.day {
+  position: relative;
+  min-height: 36rem;
+  background: var(--bg);
+  padding-top: 2rem;
+}
+.day h3 {
+  position: absolute;
+  top: 0;
+  margin: 0.25rem;
+  font-size: 0.85rem;
+}
+.event {
+  position: absolute;
+  background: var(--accent);
+  color: var(--bg);
+  border-radius: 0.3rem;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.3rem;
+  overflow: hidden;
+}
+.skip {
+  position: absolute;
+  left: -9999px;
+}
+.skip:focus {
+  left: 1rem;
+  top: 1rem;
+  z-index: 2;
+  background: var(--bg);
+  padding: 0.5rem;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+@media (max-width: 40rem) {
+  .thread a {
+    grid-template-columns: 1fr;
+  }
+  .thread .snippet {
+    grid-column: 1;
+  }
+  .week {
+    grid-template-columns: 1fr;
+  }
+}
+@media print {
+  header,
+  .row-actions,
+  .thread-actions {
+    display: none;
+  }
+}
+.toasts {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  left: 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  pointer-events: none;
+  z-index: 2;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: 28rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+  pointer-events: auto;
+}

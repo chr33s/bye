@@ -1,0 +1,9 @@
+[
+  {
+    "_tag": "SetNotifyOptIn",
+    "commandId": "jX2Q",
+    "kind": "contact",
+    "subject": "",
+    "on": false
+  }
+]

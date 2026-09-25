@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types", "node"],
+    "paths": {
+      "cloudflare:workers": ["./packages/testing/src/workers-shim/cloudflare-workers.ts"],
+      "cloudflare:email": ["./packages/testing/src/workers-shim/cloudflare-email.ts"]
+    }
+  },
+  "include": ["workers/*/test/**/*.ts"]
+}

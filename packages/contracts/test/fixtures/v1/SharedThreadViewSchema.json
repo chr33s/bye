@@ -1,0 +1,106 @@
+[
+  {
+    "id": "\ud800",
+    "subject": "70u",
+    "includeFuture": true,
+    "messages": [
+      {
+        "messageRef": "\udc00",
+        "from": {
+          "address": "]@'.0"
+        },
+        "to": [
+          {
+            "name": " ",
+            "address": "̱@륛.x"
+          },
+          {
+            "address": "h@嶛.9"
+          }
+        ],
+        "cc": [
+          {
+            "address": "謹@ᕐ.é"
+          },
+          {
+            "address": "J@z.ḟ"
+          },
+          {
+            "name": "\ud800",
+            "address": "R@ѕ.2"
+          },
+          {
+            "name": "",
+            "address": "$@/.H"
+          }
+        ],
+        "subject": "\u0000",
+        "snippet": "AVI!",
+        "sentAt": 1
+      },
+      {
+        "messageRef": "😀",
+        "from": {
+          "address": "|@J.⍤"
+        },
+        "to": [],
+        "cc": [
+          {
+            "address": "㸷@擷.X"
+          },
+          {
+            "address": "S@P."
+          },
+          {
+            "name": "\ud800",
+            "address": "s@3.7"
+          },
+          {
+            "address": "[@.["
+          }
+        ],
+        "subject": "\n",
+        "snippet": "\t",
+        "sentAt": 3
+      },
+      {
+        "messageRef": "\"",
+        "from": {
+          "address": "ꍍ@.v"
+        },
+        "to": [
+          {
+            "address": "~@ꂲ.盾"
+          }
+        ],
+        "cc": [],
+        "subject": "W~ U",
+        "snippet": "",
+        "sentAt": 5
+      },
+      {
+        "messageRef": "<&+V",
+        "from": {
+          "address": "A@滗.ῠ"
+        },
+        "to": [],
+        "cc": [],
+        "subject": "|YQt",
+        "snippet": "\ud800",
+        "sentAt": 3
+      }
+    ]
+  },
+  {
+    "id": "f",
+    "subject": "",
+    "includeFuture": false,
+    "messages": []
+  },
+  {
+    "id": "\n",
+    "subject": "Ua",
+    "includeFuture": false,
+    "messages": []
+  }
+]

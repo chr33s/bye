@@ -1,0 +1,242 @@
+[
+  {
+    "view": "|",
+    "items": [],
+    "nextCursor": null,
+    "boundary": 13
+  },
+  {
+    "view": " ",
+    "items": [
+      {
+        "threadId": "Bd",
+        "subject": "😀",
+        "originalSubject": "\n",
+        "sender": " 6Jf",
+        "destination": "feed",
+        "disposition": "spam",
+        "quarantined": false,
+        "bundleKey": null,
+        "bundleCount": 14,
+        "newForYou": false,
+        "revision": 9,
+        "seenRevision": 15,
+        "lastActivityAt": 2.05080132535099e248,
+        "messageCount": 1,
+        "attention": {
+          "replyLater": false,
+          "setAside": false,
+          "unfollowed": false,
+          "bubble": {
+            "_tag": "Pinned"
+          }
+        },
+        "labels": ["47@F", "", ""],
+        "mergedInto": null,
+        "newSinceVisit": false
+      },
+      {
+        "threadId": "e11",
+        "subject": "\n",
+        "originalSubject": " ",
+        "sender": "\"",
+        "destination": "imbox",
+        "disposition": "screened-out",
+        "quarantined": false,
+        "bundleKey": null,
+        "bundleCount": 2,
+        "newForYou": false,
+        "revision": 16,
+        "seenRevision": 0,
+        "lastActivityAt": 3.5e-323,
+        "messageCount": 15,
+        "attention": {
+          "replyLater": true,
+          "setAside": false,
+          "unfollowed": true,
+          "bubble": {
+            "_tag": "Scheduled",
+            "at": 0,
+            "generation": 1
+          }
+        },
+        "labels": [],
+        "mergedInto": null,
+        "newSinceVisit": false
+      },
+      {
+        "threadId": "F",
+        "subject": "",
+        "originalSubject": "-1",
+        "sender": "0",
+        "destination": "imbox",
+        "disposition": "trash",
+        "quarantined": false,
+        "bundleKey": "",
+        "bundleCount": 4,
+        "newForYou": false,
+        "revision": 10,
+        "seenRevision": 2,
+        "lastActivityAt": 1.6199943728449682e101,
+        "messageCount": 1,
+        "attention": {
+          "replyLater": true,
+          "setAside": true,
+          "unfollowed": true,
+          "bubble": {
+            "_tag": "None"
+          }
+        },
+        "labels": ["1IJE", "9u", "Uo?", ")gv("],
+        "mergedInto": "\udc00",
+        "newSinceVisit": true
+      },
+      {
+        "threadId": "rj",
+        "subject": "\ud800",
+        "originalSubject": "\\_P+",
+        "sender": "-1",
+        "destination": "paper-trail",
+        "disposition": "trash",
+        "quarantined": false,
+        "bundleKey": "M4di",
+        "bundleCount": 0,
+        "newForYou": true,
+        "revision": 8,
+        "seenRevision": 4,
+        "lastActivityAt": 3.5e-323,
+        "messageCount": 11,
+        "attention": {
+          "replyLater": false,
+          "setAside": true,
+          "unfollowed": false,
+          "bubble": {
+            "_tag": "None"
+          }
+        },
+        "labels": ["\u0000", "t -}", "0", ""],
+        "mergedInto": null,
+        "newSinceVisit": true
+      }
+    ],
+    "nextCursor": null,
+    "boundary": 14
+  },
+  {
+    "view": "4mk{",
+    "items": [
+      {
+        "threadId": "6",
+        "subject": "\udc00",
+        "originalSubject": ":'\\+",
+        "sender": "",
+        "destination": "paper-trail",
+        "disposition": "screened-out",
+        "quarantined": false,
+        "bundleKey": "",
+        "bundleCount": 11,
+        "newForYou": true,
+        "revision": 0,
+        "seenRevision": 0,
+        "lastActivityAt": 9e-323,
+        "messageCount": 8,
+        "attention": {
+          "replyLater": true,
+          "setAside": false,
+          "unfollowed": false,
+          "bubble": {
+            "_tag": "Pinned"
+          }
+        },
+        "labels": ["", "mF"],
+        "mergedInto": null,
+        "newSinceVisit": true
+      },
+      {
+        "threadId": "L",
+        "subject": "h(PA",
+        "originalSubject": "cPX",
+        "sender": ":7B:",
+        "destination": "paper-trail",
+        "disposition": "screened-out",
+        "quarantined": true,
+        "bundleKey": "",
+        "bundleCount": 14,
+        "newForYou": false,
+        "revision": 8,
+        "seenRevision": 3,
+        "lastActivityAt": 9e-323,
+        "messageCount": 12,
+        "attention": {
+          "replyLater": true,
+          "setAside": true,
+          "unfollowed": false,
+          "bubble": {
+            "_tag": "None"
+          }
+        },
+        "labels": ["6%V^", "\udc00", "\t", "\n"],
+        "mergedInto": "",
+        "newSinceVisit": false
+      },
+      {
+        "threadId": "b",
+        "subject": ";",
+        "originalSubject": "\u0000",
+        "sender": "\n",
+        "destination": "feed",
+        "disposition": "active",
+        "quarantined": false,
+        "bundleKey": "E/6.",
+        "bundleCount": 16,
+        "newForYou": false,
+        "revision": 2,
+        "seenRevision": 6,
+        "lastActivityAt": 1.621865757775181e240,
+        "messageCount": 12,
+        "attention": {
+          "replyLater": false,
+          "setAside": true,
+          "unfollowed": false,
+          "bubble": {
+            "_tag": "None"
+          }
+        },
+        "labels": ["*", "'f<y", "0", "0"],
+        "mergedInto": null,
+        "newSinceVisit": true
+      },
+      {
+        "threadId": "V",
+        "subject": "\t",
+        "originalSubject": "0",
+        "sender": "\t",
+        "destination": "feed",
+        "disposition": "active",
+        "quarantined": false,
+        "bundleKey": null,
+        "bundleCount": 15,
+        "newForYou": true,
+        "revision": 1,
+        "seenRevision": 6,
+        "lastActivityAt": 5.4e-323,
+        "messageCount": 1,
+        "attention": {
+          "replyLater": false,
+          "setAside": false,
+          "unfollowed": false,
+          "bubble": {
+            "_tag": "Scheduled",
+            "at": 1.2142990580239583e-113,
+            "generation": 9
+          }
+        },
+        "labels": [],
+        "mergedInto": "😀",
+        "newSinceVisit": true
+      }
+    ],
+    "nextCursor": null,
+    "boundary": 9
+  }
+]

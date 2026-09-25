@@ -1,0 +1,27 @@
+[
+  {
+    "userId": "😀",
+    "challengeId": "/",
+    "response": {
+      "clientDataJSON": "4NS_",
+      "attestationObject": "9j"
+    }
+  },
+  {
+    "userId": "-1",
+    "challengeId": "😀",
+    "timeZone": "\n",
+    "response": {
+      "clientDataJSON": "B",
+      "attestationObject": "9D8d"
+    }
+  },
+  {
+    "userId": "\t",
+    "challengeId": "\udc00",
+    "response": {
+      "clientDataJSON": "zXJ",
+      "attestationObject": "oxhJ"
+    }
+  }
+]

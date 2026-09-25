@@ -1,0 +1,11 @@
+{
+  "name": "@bye/worker-sigmirror",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bye/domain": "workspace:*"
+  }
+}

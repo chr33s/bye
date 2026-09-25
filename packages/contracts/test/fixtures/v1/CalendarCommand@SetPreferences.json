@@ -1,0 +1,10 @@
+[
+  {
+    "type": "SetPreferences",
+    "commandId": "uY-V",
+    "preferences": {
+      "hour12": true,
+      "lastView": "year"
+    }
+  }
+]

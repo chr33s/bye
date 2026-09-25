@@ -1,0 +1,17 @@
+[
+  {
+    "passkeys": 5.612180106942551e74,
+    "totp": "pending",
+    "recoveryCodesRemaining": -4.489676279164477e83
+  },
+  {
+    "passkeys": 1.5e-323,
+    "totp": "none",
+    "recoveryCodesRemaining": -1e-323
+  },
+  {
+    "passkeys": 6e-323,
+    "totp": "none",
+    "recoveryCodesRemaining": -3.7144365980712972e-227
+  }
+]

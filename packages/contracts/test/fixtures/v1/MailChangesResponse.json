@@ -1,0 +1,91 @@
+[
+  {
+    "changes": [
+      {
+        "seq": 3,
+        "resource": "Qvjh",
+        "kind": "",
+        "payload": {},
+        "createdAt": 5.6047298822645284e-24
+      },
+      {
+        "seq": 5,
+        "resource": ",P@M",
+        "kind": "\udc00",
+        "payload": {},
+        "createdAt": 4.825131323103925e-293
+      },
+      {
+        "seq": 1,
+        "resource": "",
+        "kind": ":#F",
+        "payload": null,
+        "createdAt": 0
+      },
+      {
+        "seq": 0,
+        "resource": "",
+        "kind": "",
+        "payload": {
+          "\u0000": {
+            "😀": false,
+            "BatU": {}
+          },
+          "": true
+        },
+        "createdAt": 1.9895595587957468e234
+      }
+    ],
+    "cursor": 2,
+    "expired": true
+  },
+  {
+    "changes": [
+      {
+        "seq": 12,
+        "resource": "",
+        "kind": "\t",
+        "payload": {
+          "d": null
+        },
+        "createdAt": 9.4e-323
+      },
+      {
+        "seq": 2,
+        "resource": "😀",
+        "kind": "\n",
+        "payload": null,
+        "createdAt": 3.6393398360963066e-112
+      }
+    ],
+    "cursor": 15,
+    "expired": true
+  },
+  {
+    "changes": [
+      {
+        "seq": 15,
+        "resource": "]5",
+        "kind": "HI`Z",
+        "payload": "\ud800",
+        "createdAt": 8.4e-323
+      },
+      {
+        "seq": 7,
+        "resource": " ",
+        "kind": "z",
+        "payload": [true, false],
+        "createdAt": 1.754510411808028e-118
+      },
+      {
+        "seq": 2,
+        "resource": "",
+        "kind": "",
+        "payload": null,
+        "createdAt": 8.4e-323
+      }
+    ],
+    "cursor": 12,
+    "expired": false
+  }
+]

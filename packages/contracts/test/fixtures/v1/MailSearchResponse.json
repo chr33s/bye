@@ -1,0 +1,78 @@
+[
+  {
+    "results": [
+      {
+        "kind": "\t",
+        "id": "H",
+        "threadId": "\ud800",
+        "date": 6.4e-323,
+        "snippet": "\t"
+      },
+      {
+        "kind": "0",
+        "id": "fZL",
+        "threadId": null,
+        "date": 3.7179553847733894e172,
+        "snippet": " "
+      },
+      {
+        "kind": "\"{^",
+        "id": "YF",
+        "threadId": null,
+        "date": 1.2961427805347561e305,
+        "snippet": ""
+      },
+      {
+        "kind": "\u0000",
+        "id": "v:5-",
+        "threadId": null,
+        "date": 6.983662616672612e248,
+        "snippet": "`"
+      }
+    ],
+    "nextCursor": "-1",
+    "watermark": 5,
+    "lagging": false
+  },
+  {
+    "results": [
+      {
+        "kind": "😀",
+        "id": "YTv0",
+        "threadId": null,
+        "date": 1.5e-323,
+        "snippet": ""
+      },
+      {
+        "kind": "\udc00",
+        "id": "u",
+        "threadId": "",
+        "date": 2.4312081138582694e275,
+        "snippet": "-1"
+      },
+      {
+        "kind": "-1",
+        "id": "It2m",
+        "threadId": null,
+        "date": 3.5e-323,
+        "snippet": ""
+      },
+      {
+        "kind": "",
+        "id": "e",
+        "threadId": null,
+        "date": 5.4e-323,
+        "snippet": "\udc00"
+      }
+    ],
+    "nextCursor": "K+?8",
+    "watermark": 3,
+    "lagging": true
+  },
+  {
+    "results": [],
+    "nextCursor": "",
+    "watermark": 0,
+    "lagging": true
+  }
+]

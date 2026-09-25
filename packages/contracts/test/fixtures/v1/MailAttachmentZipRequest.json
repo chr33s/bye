@@ -1,0 +1,34 @@
+[
+  {
+    "items": [
+      {
+        "deliveryId": "A-aa",
+        "partId": "yy;Q"
+      },
+      {
+        "deliveryId": "LyAK",
+        "partId": "-1"
+      },
+      {
+        "deliveryId": "V6cS",
+        "partId": ""
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "deliveryId": "kf3I",
+        "partId": ""
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "deliveryId": "5xf_",
+        "partId": "-1"
+      }
+    ]
+  }
+]

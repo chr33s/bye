@@ -1,0 +1,23 @@
+[
+  {
+    "schemaVersion": 1,
+    "type": "calendar-refresh",
+    "eventId": "AM",
+    "calendarSpaceId": ":]p[",
+    "calendarId": ""
+  },
+  {
+    "schemaVersion": 1,
+    "type": "calendar-refresh",
+    "eventId": "-1",
+    "calendarSpaceId": "\u0000",
+    "calendarId": "-1"
+  },
+  {
+    "schemaVersion": 1,
+    "type": "calendar-refresh",
+    "eventId": "",
+    "calendarSpaceId": "",
+    "calendarId": "0"
+  }
+]

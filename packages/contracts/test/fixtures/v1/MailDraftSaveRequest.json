@@ -1,0 +1,80 @@
+[
+  {
+    "mailboxId": "z2M",
+    "commandId": "A",
+    "expectedRevision": 1,
+    "content": {
+      "to": [],
+      "cc": [],
+      "bcc": [
+        {
+          "address": "i@า"
+        },
+        {
+          "address": "\u0000@9"
+        },
+        {
+          "address": "ꎈ@숥"
+        },
+        {
+          "address": "苨恨@D"
+        }
+      ],
+      "subject": "",
+      "text": "\ud800",
+      "attachments": []
+    }
+  },
+  {
+    "mailboxId": ":",
+    "commandId": "G",
+    "expectedRevision": 2,
+    "content": {
+      "to": [
+        {
+          "address": "䙁@D"
+        },
+        {
+          "address": "된@J"
+        },
+        {
+          "address": "b@8"
+        },
+        {
+          "address": "T@ZW"
+        }
+      ],
+      "cc": [],
+      "bcc": [
+        {
+          "address": "}奿@O"
+        },
+        {
+          "address": "㥴@뼦"
+        },
+        {
+          "address": "B@l"
+        },
+        {
+          "address": "~@$"
+        }
+      ],
+      "subject": "B",
+      "text": "\t",
+      "attachments": ["-SV"]
+    }
+  },
+  {
+    "mailboxId": "P",
+    "commandId": "XKEV",
+    "expectedRevision": 1,
+    "content": {
+      "to": [],
+      "cc": [],
+      "bcc": [],
+      "subject": "😀",
+      "text": "ahZt",
+      "attachments": ["x", "9", "wsTP", "TD"]
+    }
+  }
+]

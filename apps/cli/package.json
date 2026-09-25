@@ -1,0 +1,42 @@
+{
+  "name": "@bye/cli",
+  "version": "0.2.0",
+  "description": "bye mail and calendar from the terminal",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chr33s/bye.git",
+    "directory": "apps/cli"
+  },
+  "bin": {
+    "bye": "./dist/bye.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      "./package.json": "./package.json"
+    },
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node --experimental-strip-types build.ts",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.117"
+  },
+  "devDependencies": {
+    "@bye/domain": "workspace:*",
+    "@bye/native-shared": "workspace:*",
+    "rolldown": "1.2.11"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

@@ -1,0 +1,40 @@
+// Binding classification shared by declarations, plan policy, and tests (pure; no Alchemy import).
+
+export const PUBLIC_SERVICE_BINDINGS = ["CORE"] as const;
+
+/** Private bindings that must never reach the public origin (§15.5). */
+export const PRIVATE_BINDINGS = [
+  "DIRECTORY",
+  "ORIGINALS",
+  "PARTS",
+  "EXPORTS",
+  "MAILBOXES",
+  "CALENDARS",
+  "SHARED_SPACES",
+  "SEARCH_SHARDS",
+  "INGRESS_JOURNALS",
+  "SESSION_KEY",
+  "PERSONAL_MAIL_API_KEY",
+  "BILLING_WEBHOOK_SECRET",
+  "SEND_EVENTS_WEBHOOK_SECRET",
+  "PROXY_SIGNING_KEY",
+  "INGEST",
+  "DISPATCH",
+  "SCANNER",
+  "MIME_PARSER",
+  "VAPID_PRIVATE_KEY",
+  "APNS_KEY_P8",
+  "FCM_SERVICE_ACCOUNT",
+  "FORWARDING_API_KEY",
+  "SRS_SECRET",
+  "ARC_SIGNING_KEY",
+  "NEWSLETTER_API_KEY",
+  "NEWSLETTER_WEBHOOK_SECRET",
+  "EXTERNAL_IDENTITY_SEAL_KEY",
+  "OPS_TOKEN",
+  "BOOTSTRAP_TOKEN",
+  "SIGNATURES",
+  "MIRROR_JOB",
+  "WRITE_TOKEN",
+  "SIGMIRROR",
+] as const;

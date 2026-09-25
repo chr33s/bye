@@ -1,0 +1,62 @@
+{
+  "name": "bye",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.workers.json && tsc -p tsconfig.workers-test.json && tsc -p tsconfig.web.json && tsc -p tsconfig.sw.json && tsc -p infra/tsconfig.json",
+    "test": "vitest run",
+    "check:boundaries": "node --experimental-strip-types infra/policies/check-boundaries.ts",
+    "check:versions": "node --experimental-strip-types infra/policies/check-versions.ts",
+    "verify": "pnpm check:versions && pnpm check:boundaries && pnpm check:concurrency && pnpm fmt:check && pnpm lint && pnpm typecheck && pnpm test && pnpm check:bundle",
+    "build:web": "pnpm --filter @bye/web build",
+    "build:mime": "node --experimental-strip-types containers/mime/build.ts",
+    "build:deploy": "pnpm build:web && pnpm build:mime",
+    "check:plan": "node --experimental-strip-types infra/policies/check-plan.ts",
+    "deploy:plan": "pnpm build:deploy && ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 node --experimental-strip-types infra/policies/guard-stage.ts plan \"$STAGE\" && ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 alchemy plan --stage \"$STAGE\"",
+    "deploy": "pnpm build:deploy && ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 node --experimental-strip-types infra/policies/guard-stage.ts deploy \"$STAGE\" && ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 alchemy deploy --stage \"$STAGE\" --yes",
+    "destroy:preview": "ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 node --experimental-strip-types infra/policies/guard-stage.ts destroy \"$STAGE\" && ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 alchemy destroy --stage \"$STAGE\"",
+    "drift": "pnpm build:deploy && ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 node --experimental-strip-types infra/policies/guard-stage.ts plan \"$STAGE\" && ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 alchemy drift --stage \"$STAGE\"",
+    "generate:key": "openssl rand -base64 32 | tr '+/' '-_' | tr -d '='",
+    "typecheck:infra": "tsc -p infra/tsconfig.json",
+    "check:bundle": "node --experimental-strip-types infra/policies/check-bundle.ts",
+    "scanner:smoke": "sh containers/scanner/smoke.sh",
+    "scanner:mirror-smoke": "sh containers/sigmirror/smoke.sh",
+    "fixtures:contracts": "node --experimental-strip-types packages/contracts/test/fixtures/generate.ts && oxfmt packages/contracts/test/fixtures",
+    "check:concurrency": "node --experimental-strip-types infra/policies/check-concurrency.ts",
+    "onboarding": "node --experimental-strip-types infra/onboarding/server.ts",
+    "evidence:bench": "BYE_BENCH_MESSAGES=${BYE_BENCH_MESSAGES:-1000} vitest run infra/tests/evidence-bench.test.ts",
+    "lint": "oxlint --type-aware",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.117"
+  },
+  "devDependencies": {
+    "@bye/application": "workspace:*",
+    "@bye/calendar-engine": "workspace:*",
+    "@bye/cli": "workspace:*",
+    "@bye/contracts": "workspace:*",
+    "@bye/domain": "workspace:*",
+    "@bye/mail-codec": "workspace:*",
+    "@bye/platform-cloudflare": "workspace:*",
+    "@bye/testing": "workspace:*",
+    "@cloudflare/workers-types": "5.20260925.1",
+    "@effect/platform-bun": "4.0.0-rc.117",
+    "@effect/platform-node": "4.0.0-rc.117",
+    "@effect/vitest": "4.0.0-rc.117",
+    "@types/node": "24.13.6",
+    "alchemy": "2.0.0-beta.79",
+    "miniflare": "4.20260730.0",
+    "oxfmt": "0.70.0",
+    "oxlint": "1.85.0",
+    "oxlint-tsgolint": "7.0.2003",
+    "rolldown": "1.2.11",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  },
+  "engines": {
+    "node": "24.18.1"
+  },
+  "packageManager": "pnpm@11.20.0"
+}

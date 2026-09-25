@@ -1,0 +1,11 @@
+[
+  {
+    "schemaVersion": 1,
+    "type": "propagate",
+    "eventId": "\udc00",
+    "topic": "-1",
+    "source": "\u0000",
+    "target": "\t",
+    "payload": ""
+  }
+]

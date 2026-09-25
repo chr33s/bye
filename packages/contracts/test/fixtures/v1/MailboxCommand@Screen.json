@@ -1,0 +1,21 @@
+[
+  {
+    "_tag": "Screen",
+    "commandId": "L2",
+    "decisions": [
+      {
+        "sender": "슭@`",
+        "decision": "block"
+      },
+      {
+        "sender": "ڛ@︢",
+        "decision": "allow"
+      },
+      {
+        "sender": "⦓@=",
+        "decision": "block",
+        "reply": false
+      }
+    ]
+  }
+]

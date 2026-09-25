@@ -1,0 +1,12 @@
+{
+  "name": "@bye/contracts",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bye/domain": "workspace:*",
+    "effect": "4.0.0-rc.117"
+  }
+}

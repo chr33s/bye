@@ -1,0 +1,18 @@
+[
+  {
+    "_tag": "ApiError",
+    "code": "internal",
+    "message": "D",
+    "details": {}
+  },
+  {
+    "_tag": "ApiError",
+    "code": "too_late",
+    "message": ""
+  },
+  {
+    "_tag": "ApiError",
+    "code": "conflict",
+    "message": "T"
+  }
+]

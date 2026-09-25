@@ -1,0 +1,38 @@
+[
+  {
+    "schemaVersion": 1,
+    "type": "ingest",
+    "eventId": "IpNg",
+    "ingestionId": "tYI0",
+    "mailboxId": "0",
+    "recipient": "\u0000",
+    "envelopeFrom": "😀",
+    "objectKey": "kq{S",
+    "rawSize": 3.214381654027955e-61,
+    "receivedAt": -1.8505598799020596e-104
+  },
+  {
+    "schemaVersion": 1,
+    "type": "ingest",
+    "eventId": "",
+    "ingestionId": "😀",
+    "mailboxId": "<PFe",
+    "recipient": "",
+    "envelopeFrom": "Ht@s",
+    "objectKey": "\ud800",
+    "rawSize": 8.325008456543181e89,
+    "receivedAt": -2.109131697168602e232
+  },
+  {
+    "schemaVersion": 1,
+    "type": "ingest",
+    "eventId": "",
+    "ingestionId": "",
+    "mailboxId": ">BX`",
+    "recipient": "\n",
+    "envelopeFrom": "\ud800",
+    "objectKey": "",
+    "rawSize": 7.8950672085472e-42,
+    "receivedAt": 0
+  }
+]

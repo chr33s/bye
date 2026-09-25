@@ -1,0 +1,9 @@
+{
+  "name": "@bye/scanner",
+  "private": true,
+  "description": "Isolated ClamAV scanning container (spec §3.1 Containers, §10 attachments).",
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types src/server.ts"
+  }
+}

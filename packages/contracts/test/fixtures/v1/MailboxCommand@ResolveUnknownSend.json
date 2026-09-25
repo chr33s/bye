@@ -1,0 +1,11 @@
+[
+  {
+    "_tag": "ResolveUnknownSend",
+    "commandId": "b",
+    "sendJobId": "8lM",
+    "decision": {
+      "_tag": "Accepted",
+      "providerId": ""
+    }
+  }
+]

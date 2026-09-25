@@ -1,0 +1,22 @@
+[
+  {
+    "_tag": "Rejection",
+    "code": "step_up_required",
+    "message": ""
+  },
+  {
+    "_tag": "Rejection",
+    "code": "too_late",
+    "message": "\u0000"
+  },
+  {
+    "_tag": "Rejection",
+    "code": "gone",
+    "message": "\n",
+    "details": {
+      "6_af": "[xO'",
+      "uk}_": ["😀", "n'~2", "-1", {}],
+      " ": {}
+    }
+  }
+]

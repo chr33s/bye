@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": [
+    "containers/*/src/**/*.ts",
+    "containers/*/test/**/*.ts",
+    "packages/*/src/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "apps/cli/**/*.ts",
+    "apps/web/build.ts",
+    "vitest.config.ts"
+  ],
+  // React Native screens are typechecked by apps/mobile and apps/desktop against react-native types.
+  "exclude": ["node_modules", "packages/native-shared/src/ui"]
+}

@@ -1,0 +1,34 @@
+[
+  {
+    "type": "CreateEvent",
+    "commandId": "X<i(",
+    "calendarId": "-1",
+    "start": {
+      "kind": "timed",
+      "local": {
+        "year": 14,
+        "month": 0,
+        "day": 4,
+        "hour": -16,
+        "minute": 12,
+        "second": -2
+      },
+      "tzid": ""
+    },
+    "end": {
+      "kind": "timed",
+      "local": {
+        "year": -16,
+        "month": -2,
+        "day": -3,
+        "hour": -4,
+        "minute": -13,
+        "second": 2
+      },
+      "tzid": "\t"
+    },
+    "data": {
+      "summary": "\t"
+    }
+  }
+]

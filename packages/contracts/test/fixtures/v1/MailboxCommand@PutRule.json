@@ -1,0 +1,11 @@
+[
+  {
+    "_tag": "PutRule",
+    "commandId": "pGWt",
+    "conditions": {
+      "from": "圿@I",
+      "to": "M@j"
+    },
+    "actions": {}
+  }
+]

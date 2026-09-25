@@ -1,0 +1,17 @@
+[
+  {
+    "id": "Jx)",
+    "token": "=|",
+    "scopes": ["read"]
+  },
+  {
+    "id": "#",
+    "token": "HA",
+    "scopes": ["delete", "read", "calendar", "screen"]
+  },
+  {
+    "id": "TAV^",
+    "token": "-1",
+    "scopes": []
+  }
+]

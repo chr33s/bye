@@ -1,0 +1,23 @@
+[
+  {
+    "mailboxId": "K",
+    "commandId": "R",
+    "filename": "\ud800",
+    "contentType": "E.*",
+    "declaredSize": 11
+  },
+  {
+    "mailboxId": "E",
+    "commandId": "EWJ",
+    "filename": "u9",
+    "contentType": "",
+    "declaredSize": 6
+  },
+  {
+    "mailboxId": "iX9s",
+    "commandId": "QZz0",
+    "filename": "\t",
+    "contentType": " ",
+    "declaredSize": 10
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "name": "@bye/mime-container",
+  "private": true,
+  "description": "Bounded MIME-processing container for exceptional messages (spec §3.1 Containers, §5.1 step 5).",
+  "type": "module",
+  "scripts": {
+    "build": "node --experimental-strip-types build.ts",
+    "start": "node dist/server.mjs"
+  }
+}

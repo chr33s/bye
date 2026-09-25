@@ -1,0 +1,18 @@
+[
+  {
+    "file": "workers/core/src/publishing.ts",
+    "text": "await Promise.all(",
+    "owner": "control: public site write"
+  },
+  {
+    "file": "packages/platform-cloudflare/src/control/auth.ts",
+    "text": "const hashes = await Promise.all(codes.map(",
+    "owner": "control: fixed 10 recovery codes (add `// bounded:`)"
+  },
+  {
+    "file": "workers/core/src/routes/admin.ts",
+    "text": "Promise.all(",
+    "owner": "control",
+    "reason": "signs at most 1000 export download links (EXPORTS.list limit); CPU-only HMAC, no I/O fan-out"
+  }
+]

@@ -1,0 +1,23 @@
+[
+  {
+    "eventId": "6",
+    "sendJobId": "r",
+    "mailboxId": ":olw",
+    "recipient": "㹶@홖",
+    "outcome": "rejected"
+  },
+  {
+    "eventId": "VfYX",
+    "sendJobId": "e",
+    "mailboxId": "p",
+    "recipient": "槚@齫N",
+    "outcome": "rejected"
+  },
+  {
+    "eventId": "o",
+    "sendJobId": "KMIM",
+    "mailboxId": "moQD",
+    "recipient": "俖_@I",
+    "outcome": "deferred"
+  }
+]

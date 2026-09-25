@@ -1,0 +1,18 @@
+[
+  {
+    "type": "MX",
+    "name": "\u0000",
+    "content": "\ud800"
+  },
+  {
+    "type": "MX",
+    "name": " ",
+    "content": "\u0000"
+  },
+  {
+    "type": "MX",
+    "name": "\t",
+    "content": "\udc00",
+    "priority": 1.3026775114131638e-246
+  }
+]

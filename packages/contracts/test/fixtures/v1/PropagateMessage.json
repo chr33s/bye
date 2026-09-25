@@ -1,0 +1,29 @@
+[
+  {
+    "schemaVersion": 1,
+    "type": "propagate",
+    "eventId": "f",
+    "topic": "\ud800",
+    "source": "\u0000",
+    "target": "!",
+    "payload": -1.7623943402278094e197
+  },
+  {
+    "schemaVersion": 1,
+    "type": "propagate",
+    "eventId": "-1",
+    "topic": "qGX&",
+    "source": "Tc",
+    "target": "",
+    "payload": ["0"]
+  },
+  {
+    "schemaVersion": 1,
+    "type": "propagate",
+    "eventId": "",
+    "topic": " ",
+    "source": "",
+    "target": "z",
+    "payload": "-1"
+  }
+]

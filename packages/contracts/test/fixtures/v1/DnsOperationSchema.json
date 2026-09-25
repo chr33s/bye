@@ -1,0 +1,35 @@
+[
+  {
+    "op": "create",
+    "record": {
+      "type": "TXT",
+      "name": "\"t",
+      "content": " "
+    },
+    "purpose": "\u0000"
+  },
+  {
+    "op": "create",
+    "record": {
+      "type": "MX",
+      "name": "d",
+      "content": "C",
+      "priority": 3.5771931037722396e-9
+    },
+    "purpose": "-1"
+  },
+  {
+    "op": "update",
+    "from": {
+      "type": "CNAME",
+      "name": "6i",
+      "content": "\n"
+    },
+    "to": {
+      "type": "MX",
+      "name": "\u0000",
+      "content": "q&!z"
+    },
+    "purpose": "l(Ss"
+  }
+]

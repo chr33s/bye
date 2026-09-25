@@ -1,0 +1,7 @@
+[
+  {
+    "type": "DeleteCalendar",
+    "commandId": "\udc00",
+    "calendarId": "ORVC"
+  }
+]

@@ -1,0 +1,14 @@
+{
+  // Solution config: lets editors and oxlint's type-aware mode map each file to its owning project.
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.node.json" },
+    { "path": "./tsconfig.workers.json" },
+    { "path": "./tsconfig.workers-test.json" },
+    { "path": "./tsconfig.web.json" },
+    { "path": "./tsconfig.sw.json" },
+    { "path": "./infra/tsconfig.json" },
+    { "path": "./apps/mobile/tsconfig.json" },
+    { "path": "./apps/desktop/tsconfig.json" }
+  ]
+}

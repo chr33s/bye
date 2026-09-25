@@ -1,0 +1,29 @@
+[
+  { "input": "bye://mail/imbox", "route": "#/mail/imbox" },
+  { "input": "bye://mail", "route": "#/mail/imbox" },
+  { "input": "bye://mail/paper-trail", "route": "#/mail/paper-trail" },
+  { "input": "bye://mail/nope", "route": null },
+  { "input": "bye://mail/imbox/extra", "route": null },
+  {
+    "input": "bye://thread/thr_0123456789abcdefghjk",
+    "route": "#/thread/thr_0123456789abcdefghjk"
+  },
+  { "input": "bye://thread/../../etc", "route": null },
+  {
+    "input": "bye://compose?subject=Hi%20there&text=x&evil=1",
+    "route": "#/compose?subject=Hi%20there&text=x"
+  },
+  { "input": "bye://compose", "route": "#/compose" },
+  { "input": "bye://calendar", "route": "#/calendar" },
+  { "input": "bye://search?q=from%3Aa%40b.com", "route": "#/search?q=from%3Aa%40b.com" },
+  {
+    "input": "mailto:bob@example.net?subject=Lunch",
+    "route": "#/compose?to=bob%40example.net&subject=Lunch"
+  },
+  { "input": "javascript:alert(1)", "route": null },
+  { "input": "https://evil.example/#/mail/imbox", "route": null },
+  { "input": "bye://settings", "route": null },
+  { "input": "bye://add-instance?url=https%3A%2F%2Fmail.example.com", "route": null },
+  { "input": "bye://oauth/callback?code=x&state=y&iss=https%3A%2F%2Fa.example", "route": null },
+  { "input": "not a url", "route": null }
+]

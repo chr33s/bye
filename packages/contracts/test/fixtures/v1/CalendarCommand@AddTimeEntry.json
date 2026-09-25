@@ -1,0 +1,9 @@
+[
+  {
+    "type": "AddTimeEntry",
+    "commandId": "\udc00",
+    "label": "0",
+    "startedAt": -5.3701901670431164e-43,
+    "stoppedAt": -3.6183453744747965e156
+  }
+]

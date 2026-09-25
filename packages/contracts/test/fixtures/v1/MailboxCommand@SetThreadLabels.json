@@ -1,0 +1,9 @@
+[
+  {
+    "_tag": "SetThreadLabels",
+    "commandId": "c",
+    "threadId": "K",
+    "add": ["o\"D", "", " ", "\ud800"],
+    "remove": [" ", "\ud800", "", "qX"]
+  }
+]

@@ -1,0 +1,16 @@
+[
+  {
+    "op": "conflict",
+    "existing": {
+      "type": "MX",
+      "name": "\udc00",
+      "content": "j"
+    },
+    "desired": {
+      "type": "TXT",
+      "name": "0",
+      "content": "\udc00"
+    },
+    "purpose": "}VLx"
+  }
+]

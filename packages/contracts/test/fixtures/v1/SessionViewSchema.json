@@ -1,0 +1,23 @@
+[
+  {
+    "id": "\t",
+    "device": "-1",
+    "createdAt": 0,
+    "lastSeenAt": 15,
+    "current": true
+  },
+  {
+    "id": "V",
+    "device": "6Oq%",
+    "createdAt": 16,
+    "lastSeenAt": 8,
+    "current": false
+  },
+  {
+    "id": "a",
+    "device": "",
+    "createdAt": 13,
+    "lastSeenAt": 16,
+    "current": true
+  }
+]

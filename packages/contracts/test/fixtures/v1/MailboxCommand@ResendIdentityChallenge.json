@@ -1,0 +1,7 @@
+[
+  {
+    "_tag": "ResendIdentityChallenge",
+    "commandId": "fb3",
+    "identityId": "C"
+  }
+]

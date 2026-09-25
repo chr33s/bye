@@ -1,0 +1,41 @@
+[
+  {
+    "schemaVersion": 1,
+    "type": "index",
+    "eventId": "-1",
+    "scope": "-1",
+    "op": "upsert",
+    "docId": ";",
+    "source": {
+      "mailboxId": "0",
+      "kind": "U~;",
+      "id": ""
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "type": "index",
+    "eventId": "\u0000",
+    "scope": "7x\"",
+    "op": "delete",
+    "docId": "",
+    "source": {
+      "mailboxId": "\udc00",
+      "kind": "",
+      "id": ""
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "type": "index",
+    "eventId": "ARt",
+    "scope": "U",
+    "op": "upsert",
+    "docId": "😀",
+    "source": {
+      "mailboxId": " ",
+      "kind": "Ou(\\",
+      "id": "-1"
+    }
+  }
+]

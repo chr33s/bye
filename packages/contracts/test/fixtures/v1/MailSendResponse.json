@@ -1,0 +1,18 @@
+[
+  {
+    "_tag": "Conflict",
+    "currentRevision": 4
+  },
+  {
+    "_tag": "Queued",
+    "sendJobIds": ["VQc", "BMkm", "sUVB", "6"],
+    "dueAt": 1.7976931348623121e308,
+    "deduplicated": true
+  },
+  {
+    "_tag": "Queued",
+    "sendJobIds": ["4", ".a", "W4X-", "u"],
+    "dueAt": 4e-323,
+    "deduplicated": true
+  }
+]

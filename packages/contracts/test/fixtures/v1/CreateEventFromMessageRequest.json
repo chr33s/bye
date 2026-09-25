@@ -1,0 +1,96 @@
+[
+  {
+    "schemaVersion": 1,
+    "commandId": " ",
+    "calendarId": "#~E?",
+    "message": {
+      "mailboxId": "\udc00",
+      "threadId": "😀"
+    },
+    "title": "😀",
+    "start": {
+      "kind": "date",
+      "date": {
+        "year": -5,
+        "month": -13,
+        "day": -6
+      }
+    },
+    "end": {
+      "kind": "timed",
+      "local": {
+        "year": 5,
+        "month": 9,
+        "day": -12,
+        "hour": -4,
+        "minute": 2,
+        "second": 4
+      },
+      "tzid": ",!89"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "commandId": "😀",
+    "calendarId": "\t",
+    "message": {
+      "mailboxId": "",
+      "threadId": "FBM8"
+    },
+    "title": "h*_",
+    "start": {
+      "kind": "timed",
+      "local": {
+        "year": 1,
+        "month": 16,
+        "day": -2,
+        "hour": 1,
+        "minute": 7,
+        "second": -14
+      },
+      "tzid": "or"
+    },
+    "end": {
+      "kind": "timed",
+      "local": {
+        "year": 1,
+        "month": -2,
+        "day": -9,
+        "hour": -4,
+        "minute": -12,
+        "second": 12
+      },
+      "tzid": "\ud800"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "commandId": "3s",
+    "calendarId": "-1",
+    "message": {
+      "mailboxId": "N8_|",
+      "threadId": "P3Hu"
+    },
+    "title": "",
+    "start": {
+      "kind": "timed",
+      "local": {
+        "year": -14,
+        "month": 8,
+        "day": 14,
+        "hour": -5,
+        "minute": -13,
+        "second": -1
+      },
+      "tzid": "F,|^"
+    },
+    "end": {
+      "kind": "date",
+      "date": {
+        "year": -2,
+        "month": -3,
+        "day": -15
+      }
+    }
+  }
+]

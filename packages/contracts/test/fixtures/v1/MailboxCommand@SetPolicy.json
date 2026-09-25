@@ -1,0 +1,15 @@
+[
+  {
+    "_tag": "SetPolicy",
+    "commandId": "k",
+    "kind": "address",
+    "subject": "X",
+    "policy": {
+      "decision": "blocked",
+      "destination": "imbox",
+      "labels": ["Wj?7", "Dsbz", "KE2Z"],
+      "bundle": false,
+      "notify": false
+    }
+  }
+]

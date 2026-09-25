@@ -1,0 +1,17 @@
+[
+  {
+    "confirmAddress": "#@.霊",
+    "reserveAddressDays": 12,
+    "forwardingDays": 0
+  },
+  {
+    "confirmAddress": "@ꔞ.6",
+    "reserveAddressDays": 10,
+    "forwardingDays": 10
+  },
+  {
+    "confirmAddress": "⺽@冫.O",
+    "reserveAddressDays": 2,
+    "forwardingDays": 15
+  }
+]

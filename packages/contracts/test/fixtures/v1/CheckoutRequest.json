@@ -1,0 +1,15 @@
+[
+  {
+    "orgId": "\u0000",
+    "plan": "personal",
+    "interval": "monthly"
+  },
+  {
+    "plan": "personal",
+    "interval": "annual"
+  },
+  {
+    "plan": "family",
+    "interval": "monthly"
+  }
+]

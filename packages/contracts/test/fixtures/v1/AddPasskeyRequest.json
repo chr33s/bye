@@ -1,0 +1,24 @@
+[
+  {
+    "challengeId": "😀",
+    "label": "v&d",
+    "response": {
+      "clientDataJSON": "x",
+      "attestationObject": "4"
+    }
+  },
+  {
+    "challengeId": "😀",
+    "response": {
+      "clientDataJSON": "JTu",
+      "attestationObject": "4C8-"
+    }
+  },
+  {
+    "challengeId": "\t",
+    "response": {
+      "clientDataJSON": "2q",
+      "attestationObject": "E"
+    }
+  }
+]

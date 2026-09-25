@@ -1,0 +1,24 @@
+[
+  {
+    "error": {
+      "code": "too_late",
+      "message": "0"
+    }
+  },
+  {
+    "error": {
+      "code": "forbidden",
+      "message": "",
+      "details": {
+        "\udc00": [false, [], null, null]
+      }
+    }
+  },
+  {
+    "error": {
+      "code": "forbidden",
+      "message": "/D(C",
+      "details": {}
+    }
+  }
+]

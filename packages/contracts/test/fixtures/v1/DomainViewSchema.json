@@ -1,0 +1,23 @@
+[
+  {
+    "id": "\t",
+    "name": "SR>i",
+    "state": "dns-configured",
+    "plusAddressing": true,
+    "catchAllMailboxId": null
+  },
+  {
+    "id": "R",
+    "name": "\ud800",
+    "state": "dns-configured",
+    "plusAddressing": false,
+    "catchAllMailboxId": ""
+  },
+  {
+    "id": " ",
+    "name": "\t",
+    "state": "dns-configured",
+    "plusAddressing": true,
+    "catchAllMailboxId": ""
+  }
+]

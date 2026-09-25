@@ -1,0 +1,34 @@
+[
+  {
+    "schemaVersion": 1,
+    "command": {
+      "type": "DeleteEvent",
+      "commandId": "",
+      "eventId": "\ud800",
+      "scope": "series"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "command": {
+      "type": "CompleteWeekTask",
+      "commandId": "\"16k",
+      "taskId": "0",
+      "completed": false
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "command": {
+      "type": "AddWeekTask",
+      "commandId": "-1",
+      "date": {
+        "year": -15,
+        "month": -1,
+        "day": 4
+      },
+      "firstWeekday": -13,
+      "title": "ez{!"
+    }
+  }
+]

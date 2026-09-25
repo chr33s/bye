@@ -1,0 +1,41 @@
+# Supply-chain updates (todo P1 "Pin every GitHub Action to a commit SHA"). Actions are pinned by
+# commit SHA with a `# vX.Y.Z` comment; Dependabot bumps both. Container base images are pinned by
+# digest. npm updates are grouped and weekly; alchemy/effect prereleases are frozen on purpose
+# (EXTERNAL_OWNERS.md) and bumped only by their owners after re-running evidence #6 and #8.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /containers/mime
+      - /containers/scanner
+      - /containers/sigmirror
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /containers/sigmirror
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      # Prerelease pins in the deploy path; upgraded deliberately (EXTERNAL_OWNERS.md).
+      - dependency-name: alchemy
+      - dependency-name: effect
+      - dependency-name: "@effect/*"
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        update-types: [minor, patch]

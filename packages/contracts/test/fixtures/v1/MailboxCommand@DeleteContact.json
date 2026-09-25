@@ -1,0 +1,7 @@
+[
+  {
+    "_tag": "DeleteContact",
+    "commandId": "l",
+    "contactId": "n"
+  }
+]

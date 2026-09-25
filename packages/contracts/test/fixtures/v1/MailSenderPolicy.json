@@ -1,0 +1,23 @@
+[
+  {
+    "decision": "blocked",
+    "destination": "feed",
+    "labels": [],
+    "bundle": true,
+    "notify": true
+  },
+  {
+    "decision": "blocked",
+    "destination": "paper-trail",
+    "labels": ["Z8n6", " ", "", "\n"],
+    "bundle": false,
+    "notify": true
+  },
+  {
+    "decision": "blocked",
+    "destination": "paper-trail",
+    "labels": [],
+    "bundle": false,
+    "notify": false
+  }
+]
