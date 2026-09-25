@@ -1,19 +1,34 @@
 <img width="1280" height="320" alt="header" src="https://github.com/user-attachments/assets/54142617-c397-4d7f-b450-4d2c3ad1fa9b" />
 
-## Meet Bye — the unapologetically open-source, self-hosted email and calendar platform built for people who looked at a $99/year opinionated inbox and thought: "I like the opinions, but I despise the invoice."
+# Bye.
+### *Say bye to what matters, and hey to the rest.*
 
-### Built to run entirely on Cloudflare’s edge (Workers, D1, KV, and Email Routing), Bye gives you all the enlightened, life-altering communication workflows you were promised by tech thought-leaders in Chicago—without having to finance their vintage sports car collection.
+At RailsConf, the high priest of artisanal code took the stage to deliver a sermon to the faithful: *Software is dead. The human craft we held dear is over. AI will write everything now.*
 
-Why pay a recurring subscription to rent a glorified JavaScript wrapper over 1982’s SMTP protocol? Because if software is going to zero, SaaS shouldn't be far behind.
+It was a bold proclamation for a community that spent two decades treating Ruby code as poetry. But it also raised an awkward, existential question: 
 
-Deploy it to the edge in five minutes. Screen unwanted senders with ruthless prejudice in under 2ms of cold-start latency, banish marketing newsletters to a distributed void, and sync your calendar so close to the edge network that your excuses for declining meetings arrive before the invite was even sent.
+**If software is dead, and the craft is going to zero… why are you still charging us $99 a year for an ActionMailer queue and a few Turbo Frames?**
 
-### Key "Features":
+If the machines are writing the code for free, then SaaS shouldn't just be worried—it should be going to zero right behind it.
 
-- The Screener: Block recruiters and spam cold-callers at the CDN level. If they can’t survive a Cloudflare turnstile, they don't deserve your attention.
-- Edge-Native Frugality: If your monthly Cloudflare bill exceeds $0.00, you are legally entitled to scream into the ocean.
-- Zero-SaaS Guilt: No seat licenses, no upgrade tiers, and zero blog posts lecturing you about productivity while charging your credit card.
-- The "Bye" Philosophy: Keep the noise, discard the anxiety, and leave the monthly recurring revenue where it belongs: in 2021.
+Meet **Bye**. 
 
+**Bye** is the fully featured, open-source HEY alternative designed to test the premise. Built without the $99/year subscription, without a multi-million-dollar datacenter exit manifesto, and without the moral superiority. 
 
-**Deploy to Cloudflare in 1-Click.** Say bye to what matters, and hey to the rest.
+Instead, **Bye** is a complete, opinionated email and calendar platform engineered to run entirely on **Cloudflare’s free tier**. Edge Workers, D1, KV, and Email Routing. Zero servers to buy, zero monthly cloud rent, zero dollars out of pocket. 
+
+Turns out, once you strip away the romantic essays and the keynote theater, an inbox is just a state machine running at the edge.
+
+---
+
+### The "Zero SaaS" Feature Set:
+
+* **The Screener, Deprecated:** Screen senders in sub-millisecond edge compute. No bespoke Ruby objects were harmed in the making of this inbox—just cold, ruthlessly efficient logic running on Cloudflare's free edge network.
+* **The $0.00 Infrastructure Stack:** If software is commoditized, your bill should be too. Bye runs comfortably inside Cloudflare's generous free tier allowances.
+* **Feature-Complete Without the Rent:** An "Imbox", The Feed, The Paper Trail, and a full calendar—without sending $99/year to finance someone else's race car collection.
+* **The Open Source Post-Mortem:** If the craft is truly dead, at least the code belongs to everyone now.
+
+You told us the future belongs to machines and that software has reached the end of history. We agree. So let’s stop paying SaaS ransoms for things we can host ourselves for free.
+
+**Say bye to what matters, and hey to the rest.**  
+*Because if software is going to zero, SAAS shouldn't be far behind.*
