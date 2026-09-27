@@ -888,7 +888,13 @@ export class SharedSpaceStore {
     return { subject: t.subject, messages: t.messages.map(publicMessage) };
   }
 
-  async resolvePublicLink(token: string): Promise<PublicThreadView> {
+  /**
+   * `createdBy` lets the caller (PublicGateway) re-check the creator's organization membership,
+   * which lives in D1, not in this authority.
+   */
+  async resolvePublicLink(
+    token: string,
+  ): Promise<PublicThreadView & { readonly createdBy: string }> {
     const hash = await sha256Hex(token);
     const link = this.sql.one<{
       thread_id: string;
@@ -919,7 +925,7 @@ export class SharedSpaceStore {
       link.thread_id,
       bool(link.include_future) ? undefined : Number(link.created_at),
     );
-    return { subject: t.subject, messages: msgs.map(publicMessage) };
+    return { subject: t.subject, messages: msgs.map(publicMessage), createdBy: link.created_by };
   }
 
   revokePublicLink(actorId: string, linkId: string): void {

@@ -1,6 +1,6 @@
 import { MAIL_VIEW_NAV } from "@bye/native-shared/views";
 import { api, type Me } from "./api.ts";
-import { isSignedOut } from "./auth.ts";
+import { bindLocalOwner, isSignedOut, onSignedOut } from "./auth.ts";
 import { announce, errorState, h, main } from "./core/dom.ts";
 import { installGlobalErrorHandlers } from "./core/errors.ts";
 import { registerServiceWorker } from "./core/update.ts";
@@ -120,7 +120,10 @@ const route = async (): Promise<void> => {
   document.querySelector(`nav a[href="#${path}"]`)?.setAttribute("aria-current", "page");
   try {
     if (!state.me) {
-      state.me = await api<Me>("GET", "/v1/me", undefined, signal);
+      const me = await api<Me>("GET", "/v1/me", undefined, signal);
+      // Another account's offline drafts never reach this one (shared browser).
+      await bindLocalOwner(me.userId);
+      state.me = me;
       if (continueAuthorization()) return;
       state.mailboxId = state.me.mailboxIds[0] ?? null;
       state.calendarId = state.me.calendarIds[0] ?? null;
@@ -131,6 +134,14 @@ const route = async (): Promise<void> => {
     main().focus({ preventScroll: true });
   } catch (error) {
     if (signal.aborted) return;
+    if (isSignedOut(error)) {
+      state.me = null;
+      state.mailboxId = null;
+      state.calendarId = null;
+      live?.();
+      live = null;
+      await onSignedOut();
+    }
     main().replaceChildren(
       isSignedOut(error) ? signInScreen(() => void route()) : errorState(error, () => void route()),
     );

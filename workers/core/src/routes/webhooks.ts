@@ -7,6 +7,7 @@ import type { CoreEnv } from "../env.ts";
 import { errorResponse, json, route, type Route } from "../http.ts";
 import { intakeNewsletterEvents } from "../newsletter.ts";
 import { controlServices } from "../services.ts";
+import { readTextCapped } from "./common.ts";
 import { decodeBody } from "./decode.ts";
 
 /** Whether our own send ledger (acceptances or Unknown submissions) holds this mailbox's job. */
@@ -18,9 +19,18 @@ const sendJobKnown = async (env: CoreEnv, mailboxId: string, sendJobId: string) 
     .bind(mailboxId, sendJobId, mailboxId, sendJobId)
     .first()) !== null;
 
+/**
+ * Webhook bodies are small JSON events; the routes are unauthenticated until the signature is
+ * checked, so the body is read with a streaming cap first (never buffered whole).
+ */
+export const WEBHOOK_MAX_BYTES = 256 * 1024;
+
+const tooLarge = () => errorResponse("payload_too_large", "webhook body too large");
+
 export const webhookRoutes: ReadonlyArray<Route<CoreEnv>> = [
   route("POST", "/webhooks/billing", async (request, _p, env) => {
-    const body = await request.text();
+    const body = await readTextCapped(request, WEBHOOK_MAX_BYTES);
+    if (body === null) return tooLarge();
     // Commerce side effects (checkout completion, referral credits, refunds) commit with the event.
     const { billing } = controlServices(env);
     try {
@@ -44,7 +54,8 @@ export const webhookRoutes: ReadonlyArray<Route<CoreEnv>> = [
   // (mailboxId, sendJobId) must be a send our own ledger recorded (acceptance or Unknown), so an
   // event can never be routed into a mailbox that did not make the send.
   route("POST", "/webhooks/send-events", async (request, _p, env) => {
-    const body = await request.text();
+    const body = await readTextCapped(request, WEBHOOK_MAX_BYTES);
+    if (body === null) return tooLarge();
     const secret = env.SEND_EVENTS_WEBHOOK_SECRET ?? "";
     if (
       !(await verifyBillingSignature(
@@ -75,7 +86,8 @@ export const webhookRoutes: ReadonlyArray<Route<CoreEnv>> = [
   // applied through the same consent/restriction rules as Bye-origin changes. A creator-scoped
   // unsubscribe is never broadened into the platform suppression list.
   route("POST", "/webhooks/newsletter", async (request, _p, env) => {
-    const body = await request.text();
+    const body = await readTextCapped(request, WEBHOOK_MAX_BYTES);
+    if (body === null) return tooLarge();
     const intake = await intakeNewsletterEvents(env, body, request.headers);
     switch (intake._tag) {
       case "Unavailable":

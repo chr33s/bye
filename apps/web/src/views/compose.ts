@@ -2,8 +2,14 @@ import { pushDraft, syncedState } from "@bye/native-shared/drafts";
 import { degrade, bestEffort } from "../core/degrade.ts";
 import { api, list, ApiRequestError, apiRaw, client, newCommandId } from "../api.ts";
 import { announce, errorMessage, field, formatSize, h, show } from "../core/dom.ts";
-import { mailCommand, mb, remember } from "../core/state.ts";
-import { type LocalDraft, loadLocalDrafts, resolveConflict, saveLocalDraft } from "../drafts.ts";
+import { mailCommand, mb, remember, state } from "../core/state.ts";
+import {
+  deleteLocalDraft,
+  type LocalDraft,
+  loadLocalDrafts,
+  resolveConflict,
+  saveLocalDraft,
+} from "../drafts.ts";
 import {
   composeBody,
   expandSnippets,
@@ -91,7 +97,11 @@ const toolbarButton = (label: string, command: string, value?: string) =>
   );
 
 export const renderCompose = async (params: URLSearchParams): Promise<void> => {
-  const drafts = await loadLocalDrafts().catch(degrade([] as Array<LocalDraft>));
+  // Local drafts are scoped to the signed-in account and mailbox (a browser can be shared).
+  const owner = { userId: state.me?.userId ?? "", mailboxId: mb() };
+  const drafts = owner.userId
+    ? await loadLocalDrafts(owner).catch(degrade([] as Array<LocalDraft>))
+    : [];
   const threadId = params.get("thread");
   const serverDraftId = params.get("draft");
   let draft: LocalDraft = drafts.find(
@@ -100,6 +110,8 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
       d.state !== "queued-send",
   ) ?? {
     localId: crypto.randomUUID(),
+    ownerId: owner.userId,
+    mailboxId: owner.mailboxId,
     draftId: serverDraftId,
     baseRevision: 0,
     to: "",
@@ -576,6 +588,8 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
       return;
     }
     const sendJobIds = job.sendJobIds;
+    // Sent: the server owns it now, so no local copy lingers on this device.
+    await deleteLocalDraft(draft.localId).catch(bestEffort);
     status.replaceChildren(
       at ? `Scheduled for ${new Date(at).toLocaleString()}. ` : "Sending… ",
       h(
@@ -591,7 +605,10 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
                 }),
               ),
             );
-            status.textContent = results.every((r) => r._tag === "Cancelled")
+            const cancelled = results.every((r) => r._tag === "Cancelled");
+            // Undone: the draft is editable again, so keep it on this device as before.
+            if (cancelled) await saveLocalDraft(draft).catch(bestEffort);
+            status.textContent = cancelled
               ? "Send cancelled"
               : "Too late to undo — the message was already submitted";
           },

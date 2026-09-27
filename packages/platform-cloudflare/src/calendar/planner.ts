@@ -476,6 +476,8 @@ export abstract class CalendarPlanner extends CalendarInvitations {
    * Label and/or photo for a day. `expectedPhotoKey` makes it a compare-and-set: the change applies
    * only while that photo is still the day's photo, so rejecting an infected upload can never
    * clear a photo the owner has since replaced (one atomic step inside the authority).
+   * `released` names the prior photo when this replaced or cleared it and no other day still shows
+   * it, so the caller can delete the stored object.
    */
   setDayDecoration(input: {
     commandId: string;
@@ -484,7 +486,7 @@ export abstract class CalendarPlanner extends CalendarInvitations {
     label?: string | null | undefined;
     photoKey?: string | null | undefined;
     expectedPhotoKey?: string | undefined;
-  }): { applied: boolean } {
+  }): { applied: boolean; released?: string } {
     if (input.photoKey && !CALENDAR_PHOTO_KEY.test(input.photoKey))
       throw calendarError("bad_request", "photoKey must reference an uploaded day photo");
     return this.command(input.commandId, "SetDayDecoration", () => {
@@ -511,7 +513,13 @@ export abstract class CalendarPlanner extends CalendarInvitations {
       if (label) this.index(`day:${date}`, "day", date, label);
       else this.unindex(`day:${date}`);
       this.kernel.change("day", "decorated", { date });
-      return { applied: true };
+      const old = prior?.photo_key ?? null;
+      const released =
+        old !== null &&
+        old !== photo &&
+        this.sql.one("SELECT 1 AS x FROM cal_day_decorations WHERE photo_key = ? LIMIT 1", old) ===
+          undefined;
+      return released ? { applied: true, released: old } : { applied: true };
     });
   }
 

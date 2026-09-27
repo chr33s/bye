@@ -45,6 +45,7 @@ import { safetyVerdict } from "./safety.ts";
 import { metric } from "./metrics.ts";
 import { MIME_INLINE_MAX_BYTES, parseViaContainer } from "./mime.ts";
 import { recordUsage } from "./usage.ts";
+import { mailboxErased } from "./erasure.ts";
 
 // Queue consumers (§5.1 steps 5–7, §5.2, §6). Every handler is idempotent by (eventId, target);
 // acknowledgement follows the committed result. Messages are acked or retried individually so a
@@ -350,6 +351,8 @@ const commitParsed = async (
   if (result.ok === false && result.code !== "conflict") {
     // Expected, permanent rejection by the authority (e.g. mailbox closed): record and stop replay.
     await journal.markRejected(m.ingestionId);
+    // Erased mid-ingest: remove the body and parts this message just wrote under the mailbox.
+    if (result.code === "gone") await purgeIngestWrites(env, m);
     console.warn(
       JSON.stringify({
         level: "warn",
@@ -388,8 +391,35 @@ const inlineMap = (
   return entries.length ? { inline: Object.fromEntries(entries) } : {};
 };
 
+/** Blobs one ingest writes under the mailbox prefix (body + extracted parts) and their usage. */
+const purgeIngestWrites = async (env: CoreEnv, m: IngestMessage): Promise<void> => {
+  const prefix = `t/${m.mailboxId}/part/${m.ingestionId}/`;
+  for (;;) {
+    const listed = await env.PARTS.list({ prefix, limit: 1000 });
+    if (listed.objects.length) await env.PARTS.delete(listed.objects.map((o) => o.key));
+    if (!listed.truncated) break;
+  }
+  await env.PARTS.delete(bodyKeyFor(m.objectKey));
+  await env.DIRECTORY.prepare(
+    "DELETE FROM storage_usage WHERE owner_kind = 'mailbox' AND owner_id = ?",
+  )
+    .bind(m.mailboxId)
+    .run();
+};
+
+/** Erased mailbox (tombstone): permanent, never write anything for it (§12). */
+const rejectErased = async (env: CoreEnv, m: IngestMessage): Promise<boolean> => {
+  if (!(await mailboxErased(env, m.mailboxId))) return false;
+  await env.INGRESS_JOURNALS.getByName(journalPartition(m.ingestionId)).markRejected(m.ingestionId);
+  console.warn(
+    JSON.stringify({ level: "warn", op: "ingest.mailbox-erased", ingestionId: m.ingestionId }),
+  );
+  return true;
+};
+
 const ingest = async (env: CoreEnv, m: IngestMessage): Promise<void> => {
   const journal = env.INGRESS_JOURNALS.getByName(journalPartition(m.ingestionId));
+  if (await rejectErased(env, m)) return;
   const head = await env.ORIGINALS.head(m.objectKey);
   if (!head) {
     // Permanent: the original was erased or never stored. Stop replay instead of retrying forever.
@@ -426,6 +456,7 @@ const ingest = async (env: CoreEnv, m: IngestMessage): Promise<void> => {
 
 /** ParseScan queue: the container parses; parts stream to R2 one at a time. */
 const ingestViaContainer = async (env: CoreEnv, m: IngestMessage): Promise<void> => {
+  if (await rejectErased(env, m)) return;
   const meta = await parseViaContainer(env, m.objectKey, m.receivedAt, (part) =>
     storePart(env, m, part),
   );
@@ -447,6 +478,9 @@ const index = async (env: CoreEnv, m: Extract<QueueMessage, { type: "index" }>):
   const target = await mailbox.indexTarget(m.source.kind, m.source.id);
   const shardName = target.shard ?? `search:${m.source.mailboxId}`;
   const shard = env.SEARCH_SHARDS.getByName(shardName);
+  // Erasure fence: a document hydrated before the authority was erased must not land in a shard
+  // that erasure already cleared (clear() also drops the version rows that would reject it).
+  if (target.doc && (await mailboxErased(env, m.source.mailboxId, "first-unconstrained"))) return;
   if (target.doc) await shard.upsert(target.doc);
   else await shard.remove(target.docKey, target.seq);
   await shard.setWatermark(target.seq);

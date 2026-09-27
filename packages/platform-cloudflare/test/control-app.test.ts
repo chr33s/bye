@@ -19,6 +19,7 @@ import {
 } from "@bye/application";
 import {
   ControlAuth,
+  ControlDeviceAuth,
   ControlDirectory,
   ControlBilling,
   ControlCommerce,
@@ -210,6 +211,30 @@ describe("control use cases", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("[X02] a device (desktop/mobile) session cannot mint API tokens that would outlive it", async () => {
+    const { d1, clock, alice, run, failureTag } = await setup();
+    const devices = new ControlDeviceAuth(d1, clock);
+    const started = await devices.startDeviceAuthorization({
+      clientId: "bye-cli",
+      deviceName: "x",
+    });
+    expect(await devices.decideUserCode(alice.userId, started.user_code, true)).toBe(true);
+    const tokens = await devices.pollDeviceCode({
+      deviceCode: started.device_code,
+      clientId: "bye-cli",
+    });
+    expect(tokens.access_token).toMatch(/^bda_/);
+    expect(
+      failureTag(await run(tokens.access_token, issueApiToken({ kind: "agent", label: "a" }))),
+    ).toBe("Forbidden");
+    expect(
+      await d1
+        .prepare("SELECT COUNT(*) AS n FROM api_tokens WHERE user_id = ?")
+        .bind(alice.userId)
+        .first(),
+    ).toEqual({ n: 0 });
   });
 
   it("[O02] admin mutations need an admin scope, membership and a recent step-up", async () => {

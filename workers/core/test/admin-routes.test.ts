@@ -536,7 +536,7 @@ describe("admin routes", () => {
         )
         .bind(ana.organizationId)
         .run();
-      const change = { orgId: ana.organizationId, plan: "family", interval: "annual" };
+      const change = { orgId: ana.organizationId, plan: "personal", interval: "annual" };
       const cancel = { orgId: ana.organizationId, atPeriodEnd: true };
       // Another customer cannot touch Ana's subscription.
       for (const [path, json] of [
@@ -569,7 +569,7 @@ describe("admin routes", () => {
       expect(provider.at(-1)).toMatchObject({
         action: "subscription.change",
         orgId: ana.organizationId,
-        plan: "family",
+        plan: "personal",
         interval: "annual",
         seats: 1,
       });
@@ -670,11 +670,26 @@ describe("admin routes", () => {
       expect(JSON.stringify(orgDomains.body)).toContain("ana-co.test");
 
       const plain = await plainSession(h, ana);
-      expect(refusal(await call(h, plain, "DELETE", "/v1/domains/dom_ana"))).toEqual([
-        403,
-        "forbidden",
-        true,
-      ]);
+      // Alias routing changes and onboarding retries need the same fresh step-up as the domain.
+      for (const [method, path, json] of [
+        ["POST", "/v1/domains/dom_ana/aliases", { localPart: "ops", mailboxId: ana.mailboxId }],
+        ["DELETE", "/v1/domains/dom_ana/aliases/sales@ana-co.test", undefined],
+        ["POST", "/v1/domains/dom_ana/retry", {}],
+        ["DELETE", "/v1/domains/dom_ana", undefined],
+      ] as const)
+        expect([method, path, ...refusal(await call(h, plain, method, path, json))]).toEqual([
+          method,
+          path,
+          403,
+          "forbidden",
+          true,
+        ]);
+      expect(
+        await count(
+          h,
+          "SELECT COUNT(*) AS n FROM address_routes WHERE domain = 'ana-co.test' AND disabled_at IS NULL",
+        ),
+      ).toBe(1);
       const removed = await call(h, ana, "DELETE", "/v1/domains/dom_ana");
       expect([removed.status, removed.body]).toEqual([200, { disabledRoutes: 1 }]);
       expect(

@@ -5,7 +5,7 @@ import { space, world } from "./authorities.ts";
 import type { CoreEnv } from "./env.ts";
 import { bodyKeyFor, type StoredBody } from "./objects.ts";
 import { escapeHtml } from "./html.ts";
-import { sendSubscriptionConfirmation } from "./publishing.ts";
+import { sendSubscriptionConfirmation, SystemMailRefused } from "./publishing.ts";
 
 // Narrow RPC entrypoint for the Public worker (§11, §15.5). It exposes only share-link resolution
 // and subscription actions; grants are rechecked by the owning SharedSpaceDO on every call.
@@ -13,11 +13,28 @@ import { sendSubscriptionConfirmation } from "./publishing.ts";
 const HANDLE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const GATEWAY_CONCURRENCY = 4;
 
+/**
+ * A bearer link is only as good as its creator's current access. The space authority re-checks
+ * space membership and grants; organization membership lives in D1, so a creator who was removed
+ * from or suspended in the space's organization (which never touches the space authority) no
+ * longer keeps their links alive — the same binding `orgSpace` applies to every space route.
+ */
+const creatorInSpaceOrg = async (env: CoreEnv, spaceId: string, userId: string) =>
+  (await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      "SELECT 1 AS ok FROM spaces s JOIN memberships m ON m.org_id = s.org_id WHERE s.id = ? AND m.user_id = ? AND m.status = 'active'",
+    )
+    .bind(spaceId, userId)
+    .first()) !== null;
+
 export class PublicGateway extends WorkerEntrypoint<CoreEnv> {
   async resolveShareLink(spaceId: string, token: string) {
     if (!/^[a-z0-9_-]{4,64}$/i.test(spaceId)) return null;
     const result = await space(this.env, spaceId).resolvePublicLink(token);
     if (!result.ok) return null;
+    const createdBy = (result.value as { createdBy?: string }).createdBy;
+    if (createdBy !== undefined && !(await creatorInSpaceOrg(this.env, spaceId, createdBy)))
+      return null;
     // Bounded concurrency: a long shared thread never fans out unbounded R2 reads per request.
     const messages: Array<{ from: string; date: number; subject: string; html: string }> = [];
     // bounded: fixed-size chunks of GATEWAY_CONCURRENCY
@@ -68,8 +85,16 @@ export class PublicGateway extends WorkerEntrypoint<CoreEnv> {
     const stub = await this.world(handle);
     if (!stub) return { ok: false };
     const result = await stub.subscribe(address);
+    // A suppressed address is dropped silently: the anonymous form never learns suppression state.
     if (result.ok && result.value.confirmToken)
-      await sendSubscriptionConfirmation(this.env, handle, address, result.value.confirmToken);
+      await sendSubscriptionConfirmation(
+        this.env,
+        handle,
+        address,
+        result.value.confirmToken,
+      ).catch((error: unknown) => {
+        if (!(error instanceof SystemMailRefused)) throw error;
+      });
     return { ok: result.ok };
   }
 

@@ -78,6 +78,17 @@ const actorOf = (access: { readonly userId: string; readonly orgRole: "owner" | 
 });
 
 const EXPORT_LINK_TTL_MS = 15 * 60_000;
+/** Minimum spacing between full-account export requests of one user. */
+const EXPORT_COOLDOWN_MS = 60 * 60_000;
+/** An export not marked complete by then is presumed dead and no longer blocks a new one. */
+const EXPORT_STALE_MS = 6 * 3600_000;
+
+/**
+ * The mailbox or calendar an export file was made from: files are `<id>.<ext>`, or
+ * `.chunks/<id>.<ext>` / `.carry/<id>/<n>` for intermediates.
+ */
+const exportSourceId = (name: string): string =>
+  name.replace(/^\.(chunks|carry)\//, "").split(/[./]/, 1)[0] ?? "";
 const SENDING_SCOPES: ReadonlyArray<SendingScope> = ["user", "domain", "identity", "platform"];
 
 const badRequest = (message: string) => Effect.fail(new ApiError({ code: "bad_request", message }));
@@ -265,13 +276,19 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
         Effect.gen(function* () {
           const address = body.address.trim().toLowerCase();
           const result = yield* inviteTeamMember(params.orgId!, address, body.role ?? "member");
+          // `inviteTeamMember` verified the admin role and step-up; the actor is charged for the send.
+          const principal = yield* requireScope("read");
           const link = `${env.APP_ORIGIN}/invite?token=${encodeURIComponent(result.token)}`;
           yield* Effect.promise(() =>
-            sendSystemEmail(env, {
-              to: address,
-              subject: "You're invited to join an organization",
-              text: `Accept the invitation (valid 7 days):\n${link}\n`,
-            }).catch(() => undefined),
+            sendSystemEmail(
+              env,
+              {
+                to: address,
+                subject: "You're invited to join an organization",
+                text: `Accept the invitation (valid 7 days):\n${link}\n`,
+              },
+              { actorUserId: principal.userId },
+            ).catch(() => undefined),
           );
           return result;
         }),
@@ -520,6 +537,7 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
       ({ env, params }) =>
         Effect.gen(function* () {
           const { domain, principal } = yield* adminDomain(params.id!);
+          yield* requireStepUp("admin");
           const id = `dom-${domain.id}-${Date.now().toString(36)}`;
           yield* Effect.promise(() =>
             env.PROVISION_DOMAIN.create({
@@ -563,6 +581,8 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
       ({ params, body }) =>
         Effect.gen(function* () {
           const { domain, principal, domains } = yield* adminDomain(params.id!);
+          // Routing an address to a mailbox is a forwarding-class change (§7.3): fresh step-up.
+          yield* requireStepUp("admin");
           return yield* domains.addAlias(domain.id, principal.userId, {
             localPart: body.localPart,
             mailboxId: body.mailboxId,
@@ -577,6 +597,7 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(({ params }) =>
       Effect.gen(function* () {
         const { domain, principal, domains } = yield* adminDomain(params.id!);
+        yield* requireStepUp("admin");
         if (!(yield* domains.removeAlias(domain.id, principal.userId, params.address!)))
           return yield* new NotFound({ resource: "alias" });
         return { removed: true };
@@ -705,6 +726,33 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
           // account keeps it, read scope suffices), never agent tokens or support sessions.
           const principal = yield* requireUser();
           const exportId = crypto.randomUUID();
+          // Each export is a full copy of every mailbox and calendar kept for a week: one in
+          // flight per user, and a cooldown between requests (claimed atomically in D1).
+          const now = Date.now();
+          const claimed = yield* Effect.promise(() =>
+            env.DIRECTORY.prepare(
+              `INSERT INTO account_exports (id, user_id, created_at)
+               SELECT ?, ?, ? WHERE NOT EXISTS (
+                 SELECT 1 FROM account_exports WHERE user_id = ?
+                   AND ((completed_at IS NULL AND created_at > ?) OR created_at > ?))`,
+            )
+              .bind(
+                exportId,
+                principal.userId,
+                now,
+                principal.userId,
+                now - EXPORT_STALE_MS,
+                now - EXPORT_COOLDOWN_MS,
+              )
+              .run(),
+          );
+          if (!claimed.meta.changes)
+            return yield* Effect.fail(
+              new ApiError({
+                code: "rate_limited",
+                message: "an export is already in progress or was requested recently",
+              }),
+            );
           yield* Effect.promise(() =>
             env.EXPORT_ACCOUNT.create({
               id: `exp-${principal.userId}-${exportId}`,
@@ -741,10 +789,32 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
         const prefix = `t/${principal.userId}/export/${params.id}/`;
         const listed = yield* Effect.promise(() => env.EXPORTS.list({ prefix, limit: 1000 }));
         const expiresAt = Date.now() + EXPORT_LINK_TTL_MS;
+        // No links for files of a mailbox the caller can no longer access (the principal is built
+        // per request): a member removed from an org mailbox gets no new links to its export.
+        const current = new Set(principal.mailboxIds);
+        const sources = [
+          ...new Set(listed.objects.map((o) => exportSourceId(o.key.slice(prefix.length)))),
+        ].filter((id) => id && !current.has(id));
+        const revoked = new Set<string>();
+        // bounded: one D1 query per 50 distinct source ids of at most 1000 listed files
+        for (let i = 0; i < sources.length; i += 50) {
+          const chunk = sources.slice(i, i + 50);
+          const rows = yield* Effect.promise(() =>
+            env.DIRECTORY.prepare(
+              `SELECT id FROM mailboxes WHERE id IN (${chunk.map(() => "?").join(", ")})`,
+            )
+              .bind(...chunk)
+              .all<{ id: string }>(),
+          );
+          for (const r of rows.results) revoked.add(r.id);
+        }
+        const visible = listed.objects.filter(
+          (o) => !revoked.has(exportSourceId(o.key.slice(prefix.length))),
+        );
         const files = yield* Effect.promise(() =>
           // bounded: at most 1000 listed export files, each a local HMAC signature (no I/O fan-out)
           Promise.all(
-            listed.objects.map(async (o) => ({
+            visible.map(async (o) => ({
               name: o.key.slice(prefix.length),
               size: o.size,
               url: `${env.APP_ORIGIN}/v1/downloads?key=${encodeURIComponent(o.key)}&token=${await signDownload(env, o.key, expiresAt)}`,
@@ -847,11 +917,15 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
             );
             const link = `${env.APP_ORIGIN}/auth/forwarding/confirm?address=${encodeURIComponent(address)}&token=${encodeURIComponent(verificationToken)}`;
             yield* Effect.promise(() =>
-              sendSystemEmail(env, {
-                to: forwardTo,
-                subject: `Confirm forwarding from ${address}`,
-                text: `Confirm that mail sent to ${address} should be forwarded to this address for ${terms.forwardingDays} days:\n${link}\n\nIf you did not request this, ignore this message.`,
-              }).catch(() => undefined),
+              sendSystemEmail(
+                env,
+                {
+                  to: forwardTo,
+                  subject: `Confirm forwarding from ${address}`,
+                  text: `Confirm that mail sent to ${address} should be forwarded to this address for ${terms.forwardingDays} days:\n${link}\n\nIf you did not request this, ignore this message.`,
+                },
+                { actorUserId: principal.userId },
+              ).catch(() => undefined),
             );
             forwarding.push({ address, pending: true });
           }

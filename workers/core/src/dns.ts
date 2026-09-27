@@ -1,4 +1,4 @@
-import { isForbiddenIp } from "@bye/mail-codec";
+import { isForbiddenIp, isForbiddenProxyTarget } from "@bye/mail-codec";
 
 // Resolved-address checks for outbound fetches of user-controlled URLs (§10 image proxy): DNS
 // rebinding defense. A hostname is resolved over DNS-over-HTTPS (A and AAAA) before every hop and
@@ -45,6 +45,48 @@ export const forbiddenResolution = async (
   if (answers.length === 0) return "did not resolve";
   return answers.some((ip) => isForbiddenIp(ip)) ? "resolves to a forbidden address" : null;
 };
+
+/** Default deadline for a guarded request that carries none of its own. */
+export const GUARDED_FETCH_TIMEOUT_MS = 30_000;
+
+const blocked = () =>
+  new Response("destination not allowed", {
+    status: 403,
+    headers: { "x-bye-egress": "blocked" },
+  });
+
+/**
+ * `fetch` for user-chosen endpoints (external-identity relays and OAuth token endpoints): https
+ * only, the lexical forbidden-target rules, then resolve-then-check (`forbiddenResolution`) on
+ * every request, `redirect: "manual"` (a 3xx comes back as-is and callers treat it as a failed
+ * submission, so a redirect can't lead to an unchecked host), and a deadline. A forbidden
+ * destination gets a synthetic 403 without any request being sent; a failed lookup throws like a
+ * native DNS error. Same TOCTOU residual as the image proxy (see above).
+ */
+export const guardedFetch = (
+  fetchFn: typeof fetch,
+  timeoutMs = GUARDED_FETCH_TIMEOUT_MS,
+  doh: DohFetch = (u, i) => fetchFn(u, { ...i, signal: AbortSignal.timeout(timeoutMs) }),
+): typeof fetch =>
+  (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const raw =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      return blocked();
+    }
+    if (url.protocol !== "https:" || isForbiddenProxyTarget(url.toString())) return blocked();
+    const why = await forbiddenResolution(url.hostname, doh);
+    if (why === "resolution failed") throw new TypeError("destination could not be resolved");
+    if (why !== null) return blocked();
+    return fetchFn(input, {
+      ...init,
+      redirect: "manual",
+      signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
+    });
+  }) as typeof fetch;
 
 /**
  * Read a response body up to `max` bytes. Returns null — and cancels the stream at once — as soon

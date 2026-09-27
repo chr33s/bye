@@ -387,13 +387,30 @@ export const calendarAttempt = <T>(fn: () => T): Effect.Effect<T, CalendarFailur
   });
 
 /**
+ * A day photo belongs to the space it was uploaded to (`cal/<space>/photo/…`, the binding the
+ * photo scanner enforces too): a space may attach only its own photos, so a key read from another
+ * account's photo link can never be re-signed through this space's day views.
+ */
+const requireOwnPhoto = (spaceId: string, command: CalendarAuthorityCommand): void => {
+  if (
+    command.type === "SetDayDecoration" &&
+    typeof command.photoKey === "string" &&
+    !command.photoKey.startsWith(`cal/${spaceId}/photo/`)
+  )
+    throw calendarError("bad_request", "photoKey must reference a photo uploaded to this calendar");
+};
+
+/**
  * CalendarRepository over directly reachable stores (inside a DO, or in tests). The Worker-side
  * implementation forwards the same two calls to the CalendarDO over RPC.
  */
 export const calendarRepositoryLocal = (resolve: (spaceId: string) => CalendarStore) =>
   Layer.succeed(CalendarRepository, {
     execute: (spaceId, actor, command) =>
-      calendarAttempt(() => calendarExecute(resolve(spaceId), actor, command)) as never,
+      calendarAttempt(() => {
+        requireOwnPhoto(spaceId, command);
+        return calendarExecute(resolve(spaceId), actor, command);
+      }) as never,
     read: (spaceId, actor, query) =>
       calendarAttempt(() => calendarRead(resolve(spaceId), actor, query)) as never,
   });
@@ -417,7 +434,9 @@ const calendarRpcCall = (
 export const calendarRepositoryRpc = (resolve: (spaceId: string) => CalendarRpc) =>
   Layer.succeed(CalendarRepository, {
     execute: (spaceId, actor, command) =>
-      calendarRpcCall(() => resolve(spaceId).execute(actor, command)) as never,
+      calendarAttempt(() => requireOwnPhoto(spaceId, command)).pipe(
+        Effect.flatMap(() => calendarRpcCall(() => resolve(spaceId).execute(actor, command))),
+      ) as never,
     read: (spaceId, actor, query) =>
       calendarRpcCall(() => resolve(spaceId).read(actor, query)) as never,
   });

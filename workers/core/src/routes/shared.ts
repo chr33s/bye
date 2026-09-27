@@ -27,22 +27,52 @@ import {
 } from "@bye/contracts";
 import { call, space, world } from "../authorities.ts";
 import type { CoreEnv } from "../env.ts";
-import { route, type Route } from "../http.ts";
+import { PayloadTooLargeError, readBodyCapped, route, type Route } from "../http.ts";
 import { sniffRaster } from "../images.ts";
 import { ledgerOf, runNewsletter } from "../newsletter.ts";
 import { publicOrigin, serviceDomain } from "../origins.ts";
 import {
   refreshSite,
   sendSubscriptionConfirmation,
+  SystemMailRefused,
   worldAuthor,
   worldPublishingLayer,
 } from "../publishing.ts";
 import { pendingPropagation } from "../topics/shared.ts";
-import { authed, authedBody } from "./common.ts";
+import { authed, authedBody, readTextCapped } from "./common.ts";
 import { OrgsService, RegistryService } from "@bye/platform-cloudflare";
 
 const MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const CSV_MAX_BYTES = 1024 * 1024;
+/**
+ * Per-author World media storage (private uploads under t/<user>/world-media/). Media is outside
+ * the mailbox quota, so it gets its own bound: bytes and objects, counted from the listing.
+ */
+const MEDIA_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+const MEDIA_MAX_OBJECTS = 1000;
+
+const tooLarge = (message: string) =>
+  Effect.fail(new ApiError({ code: "payload_too_large", message }));
+
+/** The author's stored World media (bytes, objects); stops counting once past the bounds. */
+const mediaUsage = async (env: CoreEnv, userId: string) => {
+  let bytes = 0;
+  let objects = 0;
+  let cursor: string | undefined;
+  do {
+    const listed = await env.PARTS.list({
+      prefix: `t/${userId}/world-media/`,
+      limit: 1000,
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const o of listed.objects) {
+      bytes += o.size ?? 0;
+      objects += 1;
+    }
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor && objects < MEDIA_MAX_OBJECTS && bytes < MEDIA_MAX_TOTAL_BYTES);
+  return { bytes, objects };
+};
 
 const badRequest = (message: string) => Effect.fail(new ApiError({ code: "bad_request", message }));
 
@@ -102,6 +132,18 @@ const orgSpace = (env: CoreEnv, spaceId: string, scope: "read" | "draft" | "admi
       return yield* new NotFound({ resource: "space" });
     return { principal, orgId: s.orgId, stub: space(env, spaceId) };
   });
+
+/**
+ * `orgSpace` for the body-addressed sharing routes: a space outside the caller's active
+ * organizations (unknown, foreign, or one they were removed/suspended from) is refused as
+ * forbidden, alike for all three.
+ */
+const sharingSpace = (env: CoreEnv, spaceId: string) =>
+  orgSpace(env, spaceId, "draft").pipe(
+    Effect.catchTag("NotFound", () =>
+      Effect.fail(new Forbidden({ reason: "not a member of the space's organization" })),
+    ),
+  );
 
 export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
   // ---- shared spaces (O03/O04) ----
@@ -367,8 +409,11 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
     "/v1/shared-threads",
     authedBody(
       ShareThreadRequest,
-      ({ body }) =>
+      ({ body, env }) =>
         Effect.gen(function* () {
+          // The same organization binding as every /v1/spaces/:id route: a member removed from or
+          // suspended in the space's organization can no longer share into it.
+          yield* sharingSpace(env, body.spaceId);
           const input = {
             spaceId: body.spaceId,
             sourceMailboxId: body.mailboxId,
@@ -398,15 +443,20 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authedBody(
       PublicLinkRequest,
       ({ body, env }) =>
-        createPublicThreadLink(
-          {
-            spaceId: body.spaceId,
-            threadId: body.threadId,
-            includeFuture: body.includeFuture ?? false,
-            ...(body.expiresAt !== undefined ? { expiresAt: body.expiresAt } : {}),
-          },
-          publicOrigin(env),
-        ),
+        Effect.gen(function* () {
+          // Organization binding first (as `orgSpace` routes): the space authority only knows
+          // space membership, which org removal/suspension does not update.
+          yield* sharingSpace(env, body.spaceId);
+          return yield* createPublicThreadLink(
+            {
+              spaceId: body.spaceId,
+              threadId: body.threadId,
+              includeFuture: body.includeFuture ?? false,
+              ...(body.expiresAt !== undefined ? { expiresAt: body.expiresAt } : {}),
+            },
+            publicOrigin(env),
+          );
+        }),
       { status: 201 },
     ),
   ),
@@ -646,18 +696,24 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
             .toLowerCase();
           if (!/^image\/(png|jpeg|gif|webp)$/.test(contentType))
             return yield* badRequest("media must be png, jpeg, gif or webp");
-          if (Number(request.headers.get("content-length") ?? "0") > MEDIA_MAX_BYTES)
-            return yield* Effect.fail(
-              new ApiError({ code: "payload_too_large", message: "media too large" }),
-            );
-          const bytes = new Uint8Array(yield* Effect.promise(() => request.arrayBuffer()));
-          if (bytes.byteLength === 0 || bytes.byteLength > MEDIA_MAX_BYTES)
-            return yield* Effect.fail(
-              new ApiError({ code: "payload_too_large", message: "media too large or empty" }),
-            );
+          // Streaming cap: a missing or false content-length never buffers past the limit.
+          const bytes = yield* Effect.tryPromise({
+            try: () => readBodyCapped(request, MEDIA_MAX_BYTES),
+            catch: (e) =>
+              e instanceof PayloadTooLargeError
+                ? new ApiError({ code: "payload_too_large", message: "media too large" })
+                : new ApiError({ code: "bad_request", message: "unreadable body" }),
+          });
+          if (bytes.byteLength === 0) return yield* tooLarge("media too large or empty");
           // Public media is raster-only, verified by magic bytes (never SVG/HTML) and matching the declaration.
           if (sniffRaster(bytes) !== contentType)
             return yield* badRequest("content does not match the declared image type");
+          const used = yield* Effect.promise(() => mediaUsage(env, principal.userId));
+          if (
+            used.objects >= MEDIA_MAX_OBJECTS ||
+            used.bytes + bytes.byteLength > MEDIA_MAX_TOTAL_BYTES
+          )
+            return yield* tooLarge("world media storage limit reached");
           const contentKey = `t/${principal.userId}/world-media/${crypto.randomUUID()}`;
           yield* Effect.promise(() =>
             env.PARTS.put(contentKey, bytes, { httpMetadata: { contentType } }),
@@ -679,25 +735,33 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       ({ env, request }) =>
         Effect.gen(function* () {
           const principal = yield* requireScope("publish");
-          if (Number(request.headers.get("content-length") ?? "0") > CSV_MAX_BYTES)
-            return yield* Effect.fail(
-              new ApiError({ code: "payload_too_large", message: "csv too large" }),
-            );
-          const csv = yield* Effect.promise(() => request.text());
-          if (csv.length > CSV_MAX_BYTES)
-            return yield* Effect.fail(
-              new ApiError({ code: "payload_too_large", message: "csv too large" }),
-            );
+          const csv = yield* Effect.promise(() => readTextCapped(request, CSV_MAX_BYTES));
+          if (csv === null) return yield* tooLarge("csv too large");
           const { author, stub } = yield* myWorld(env, principal.userId);
           const r = yield* call(() => stub.importSubscribers(principal.userId, csv));
+          // Confirmations go to addresses the author chose: each is reserved against the author's
+          // sending budget and refused while they are suspended (SendingPolicy). Once the policy
+          // refuses the sender, the rest are not attempted; invitations stay pending.
+          let halted = false;
           const sent = yield* Effect.forEach(
             r.invitations,
             (i) =>
               Effect.promise(() =>
-                sendSubscriptionConfirmation(env, author.handle, i.address, i.token).then(
-                  () => 1,
-                  () => 0,
-                ),
+                halted
+                  ? Promise.resolve(0)
+                  : sendSubscriptionConfirmation(env, author.handle, i.address, i.token, {
+                      actorUserId: principal.userId,
+                    }).then(
+                      () => 1,
+                      (error: unknown) => {
+                        if (
+                          error instanceof SystemMailRefused &&
+                          (error.reason === "budget" || error.reason === "suspended")
+                        )
+                          halted = true;
+                        return 0;
+                      },
+                    ),
               ),
             { concurrency: 4 },
           );

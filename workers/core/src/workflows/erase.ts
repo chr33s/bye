@@ -7,6 +7,7 @@ import {
   eraseSpaceMembership,
   eraseUserRows,
   eraseWorldAuthor,
+  fenceErasedMailbox,
   spaceMemberTombstoneId,
   worldTombstoneId,
   writeTombstone,
@@ -37,6 +38,8 @@ export class EraseWorkflow extends WorkflowEntrypoint<CoreEnv, EraseParams> {
     await promiseStep(step, "v1:tombstones", Schema.Boolean, async () => {
       await writeTombstone(env, "user", p.userId);
       for (const id of p.mailboxIds) await writeTombstone(env, "mailbox", id);
+      // Closed + routes disabled before any content is removed, so no new mail is accepted.
+      for (const id of p.mailboxIds) await fenceErasedMailbox(env, id);
       for (const id of p.calendarIds ?? []) await writeTombstone(env, "calendar", id);
       for (const spaceId of p.spaceIds ?? [])
         await writeTombstone(env, "space-member", spaceMemberTombstoneId(spaceId, p.userId));

@@ -12,13 +12,13 @@ import { MemoryDurableStorage, TestClock } from "@bye/testing";
 import { handleFetch } from "../src/api.ts";
 import { handleQueueMessage } from "../src/consumers.ts";
 import { kernelClock } from "../src/durable-host.ts";
-import { handleInbound } from "../src/inbound.ts";
+import { FORWARD_MAX_HOPS, forwardHops, handleInbound } from "../src/inbound.ts";
 import { MIME_INLINE_MAX_BYTES } from "../src/mime.ts";
 import { quarantineUnprocessable } from "../src/scheduled.ts";
 import { authConfig } from "../src/services.ts";
 import { type Harness, inboundMessage, makeHarness, rfc822 } from "./harness.ts";
 import { blobKey } from "@bye/application";
-import { trustedAuthenticationResults } from "../src/safety.ts";
+import { safetyVerdict, trustedAuthenticationResults } from "../src/safety.ts";
 
 // Exceptional ingestion (§5.1 step 5, §6 row 7) and provider send evidence (§5.2).
 
@@ -361,6 +361,73 @@ describe("authentication evidence", () => {
       ["Received", "from sender.example by relay"],
     ];
     expect(trustedAuthenticationResults(ours as never)?.dmarc).toBe("fail");
+  });
+
+  it("[§10] method results are read only at the start of a resinfo, never inside property values", () => {
+    const ar = (value: string) =>
+      trustedAuthenticationResults([["Authentication-Results", value]] as never);
+    const echoed = ar(
+      "mx.cloudflare.net; dkim=neutral header.d=bank.example header.b=dmarc=pa; dmarc=fail header.from=bank.example",
+    );
+    expect(echoed?.dkim).toBe("neutral");
+    expect(echoed?.dmarc).toBe("fail");
+    const commented = ar(
+      "mx.cloudflare.net; spf=pass (dmarc=pass; x) smtp.mailfrom=a@b.example; dmarc=fail header.from=b.example",
+    );
+    expect(commented?.dmarc).toBe("fail");
+    const quoted = ar('mx.cloudflare.net; dkim=pass header.i="x; dmarc=pass"; dmarc=fail');
+    expect(quoted?.dmarc).toBe("fail");
+    // Duplicate dmarc resinfo or an unbalanced value is ambiguous and fails closed.
+    expect(ar("mx.cloudflare.net; dmarc=pass; dmarc=fail")?.dmarc).toBe("fail");
+    expect(ar("mx.cloudflare.net; dmarc=pass header.from=a.example; dmarc=pass")?.dmarc).toBe(
+      "fail",
+    );
+    expect(ar("mx.cloudflare.net; dkim=pass (unterminated; dmarc=pass")?.dmarc).toBe("fail");
+    expect(
+      ar(
+        "mx.cloudflare.net; spf=pass smtp.mailfrom=a.example; dkim=pass header.b=YWJj==; dmarc=pass header.from=A.example",
+      ),
+    ).toEqual({ spf: "pass", dkim: "pass", dmarc: "pass", headerFrom: "a.example" });
+  });
+
+  it("[A04] closure-forward hop counter cannot be lowered by a sender-supplied value", () => {
+    const hops = (...values: Array<string>) => {
+      const h = new Headers();
+      for (const v of values) h.append("X-Bye-Loop", v);
+      return forwardHops(h);
+    };
+    expect(forwardHops(undefined)).toBe(0);
+    expect(hops("-1000000000")).toBe(0);
+    expect(hops("-1000000000", String(FORWARD_MAX_HOPS))).toBe(FORWARD_MAX_HOPS);
+    expect(hops("abc", "2", "1")).toBe(2);
+    expect(hops("3x")).toBe(0);
+  });
+
+  it("[§10] the From used for sender policy must be the one DMARC authenticated", () => {
+    const verdict = (headers: Array<[string, string]>) =>
+      safetyVerdict({ headers, attachments: [], truncated: false } as never)._tag;
+    const ar = (from: string): [string, string] => [
+      "Authentication-Results",
+      `mx.cloudflare.net; spf=pass smtp.mailfrom=${from}; dmarc=pass header.from=${from}`,
+    ];
+    expect(verdict([ar("attacker.example"), ["From", "Bank <ceo@bank.example>"]])).toBe("Spoofed");
+    expect(verdict([ar("bank.example"), ["From", "Bank <ceo@bank.example>"]])).toBe("Clean");
+    // Two From headers (e.g. `From :` plus `From:`) let the MTA and our parser pick different ones.
+    expect(
+      verdict([
+        ar("attacker.example"),
+        ["From", "ceo@bank.example"],
+        ["From", "me@attacker.example"],
+      ]),
+    ).toBe("Spoofed");
+    expect(verdict([ar("bank.example")])).toBe("Spoofed");
+    // No header.from to bind against keeps the existing behaviour.
+    expect(
+      verdict([
+        ["Authentication-Results", "mx.cloudflare.net; spf=pass; dkim=pass; dmarc=pass"],
+        ["From", "ceo@bank.example"],
+      ]),
+    ).toBe("Clean");
   });
 });
 

@@ -38,6 +38,11 @@ export interface AuthenticatedRequest {
   /** Session ID for cookie/session credentials; token ID for agent/CLI credentials. */
   readonly credentialId: string;
   readonly steppedUpAt: number | null;
+  /**
+   * True only for a first-party browser session (cookie). Device (desktop/mobile OAuth), API and
+   * support credentials are never interactive, even when their principal kind is "user".
+   */
+  readonly interactive?: boolean;
 }
 
 /** Per-request authentication state. Provided freshly for every invocation. */
@@ -186,7 +191,11 @@ export const requireStepUp = (action: SensitiveAction) =>
     return auth;
   });
 
-/** Agents and CLIs cannot mint credentials; consequential scopes need a recent step-up (§8). */
+/**
+ * Agents and CLIs cannot mint credentials, and neither can device sessions: a token minted from a
+ * desktop/mobile session would outlive that session's revocation and expiry. Only the browser
+ * session mints; consequential scopes need a recent step-up (§8).
+ */
 export const issueApiToken = (input: {
   readonly kind: "agent" | "cli";
   readonly label: string;
@@ -195,7 +204,7 @@ export const issueApiToken = (input: {
 }) =>
   Effect.gen(function* () {
     const auth = yield* CurrentAuthentication;
-    if (auth.principal.kind !== "user")
+    if (auth.principal.kind !== "user" || auth.interactive !== true)
       return yield* new Forbidden({ reason: "only interactive sessions create credentials" });
     const scopes =
       input.scopes ??

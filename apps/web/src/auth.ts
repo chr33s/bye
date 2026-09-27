@@ -1,4 +1,5 @@
 import { api, ApiRequestError } from "./api.ts";
+import { LOCAL_OWNER_KEY, localOwnerAction, pruneUnownedDrafts } from "./drafts.ts";
 
 // Passkey sign-in and sign-up (A03). Credentials are WebAuthn public keys; the server issues an
 // HTTP-only session cookie. Recovery uses single-use codes and never needs the locked mailbox.
@@ -199,6 +200,39 @@ export const clearLocalData = async (): Promise<void> => {
   } catch {
     // ignore
   }
+};
+
+const storedOwner = (): string | null => {
+  try {
+    return localStorage.getItem(LOCAL_OWNER_KEY);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Bind this browser's local data to the account `/v1/me` returned. When another account's data is
+ * here (its session ended without an explicit sign-out), it is wiped before anything renders.
+ */
+export const bindLocalOwner = async (userId: string): Promise<void> => {
+  const action = localOwnerAction(storedOwner(), userId);
+  if (action === "keep") return;
+  if (action === "wipe") await clearLocalData();
+  else await pruneUnownedDrafts().catch(() => undefined);
+  try {
+    localStorage.setItem(LOCAL_OWNER_KEY, userId);
+  } catch {
+    // Storage blocked: nothing is kept locally either.
+  }
+};
+
+/**
+ * The session ended (401: expired, revoked elsewhere, cookie cleared) without an explicit sign-out.
+ * The browser may be shared, so the signed-in account's local data goes with it. A browser that
+ * holds no bound account (already signed out) is left alone.
+ */
+export const onSignedOut = async (): Promise<void> => {
+  if (storedOwner() !== null) await clearLocalData();
 };
 
 /**

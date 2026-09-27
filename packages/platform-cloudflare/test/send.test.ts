@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect";
 import { dispatch, MailTransport, TransportFailure, type Submission } from "@bye/application";
 import {
   applyMailboxCommand,
+  applyMailboxRead,
   MailboxJobStoreLive,
   type MailboxSendResult,
 } from "@bye/platform-cloudflare";
@@ -613,6 +614,53 @@ describe("identities, attachments, automation", () => {
     m.store.screener.screen([{ sender: "me@elsewhere.test", decision: "allow" }]);
     m.deliver({ fromAddress: "me@elsewhere.test" });
     expect(fwd()).toHaveLength(1);
+  });
+
+  it("[E19/E22] verification codes are never readable by the requesting mailbox", () => {
+    const m = setup();
+    const { sendJobId } = m.store.automation.addForwardingDestination("victim@elsewhere.test");
+    const ext = m.store.identities.addIdentity({ address: "me@gmail.example", kind: "external" });
+    const token = (
+      m.storage.sql
+        .exec(
+          "SELECT token FROM forwarding_destinations WHERE address = ?",
+          "victim@elsewhere.test",
+        )
+        .toArray()[0] as { token: string }
+    ).token;
+    const challenge = (
+      m.storage.sql
+        .exec("SELECT challenge_token FROM identities WHERE identity_id = ?", ext)
+        .toArray()[0] as { challenge_token: string }
+    ).challenge_token;
+    const raw = m.store.sends.jobs().filter((j) => j.trafficClass === "transactional");
+    expect(raw).toHaveLength(2);
+    // The send-job reads expose no draft handle; the draft reads refuse the system drafts.
+    const listed = (
+      applyMailboxRead(m.store, { _tag: "SendJobs" }) as {
+        items: ReadonlyArray<{ trafficClass: string; draftId: string; contentKey: string }>;
+      }
+    ).items.filter((j) => j.trafficClass === "transactional");
+    expect(listed.map((j) => j.draftId)).toEqual(["", ""]);
+    expect(listed.map((j) => j.contentKey)).toEqual(["", ""]);
+    expect(
+      (applyMailboxRead(m.store, { _tag: "SendJob", sendJobId }) as { draftId: string }).draftId,
+    ).toBe("");
+    for (const j of raw) {
+      expect(m.store.drafts.draft(j.draftId)).toBeUndefined();
+      expect(() => m.store.sends.send(j.draftId, { expectedRevision: 1 })).toThrow(/draft/);
+    }
+    // A cancelled challenge settles back to 'open' but still never lists as a user draft.
+    m.store.sends.cancelSend(sendJobId);
+    expect(JSON.stringify(m.store.drafts.drafts())).not.toContain(token);
+    // Dispatch still renders from the frozen revision.
+    expect(m.store.sends.frozenContent(raw[1]!.sendJobId)!.content.text).toContain(challenge);
+    // Acceptance records no outgoing delivery (no snippet) in the requester's threads.
+    m.store.sends.claim(raw[1]!.sendJobId);
+    m.store.sends.accepted(raw[1]!.sendJobId, { providerId: "p" });
+    expect(m.store.sends.job(raw[1]!.sendJobId)!.state).toBe("accepted");
+    expect(JSON.stringify(m.store.views.listView({ view: "everything" }))).not.toContain(challenge);
+    expect(m.store.views.listView({ view: "everything" }).items).toHaveLength(0);
   });
 
   it("[E23] notifications are quiet by default with contact/domain/thread opt-in and quiet hours", () => {

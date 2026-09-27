@@ -4,6 +4,7 @@ import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import {
   deliverNotification,
+  makePushSender,
   type NotificationRequest,
   type PushDeviceRow,
   RetryablePushFailure,
@@ -197,5 +198,79 @@ describe("push notifications", () => {
       "SELECT COUNT(*) AS n FROM push_deliveries",
     ).first<{ n: number }>();
     expect(delivered?.n).toBe(0);
+  });
+
+  it("[E23] only the account holder's own session registers or removes push devices (never agent tokens)", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    const agent = await new ControlAuth(
+      h.env.DIRECTORY,
+      kernelClock,
+      await authConfig(h.env),
+    ).createApiToken(ana.userId, { kind: "agent", label: "bot" });
+    const bearer = async (method: string, path: string, body?: unknown) =>
+      (
+        await handleFetch(
+          new Request(`${h.env.APP_ORIGIN}${path}`, {
+            method,
+            headers: { authorization: `Bearer ${agent.token}`, "content-type": "application/json" },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          }),
+          h.env,
+          ctx,
+        )
+      ).status;
+    expect(await bearer("POST", "/v1/push/subscriptions", webpush(9))).toBe(403);
+    const n = await h.env.DIRECTORY.prepare("SELECT COUNT(*) AS n FROM push_devices").first<{
+      n: number;
+    }>();
+    expect(n?.n).toBe(0);
+    const own = await call(h, ana.cookie, "POST", "/v1/push/subscriptions", webpush(1));
+    expect(own.status).toBe(201);
+    expect(await bearer("DELETE", `/v1/push/subscriptions/${own.body.id}`)).toBe(403);
+    expect(
+      (await call(h, ana.cookie, "DELETE", `/v1/push/subscriptions/${own.body.id}`)).status,
+    ).toBe(200);
+  });
+
+  it("[E23] Web Push sends resolve the endpoint host first and refuse non-public answers", async () => {
+    // RFC 8291 Appendix A keys: a valid VAPID pair and user-agent subscription.
+    Object.assign(h.env, {
+      VAPID_PUBLIC_KEY:
+        "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8",
+      VAPID_PRIVATE_KEY: "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw",
+    });
+    const device: PushDeviceRow = {
+      id: "pd_1",
+      user_id: "usr_1",
+      kind: "webpush",
+      endpoint: "https://rebind.example.net/sub/1",
+      p256dh:
+        "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+      auth: "BTBZMqHH6r4Tts7J_aSIgg",
+      label: "",
+      created_at: 0,
+      last_success_at: null,
+    };
+    const doh = (ip: string) => async (url: string) =>
+      new Response(
+        JSON.stringify({
+          Status: 0,
+          Answer: url.includes("type=A&") || url.endsWith("type=A") ? [{ type: 1, data: ip }] : [],
+        }),
+      );
+    const sent: Array<RequestInit | undefined> = [];
+    const fetchFn = (async (_u: unknown, init?: RequestInit) => {
+      sent.push(init);
+      return new Response(null, { status: 201 });
+    }) as typeof fetch;
+    const internal = makePushSender(h.env, fetchFn, doh("10.0.0.1"));
+    expect(await internal(device, note("evt-r", "usr_1"))).toEqual({ _tag: "Rejected", status: 0 });
+    expect(sent).toHaveLength(0);
+    const failing = makePushSender(h.env, fetchFn, async () => new Response("", { status: 502 }));
+    expect((await failing(device, note("evt-r", "usr_1")))?._tag).toBe("Retry");
+    expect(sent).toHaveLength(0);
+    const pub = makePushSender(h.env, fetchFn, doh("93.184.216.34"));
+    expect((await pub(device, note("evt-r", "usr_1")))?._tag).toBe("Delivered");
+    expect(sent[0]?.redirect).toBe("manual");
   });
 });

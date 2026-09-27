@@ -308,6 +308,24 @@ describe("adversarial tenancy and recovery", () => {
   });
 
   const redeliverDirect = async (from: Account, to: Account, mode: "copy" | "move") => {
+    // Redelivery is re-authorized at delivery time: the source's user must be
+    // able to send into the target, so grant that first.
+    const org = (await h.d1
+      .prepare("SELECT org_id FROM mailboxes WHERE id = ?")
+      .bind(to.mailboxId)
+      .first<{ org_id: string }>())!.org_id;
+    await h.d1
+      .prepare(
+        "INSERT INTO memberships (org_id, user_id, role, status, created_at, updated_at) VALUES (?, ?, 'member', 'active', ?, ?)",
+      )
+      .bind(org, from.userId, Date.now(), Date.now())
+      .run();
+    await h.d1
+      .prepare(
+        "INSERT INTO mailbox_access (mailbox_id, user_id, role, can_send, created_at) VALUES (?, ?, 'member', 1, ?)",
+      )
+      .bind(to.mailboxId, from.userId, Date.now())
+      .run();
     const store = (
       h.namespaces.MAILBOXES.instance(from.mailboxId) as unknown as {
         store: import("@bye/platform-cloudflare").MailboxStore;

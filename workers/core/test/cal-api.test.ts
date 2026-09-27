@@ -331,6 +331,115 @@ describe("calendar API", () => {
     expect(h.buckets.PARTS.objects.size).toBe(before);
   });
 
+  it("[C08] day photos are bound to their space; replaced photos are deleted; uploads are throttled", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    const bob = await signup(h, "bob@bye.test");
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+    const up = await call(
+      h,
+      ana,
+      "POST",
+      `/v1/calendars/${ana.calendarId}/days/2026-09-25/photo`,
+      png,
+    );
+    expect(up.status).toBe(201);
+    await h.drain();
+    // Bob can't attach Ana's photo key (read from her link) to his own day and re-sign it.
+    const laundered = await command(h, bob, bob.calendarId, {
+      type: "SetDayDecoration",
+      date: { year: 2030, month: 1, day: 1 },
+      photoKey: up.body.photoKey,
+    });
+    expect(laundered.status).toBe(400);
+    const context = await call(
+      h,
+      bob,
+      "GET",
+      `/v1/calendars/${bob.calendarId}/days/2030-01-01/context`,
+    );
+    expect(context.body.photoKey).toBeUndefined();
+    expect(context.body.photoUrl).toBeUndefined();
+    // A link is bound to the space whose day shows the photo: a mismatched space is refused.
+    const crossSpace = await mint(
+      h.env.PROXY_SIGNING_KEY,
+      "dayphoto",
+      [bob.calendarId, up.body.photoKey],
+      60_000,
+      Date.now(),
+    );
+    expect((await call(h, null, "GET", `/v1/calendar-photos?t=${crossSpace}`)).status).toBe(403);
+    const legacyArity = await mint(
+      h.env.PROXY_SIGNING_KEY,
+      "dayphoto",
+      [up.body.photoKey],
+      60_000,
+      Date.now(),
+    );
+    expect((await call(h, null, "GET", `/v1/calendar-photos?t=${legacyArity}`)).status).toBe(403);
+
+    // Replacing the day's photo deletes the prior object; clearing it deletes the replacement.
+    const next = await call(
+      h,
+      ana,
+      "POST",
+      `/v1/calendars/${ana.calendarId}/days/2026-09-25/photo`,
+      png,
+    );
+    expect(next.status).toBe(201);
+    expect(h.buckets.PARTS.objects.has(up.body.photoKey)).toBe(false);
+    expect(h.buckets.PARTS.objects.has(next.body.photoKey)).toBe(true);
+    const cleared = await command(h, ana, ana.calendarId, {
+      type: "SetDayDecoration",
+      date: { year: 2026, month: 9, day: 25 },
+      photoKey: null,
+    });
+    expect(cleared.status).toBe(200);
+    expect(h.buckets.PARTS.objects.has(next.body.photoKey)).toBe(false);
+
+    // Uploads are rate limited per user, before any bytes are stored.
+    h.rateLimit.deny = (key) => key === `dayphoto:${ana.userId}`;
+    const before = h.buckets.PARTS.objects.size;
+    const limited = await call(
+      h,
+      ana,
+      "POST",
+      `/v1/calendars/${ana.calendarId}/days/2026-09-26/photo`,
+      png,
+    );
+    expect(limited.status).toBe(429);
+    expect(h.buckets.PARTS.objects.size).toBe(before);
+  });
+
+  it("[C04] only the owner can invite: a write grantee can't make the owner's address send iTIP", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    const bob = await signup(h, "bob@bye.test");
+    const work = await newCalendar(h, ana);
+    expect(
+      (
+        await command(h, ana, ana.calendarId, {
+          type: "GrantCalendar",
+          calendarId: work,
+          grantee: bob.userId,
+          role: "write",
+        })
+      ).status,
+    ).toBe(200);
+    const invite = (who: Account, attendees: Array<{ address: string }>) =>
+      command(h, who, ana.calendarId, {
+        type: "CreateEvent",
+        calendarId: work,
+        start: at(2026, 10, 7, 15),
+        end: at(2026, 10, 7, 16),
+        data: { summary: "Kickoff" },
+        attendees,
+      });
+    expect((await invite(bob, [{ address: "victim@example.net" }])).status).toBe(403);
+    expect((await invite(ana, [{ address: "not an address" }])).status).toBe(400);
+    const many = Array.from({ length: 101 }, (_, i) => ({ address: `p${i}@example.net` }));
+    expect((await invite(ana, many)).status).toBe(400);
+    expect((await invite(ana, [{ address: "guest@example.net" }])).status).toBe(200);
+  });
+
   it("[C05] subscriptions refresh through DNS-checked fetches and keep their schedule after errors", async () => {
     const ana = await signup(h, "ana@bye.test");
     const fetched: Array<string> = [];
@@ -795,7 +904,7 @@ describe("day photo scanning recovery", () => {
       httpMetadata: { contentType: "image/jpeg" },
       customMetadata: { owner: ana.userId },
     });
-    const url = await signDayPhotoUrl(h.env, key, Date.now());
+    const url = await signDayPhotoUrl(h.env, ana.calendarId, key, Date.now());
     const get = () => handleFetch(new Request(`${h.env.APP_ORIGIN}${url}`), h.env, ctx);
     expect((await get()).status).toBe(409);
     await h.drain();

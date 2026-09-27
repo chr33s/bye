@@ -140,9 +140,12 @@ const HANDLERS: { readonly [K in MailboxCommandTag]: Handler<CommandOf<K>> } = {
     s.drafts.saveDraft(c.draftId, c.expectedRevision, toDraftContent(c.content)),
   ),
   DeleteDraft: handler((s, c) => s.drafts.deleteDraft(c.draftId)),
+  // Publish-by-mail needs the "publish" scope, stamped on the command by the application layer
+  // after decoding (never client-supplied); absent means not allowed.
   Send: handler((s, c) =>
     s.sends.send(c.draftId, {
       expectedRevision: c.expectedRevision,
+      publishAllowed: (c as { readonly publishAllowed?: unknown }).publishAllowed === true,
       ...(c.sendAt !== undefined ? { sendAt: c.sendAt } : {}),
       ...(c.afterSend ? { afterSend: c.afterSend } : {}),
       ...(c.individually !== undefined ? { individually: c.individually } : {}),

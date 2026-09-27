@@ -1185,6 +1185,20 @@ export const CREDENTIALS: Readonly<Record<CredentialKind, CredentialSpec>> = {
         [userId],
         guard,
       ),
+      // In-flight grants would otherwise mint a fresh device session after the revocation: an
+      // unredeemed authorization code is spent, an approved device code is withdrawn.
+      guarded(
+        db,
+        "UPDATE oauth_codes SET consumed_at = ? WHERE user_id = ? AND consumed_at IS NULL",
+        [now, userId],
+        guard,
+      ),
+      guarded(
+        db,
+        "UPDATE device_codes SET status = 'denied' WHERE user_id = ? AND status = 'approved'",
+        [userId],
+        guard,
+      ),
     ],
   },
   support: {
@@ -1222,7 +1236,9 @@ export const credentialKindOf = (token: string): CredentialKind => {
 
 /**
  * Statements revoking EVERY credential a user holds — browser sessions, API tokens, device
- * sessions (and their access tokens), support grants — for recovery, closure and erasure.
+ * sessions (and their access tokens and unredeemed OAuth/device-code grants), support grants —
+ * for recovery, closure and erasure. The user's push devices are disabled too: a registration
+ * isn't bound to the credential that made it, so it must not outlive a revoke-everything.
  */
 export const revokeAllCredentials = (
   db: D1SessionLike,
@@ -1232,7 +1248,15 @@ export const revokeAllCredentials = (
   guard?: RevocationGuard,
 ): Array<D1StatementLike> => {
   const now = clock.now();
-  return (Object.keys(CREDENTIALS) as Array<CredentialKind>).flatMap((k) =>
-    CREDENTIALS[k].revokeAllFor(db, now, userId, reason, guard),
-  );
+  return [
+    ...(Object.keys(CREDENTIALS) as Array<CredentialKind>).flatMap((k) =>
+      CREDENTIALS[k].revokeAllFor(db, now, userId, reason, guard),
+    ),
+    guarded(
+      db,
+      "UPDATE push_devices SET enabled = 0, disabled_at = ? WHERE user_id = ? AND enabled = 1",
+      [now, userId],
+      guard,
+    ),
+  ];
 };

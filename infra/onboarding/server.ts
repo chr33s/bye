@@ -11,8 +11,11 @@
 //   BYE_ONBOARDING_ACCESS_AUD=<Access application AUD tag>                  } Access mode
 //   CLOUDFLARE_OAUTH_CLIENT_ID=…  [CLOUDFLARE_OAUTH_CLIENT_SECRET=…]
 //   BYE_RELEASE_DIR=/srv/bye-release  BYE_RELEASE_VERSION=v1.0.0   pinned release checkout
+//   BYE_ONBOARDING_LOCAL_OPERATOR=<name>                  local mode (instead of Access): loopback
+//                                                         only; a per-process bearer token and a
+//                                                         one-time login URL are printed at startup
 //   PORT=8788  HOST=127.0.0.1   listens on loopback by default (reach it through a tunnel);
-//                               set HOST explicitly to listen elsewhere
+//                               set HOST explicitly to listen elsewhere (Access mode only)
 //
 // Usage: node --experimental-strip-types infra/onboarding/server.ts
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -39,7 +42,35 @@ export interface ServerOptions {
    * cannot pick (or be handed) a session id of its choosing. Default: random per process.
    */
   readonly sessionSecret?: Buffer;
+  /**
+   * Local-operator mode: the operator is a constant, so the connecting peer must prove it is that
+   * operator with this process's bearer token (or a session opened by the one-time login URL).
+   */
+  readonly local?: LocalOperatorAuth;
 }
+
+/** Per-process credentials for local-operator mode (printed once at startup, never stored). */
+export interface LocalOperatorAuth {
+  /** `Authorization: Bearer <token>` for API clients. */
+  readonly token: string;
+  /** `GET /login?code=<loginCode>` sets an authenticated session cookie, once. */
+  readonly loginCode: string;
+}
+
+export const localOperatorAuth = (): LocalOperatorAuth => ({
+  token: encode(randomBytes(32), "base64url"),
+  loginCode: encode(randomBytes(32), "base64url"),
+});
+
+/** Loopback bind addresses local-operator mode accepts. */
+export const isLoopbackHost = (host: string): boolean =>
+  /^(localhost|::1|\[::1\]|127\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.test(host);
+
+const safeEqual = (a: string, b: string): boolean => {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+};
 
 const SESSION_COOKIE = "__Host-bye-onboarding";
 
@@ -117,25 +148,65 @@ const ASSETS: Record<string, { readonly type: string; readonly body: string }> =
   "/app.css": { type: "text/css; charset=utf-8", body: ONBOARDING_STYLE },
 };
 
-export const handler =
-  ({ service, origin, operator, sessionSecret = randomBytes(32) }: ServerOptions) =>
-  async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+export const handler = ({
+  service,
+  origin,
+  operator,
+  sessionSecret = randomBytes(32),
+  local,
+}: ServerOptions) => {
+  const expectedHost = new URL(origin).host.toLowerCase();
+  // Local mode: sessions opened through the one-time login URL (in memory, per process).
+  const authenticated = new Set<string>();
+  let loginUsed = false;
+  const cookieFor = (session: string) =>
+    `${SESSION_COOKIE}=${signSession(sessionSecret, session)}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=86400`;
+  return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? "/", origin);
     try {
+      // DNS rebinding: a request whose Host is not the configured origin's is refused, so a page
+      // on another name that resolves here can't read even the GET routes.
+      if ((req.headers.host ?? "").toLowerCase() !== expectedHost)
+        return send(res, 421, { error: "unexpected host" });
       const op = await operator(req);
       if (op === null) return send(res, 401, { error: "sign in through the access proxy first" });
       let session = sessionOf(req, sessionSecret);
       const setCookie: Record<string, string> = {};
       if (session === null) {
         session = encode(randomBytes(32), "base64url");
-        setCookie["set-cookie"] =
-          `${SESSION_COOKIE}=${signSession(sessionSecret, session)}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=86400`;
+        setCookie["set-cookie"] = cookieFor(session);
       }
 
       const asset = req.method === "GET" ? ASSETS[url.pathname] : undefined;
       if (asset) {
         res.writeHead(200, { ...SECURITY_HEADERS, "content-type": asset.type });
         return void res.end(asset.body);
+      }
+      if (local) {
+        if (req.method === "GET" && url.pathname === "/login") {
+          const code = url.searchParams.get("code") ?? "";
+          if (loginUsed || !safeEqual(code, local.loginCode))
+            return send(res, 401, { error: "login link invalid or already used" });
+          loginUsed = true;
+          // Always a fresh session: a pre-planted cookie is never promoted.
+          const fresh = encode(randomBytes(32), "base64url");
+          authenticated.add(fresh);
+          res.writeHead(303, {
+            ...SECURITY_HEADERS,
+            location: "/",
+            "set-cookie": cookieFor(fresh),
+          });
+          return void res.end();
+        }
+        const bearer = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "")?.[1];
+        const peer =
+          (bearer !== undefined && safeEqual(bearer, local.token)) ||
+          (setCookie["set-cookie"] === undefined && authenticated.has(session));
+        // The page itself is static; everything that reads or changes state needs the operator.
+        if (!peer && !(req.method === "GET" && url.pathname === "/"))
+          return send(res, 401, {
+            error: "open the login URL printed at startup, or send Authorization: Bearer <token>",
+          });
       }
       if (req.method === "GET" && url.pathname === "/") {
         res.writeHead(200, {
@@ -219,6 +290,7 @@ export const handler =
       });
     }
   };
+};
 
 if (import.meta.main) {
   const env = process.env;
@@ -242,6 +314,16 @@ if (import.meta.main) {
     );
     process.exit(2);
   }
+  const port = Number(env.PORT ?? 8788);
+  const host = env.HOST || "127.0.0.1";
+  // Local mode has no identity proxy in front: only loopback peers, and they must hold the token.
+  if (!header && !isLoopbackHost(host)) {
+    console.error(
+      `onboarding: BYE_ONBOARDING_LOCAL_OPERATOR listens on loopback only (HOST=${host}); use Access mode to listen elsewhere`,
+    );
+    process.exit(2);
+  }
+  const local = header ? undefined : localOperatorAuth();
   // Access mode: identity comes only from a verified Access JWT, never from a header alone.
   const verifyAccess = header
     ? accessVerifier({
@@ -276,6 +358,7 @@ if (import.meta.main) {
     handler({
       service,
       origin,
+      local,
       operator: async (req) => {
         if (verifyAccess && header) {
           const jwt = req.headers[ACCESS_JWT_HEADER];
@@ -291,9 +374,11 @@ if (import.meta.main) {
       },
     }),
   );
-  const port = Number(env.PORT ?? 8788);
-  const host = env.HOST || "127.0.0.1";
-  server.listen(port, host, () =>
-    console.log(`onboarding: listening on ${host}:${port} for ${origin}`),
-  );
+  server.listen(port, host, () => {
+    console.log(`onboarding: listening on ${host}:${port} for ${origin}`);
+    if (local) {
+      console.log(`onboarding: open ${origin}/login?code=${local.loginCode} (works once)`);
+      console.log(`onboarding: API bearer token (this process only): ${local.token}`);
+    }
+  });
 }

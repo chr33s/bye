@@ -156,6 +156,35 @@ describe("calendar use cases", () => {
     );
   });
 
+  it("[C04] inviting attendees needs send authority, not just the calendar scope", async () => {
+    const { as, owner } = setup();
+    const calendarOnly = as({ ...principal(owner, ["read", "calendar"]), kind: "agent" });
+    const withSend = as({ ...principal(owner, ["read", "calendar", "send"]), kind: "agent" });
+    const { calendarId } = ok(
+      await withSend(
+        calendarExecuteCommand(
+          SPACE,
+          envelope({ type: "CreateCalendar", commandId: "s1", name: "Work", color: "#123" }),
+        ),
+      ),
+    ) as { calendarId: string };
+    const invite = (commandId: string) =>
+      calendarExecuteCommand(
+        SPACE,
+        envelope({
+          type: "CreateEvent",
+          commandId,
+          calendarId,
+          start: { kind: "date", date: { year: 2026, month: 9, day: 26 } },
+          end: { kind: "date", date: { year: 2026, month: 9, day: 27 } },
+          data: { summary: "Sync" },
+          attendees: [{ address: "guest@example.test" }],
+        }),
+      );
+    expect(failureTag(await calendarOnly(invite("s2")))).toBe("Forbidden");
+    ok(await withSend(invite("s3")));
+  });
+
   it("[C10] searches with bounded queries and uses the location adapter", async () => {
     const { as, owner } = setup();
     const user = as(principal(owner, ["read", "calendar"]));

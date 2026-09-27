@@ -124,6 +124,7 @@ export const startErasure = async (
   const plan = await planErasure(env, userId, reason);
   await writeTombstone(env, "user", userId);
   for (const id of plan.mailboxIds) await writeTombstone(env, "mailbox", id);
+  for (const id of plan.mailboxIds) await fenceErasedMailbox(env, id);
   for (const id of plan.calendarIds) await writeTombstone(env, "calendar", id);
   for (const spaceId of plan.spaceIds)
     await writeTombstone(env, "space-member", spaceMemberTombstoneId(spaceId, userId));
@@ -139,6 +140,38 @@ export const startErasure = async (
   metric("erasure.started", 1);
   return { instanceId, plan };
 };
+
+/**
+ * Persistent erased fence in D1 (§12): the mailbox is closed and every address route to it
+ * disabled, so SMTP stops accepting mail for it and authorization checks that require an active
+ * mailbox (redelivery, access) refuse it. Idempotent; replay re-applies it after a D1 restore.
+ */
+export const fenceErasedMailbox = async (env: CoreEnv, mailboxId: string): Promise<void> => {
+  const now = Date.now();
+  await env.DIRECTORY.batch([
+    env.DIRECTORY.prepare("UPDATE mailboxes SET status = 'closed' WHERE id = ?").bind(mailboxId),
+    env.DIRECTORY.prepare(
+      "UPDATE address_routes SET disabled_at = ? WHERE mailbox_id = ? AND disabled_at IS NULL",
+    ).bind(now, mailboxId),
+  ]);
+};
+
+/**
+ * Whether a mailbox has been erased (a tombstone exists). Asynchronous write paths — the ingest
+ * consumer, journal quarantine, the indexer — check this before writing, so queued work cannot
+ * recreate an erased mailbox's content after (or while) erasure runs.
+ */
+export const mailboxErased = async (
+  env: CoreEnv,
+  mailboxId: string,
+  session: "first-primary" | "first-unconstrained" = "first-primary",
+): Promise<boolean> =>
+  (await env.DIRECTORY.withSession(session)
+    .prepare(
+      "SELECT 1 AS e FROM erasure_tombstones WHERE resource_kind = 'mailbox' AND resource_id = ? LIMIT 1",
+    )
+    .bind(mailboxId)
+    .first<{ e: number }>()) !== null;
 
 const purgePrefix = async (bucket: R2Bucket, prefix: string): Promise<number> => {
   let removed = 0;
@@ -165,14 +198,17 @@ const tryRpc = async (fn: () => Promise<unknown>): Promise<boolean> => {
 };
 
 export const eraseMailboxContent = async (env: CoreEnv, mailboxId: string): Promise<number> => {
+  await fenceErasedMailbox(env, mailboxId);
   const removed =
     (await purgePrefix(env.ORIGINALS, `t/${mailboxId}/`)) +
     (await purgePrefix(env.PARTS, `t/${mailboxId}/`));
   // Every search shard, including ones opened by size rollover (`search:<mailbox>:<ts>`), not just
-  // the base shard. The mailbox's shard catalog is read before its storage is erased.
+  // the base shard. The shard catalog lives in the mailbox authority, so every clear must succeed
+  // BEFORE the authority is erased: a failure throws (the Workflow step retries, replay does not
+  // mark the tombstone verified) while the catalog is still there to rediscover rollover shards.
   for (const shard of await mailboxShardNames(env, mailboxId))
-    await tryRpc(() => env.SEARCH_SHARDS.getByName(shard).clear());
-  await tryRpc(() => env.MAILBOXES.getByName(mailboxId).eraseAll());
+    await env.SEARCH_SHARDS.getByName(shard).clear();
+  await env.MAILBOXES.getByName(mailboxId).eraseAll();
   await env.DIRECTORY.prepare(
     "DELETE FROM storage_usage WHERE owner_kind = 'mailbox' AND owner_id = ?",
   )
@@ -191,18 +227,20 @@ export const mailboxShardNames = async (
   env: CoreEnv,
   mailboxId: string,
 ): Promise<ReadonlyArray<string>> => {
+  // Never degrades to the base shard alone: an unreadable catalog fails the erase step (retried)
+  // rather than skipping rollover shards whose names only the catalog records.
   const names = new Set<string>([`search:${mailboxId}`]);
-  try {
-    for (const shard of await env.MAILBOXES.getByName(mailboxId).searchShards())
-      names.add(shard.name);
-  } catch {
-    // Authority unavailable or already erased: the base shard is still cleared.
-  }
+  for (const shard of await env.MAILBOXES.getByName(mailboxId).searchShards())
+    names.add(shard.name);
   return [...names];
 };
 
-export const eraseCalendarContent = async (env: CoreEnv, calendarId: string): Promise<boolean> =>
-  tryRpc(() => env.CALENDARS.getByName(calendarId).eraseAll());
+export const eraseCalendarContent = async (env: CoreEnv, calendarId: string): Promise<boolean> => {
+  // Day photos live in PARTS under the calendar's own prefix (`cal/<id>/photo/…`), outside any
+  // mailbox prefix; the authority only holds references to them.
+  await purgePrefix(env.PARTS, `cal/${calendarId}/`);
+  return tryRpc(() => env.CALENDARS.getByName(calendarId).eraseAll());
+};
 
 /** Revoke the user's membership/grants in shared spaces (their authored shared copies stay with the space). */
 export const eraseSpaceMembership = async (
@@ -251,6 +289,8 @@ export const eraseWorldAuthor = async (
   const erased = unwrapRpc(await worldStub(env, handle).eraseWorld(userId));
   if (erased) {
     await erasePublished(env, handle);
+    // Private site-render markers (`t/world/<handle>/site-rendered/…`) in PARTS.
+    await purgePrefix(env.PARTS, `t/world/${handle}/`);
     // Newsletter routing rows carry subscriber addresses; the ledger itself went with the authority.
     await env.DIRECTORY.batch([
       env.DIRECTORY.prepare("DELETE FROM newsletter_contacts WHERE handle = ?").bind(handle),
@@ -269,8 +309,11 @@ export const eraseUserRows = async (env: CoreEnv, userId: string): Promise<void>
     q(db, "DELETE FROM push_devices WHERE user_id = ?", userId),
     q(db, "DELETE FROM passkeys WHERE user_id = ?", userId),
     q(db, "DELETE FROM storage_usage WHERE owner_kind = 'user' AND owner_id = ?", userId),
+    q(db, "DELETE FROM account_exports WHERE user_id = ?", userId),
   ]);
   await purgePrefix(env.EXPORTS, `t/${userId}/export/`);
+  // User-keyed private World media originals (`t/<userId>/world-media/…`), outside mailbox prefixes.
+  await purgePrefix(env.PARTS, `t/${userId}/world-media/`);
 };
 
 type TombstoneRow = { erased_at: number; resource_kind: TombstoneKind; resource_id: string };
@@ -281,6 +324,29 @@ const markVerified = (env: CoreEnv, t: TombstoneRow) =>
   )
     .bind(Date.now(), t.resource_kind, t.resource_id)
     .run();
+
+/**
+ * Replay one tombstone and mark it verified only if every step of it succeeded; a failure (e.g. a
+ * search shard that could not be cleared) leaves it unverified so the daily sweep retries it.
+ */
+const replayAndVerify = async (env: CoreEnv, t: TombstoneRow): Promise<boolean> => {
+  try {
+    await replayTombstone(env, t);
+  } catch (error) {
+    metric("erasure.tombstones.replay_failed", 1, { kind: t.resource_kind });
+    console.error(
+      JSON.stringify({
+        level: "error",
+        op: "erasure.replay-failed",
+        kind: t.resource_kind,
+        error: String(error).slice(0, 200),
+      }),
+    );
+    return false;
+  }
+  await markVerified(env, t);
+  return true;
+};
 
 /**
  * Tombstones that can affect one restored authority (§12). A point-in-time restore of a single
@@ -304,12 +370,10 @@ export const replayTombstonesFor = async (
           .bind(kind, id)
           .all<TombstoneRow>()
   ).results;
-  for (const t of rows) {
-    await replayTombstone(env, t);
-    await markVerified(env, t);
-  }
-  metric("erasure.tombstones.replayed", rows.length, { scope: kind });
-  return { replayed: rows.length };
+  let replayed = 0;
+  for (const t of rows) if (await replayAndVerify(env, t)) replayed++;
+  metric("erasure.tombstones.replayed", replayed, { scope: kind });
+  return { replayed };
 };
 
 /** Routine sweep: only tombstones whose erasure has not been verified yet (e.g. an interrupted run). */
@@ -324,12 +388,10 @@ export const replayUnverifiedTombstones = async (
       .bind(limit)
       .all<TombstoneRow>()
   ).results;
-  for (const t of rows) {
-    await replayTombstone(env, t);
-    await markVerified(env, t);
-  }
-  metric("erasure.tombstones.replayed", rows.length, { scope: "unverified" });
-  return { replayed: rows.length };
+  let replayed = 0;
+  for (const t of rows) if (await replayAndVerify(env, t)) replayed++;
+  metric("erasure.tombstones.replayed", replayed, { scope: "unverified" });
+  return { replayed };
 };
 
 /**
@@ -360,11 +422,7 @@ export const replayTombstones = async (
             ).bind(pageSize)
       ).all<{ erased_at: number; resource_kind: TombstoneKind; resource_id: string }>()
     ).results;
-    for (const t of page) {
-      await replayTombstone(env, t);
-      await markVerified(env, t);
-    }
-    replayed += page.length;
+    for (const t of page) if (await replayAndVerify(env, t)) replayed++;
     if (page.length < pageSize) break;
     after = page.at(-1)!;
   }

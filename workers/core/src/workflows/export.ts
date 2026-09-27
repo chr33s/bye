@@ -1,7 +1,9 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { binaryToBytes, mboxEntryText, serializeVCards } from "@bye/mail-codec";
+import { ControlDirectory } from "@bye/platform-cloudflare";
 import { Schema } from "effect";
 import { recordGcIntent } from "../blobgc.ts";
+import { kernelClock } from "../durable-host.ts";
 import { recordUsage } from "../usage.ts";
 import type { CoreEnv } from "../env.ts";
 import { calendar, mailbox, settle } from "../authorities.ts";
@@ -26,6 +28,7 @@ const MboxStateSchema = Schema.Struct({
   cursor: Schema.NullOr(Schema.String),
   parts: Schema.Array(Schema.Struct({ partNumber: Schema.Number, etag: Schema.String })),
   carry: Schema.NullOr(Schema.String),
+  revoked: Schema.optional(Schema.Boolean),
 });
 
 /** Serializable MBOX progress carried between Workflow steps. */
@@ -34,7 +37,18 @@ export interface MboxState {
   readonly parts: ReadonlyArray<{ readonly partNumber: number; readonly etag: string }>;
   /** Key of the object holding the tail bytes (< PART_BYTES) not yet uploaded. */
   readonly carry: string | null;
+  /** The exporting user lost access to the mailbox mid-export: stop and drop its MBOX. */
+  readonly revoked?: boolean;
 }
+
+/**
+ * The exporting user can still read this mailbox (current account, membership and grant, §3.2).
+ * Checked before every step that reads a mailbox: an export runs for a long time after the request
+ * that started it, and removal or suspension must stop further reads (spec: grant removal blocks
+ * subsequent reads).
+ */
+export const canStillExport = (env: CoreEnv, userId: string, mailboxId: string): Promise<boolean> =>
+  new ControlDirectory(env.DIRECTORY, kernelClock).canAccessMailbox(userId, mailboxId);
 
 /** Append one manifest page to the multipart MBOX. Retry-safe: same input → same parts/carry. */
 export const appendMboxPage = async (
@@ -131,6 +145,14 @@ export const completeMbox = async (
   return key;
 };
 
+const purgeExportPrefix = async (env: CoreEnv, prefix: string): Promise<void> => {
+  for (;;) {
+    const listed = await env.EXPORTS.list({ prefix, limit: 1000 });
+    if (listed.objects.length) await env.EXPORTS.delete(listed.objects.map((o) => o.key));
+    if (!listed.truncated) break;
+  }
+};
+
 /** A04: MBOX mail, vCard contacts, ICS calendars, and a separate notes/settings JSON export. */
 export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
   override async run(event: Readonly<WorkflowEvent<ExportParams>>, step: WorkflowStep) {
@@ -168,11 +190,25 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
           step,
           `v1:mbox-page:${mailboxId}:${i}`,
           MboxStateSchema,
-          () => appendMboxPage(env, mailboxId, key, uploadId, input, carryKey(i)),
+          async () =>
+            (await canStillExport(env, userId, mailboxId))
+              ? appendMboxPage(env, mailboxId, key, uploadId, input, carryKey(i))
+              : { ...input, cursor: null, revoked: true },
           RETRY,
         );
       } while (state.cursor);
       const final: MboxState = state;
+      if (final.revoked) {
+        // Access ended mid-export: discard the partial MBOX and skip this mailbox entirely.
+        await promiseStep(step, `v1:mbox-abort:${mailboxId}`, Schema.Boolean, async () => {
+          await env.EXPORTS.resumeMultipartUpload(key, uploadId)
+            .abort()
+            .catch(() => undefined);
+          await purgeExportPrefix(env, `${prefix}/.carry/${mailboxId}/`);
+          return true;
+        });
+        continue;
+      }
       files.push(
         await promiseStep(
           step,
@@ -184,14 +220,7 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
       );
       await promiseStep(step, `v1:mbox-cleanup:${mailboxId}`, Schema.Boolean, async () => {
         // Only after the MBOX is durably complete; a retry here is harmless.
-        for (;;) {
-          const listed = await env.EXPORTS.list({
-            prefix: `${prefix}/.carry/${mailboxId}/`,
-            limit: 1000,
-          });
-          if (listed.objects.length) await env.EXPORTS.delete(listed.objects.map((o) => o.key));
-          if (!listed.truncated) break;
-        }
+        await purgeExportPrefix(env, `${prefix}/.carry/${mailboxId}/`);
         return true;
       });
       const manifestKey = await promiseStep(
@@ -199,6 +228,7 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
         `v1:manifest:${mailboxId}`,
         Schema.String,
         async () => {
+          if (!(await canStillExport(env, userId, mailboxId))) return "";
           const m = await mailbox(env, mailboxId).exportSettings();
           const settingsKey = `${prefix}/.chunks/${mailboxId}.manifest.json`;
           await env.EXPORTS.put(
@@ -213,6 +243,8 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
           return settingsKey;
         },
       );
+      // Access ended before the settings were read: the MBOX (read while allowed) stays; no settings.
+      if (!manifestKey) continue;
       files.push(
         await promiseStep(step, `v1:vcard-notes:${mailboxId}`, Schema.String, async () => {
           const manifest = (await (await this.env.EXPORTS.get(manifestKey))!.json()) as {
@@ -280,6 +312,12 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
           delayMs: EXPORT_RETENTION_MS,
         });
       }
+      // Releases the one-export-in-flight claim (POST /v1/exports); the cooldown still applies.
+      await env.DIRECTORY.prepare(
+        "UPDATE account_exports SET completed_at = ? WHERE id = ? AND user_id = ?",
+      )
+        .bind(Date.now(), exportId, userId)
+        .run();
       return true;
     });
     return { v: 1, exportId, files, expiresAt: Date.now() + EXPORT_RETENTION_MS };

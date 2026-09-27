@@ -59,6 +59,38 @@ describe("MIME bombs", () => {
     expect(p.warnings).toContainEqual({ _tag: "LimitExceeded", limit: "maxParts" });
   });
 
+  it("nested multipart/signed keeps one opaque copy instead of one per level", () => {
+    const payload = "x".repeat(64 * 1024);
+    let entity = `Content-Type: text/plain\n\n${payload}`;
+    for (let i = 0; i < 10; i++) {
+      // Alternate signed and mixed so the amplification cannot hide behind an intermediate level.
+      const kind = i % 3 === 2 ? "mixed" : "signed";
+      const sig =
+        kind === "signed" ? `--s${i}\nContent-Type: application/pgp-signature\n\nsig\n` : "";
+      entity = `Content-Type: multipart/${kind}; boundary=s${i}\n\n--s${i}\n${entity}\n${sig}--s${i}--\n`;
+    }
+    const p = parseMessage(bytes(`From: a@x.test\n${entity}`));
+    const opaque = p.parts.filter((x) => x.partId.endsWith(".signed"));
+    expect(opaque).toHaveLength(1);
+    expect(p.truncated).toBe(false);
+    const total = p.parts.reduce((s, x) => s + x.size, 0);
+    expect(total).toBeLessThan(3 * payload.length);
+  });
+
+  it("an opaque signed copy is refused before allocation when it would exceed the budget", () => {
+    const limits = { ...DEFAULT_PARSE_LIMITS, maxDecodedBytes: 32 * 1024 };
+    const payload = "x".repeat(64 * 1024);
+    const p = parseMessage(
+      bytes(
+        `From: a@x.test\nContent-Type: multipart/signed; boundary=s\n\n--s\nContent-Type: text/plain\n\n${payload}\n--s\nContent-Type: application/pgp-signature\n\nsig\n--s--\n`,
+      ),
+      limits,
+    );
+    expect(p.truncated).toBe(true);
+    expect(limitHits(p)).toContain("maxDecodedBytes");
+    expect(p.parts).toHaveLength(0);
+  });
+
   it("base64 expansion across many parts is capped by maxDecodedBytes", () => {
     const limits = { ...DEFAULT_PARSE_LIMITS, maxDecodedBytes: 256 * 1024 };
     const chunk = Buffer.alloc(64 * 1024, 0)

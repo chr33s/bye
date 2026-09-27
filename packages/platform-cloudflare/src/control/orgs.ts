@@ -45,6 +45,13 @@ const seatsFull = (seats: SeatUsage): boolean =>
 const SEAT_AVAILABLE_SQL = `(SELECT COUNT(*) FROM memberships WHERE org_id = ? AND status IN ('active', 'suspended'))
   < MIN((SELECT seat_limit FROM organizations WHERE id = ?), COALESCE((SELECT seats FROM entitlements WHERE org_id = ?), (SELECT seat_limit FROM organizations WHERE id = ?)))`;
 
+/** Outstanding invitations an org may hold at once (each one mailed a third party). */
+export const MAX_PENDING_INVITATIONS = 50;
+
+/** Invitations of org `?` still acceptable at time `?` (bind org id, then now). */
+const PENDING_INVITATION_SQL =
+  "org_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?";
+
 /** The member row is not the org's last active owner (bind the org id once). */
 const NOT_LAST_ACTIVE_OWNER_SQL = `NOT (role = 'owner' AND status = 'active' AND (SELECT COUNT(*) FROM memberships WHERE org_id = ? AND role = 'owner' AND status = 'active') <= 1)`;
 
@@ -232,21 +239,46 @@ export class ControlOrganizations {
   ): Promise<{ invitationId: string; token: string }> {
     const actorId = actor.userId;
     if (seatsFull(await this.seats(orgId))) reject("conflict", "no seats available");
+    const normalized = normalizeAddress(address);
+    const now = this.clock.now();
+    // Every invitation mails a third party from the service domain: one outstanding invitation
+    // per (org, address), and a bounded number outstanding per org, so the route cannot be used
+    // to send repeated or bulk unsolicited mail.
+    const pending = await q(
+      primary(this.db),
+      `SELECT COUNT(*) AS n, COALESCE(SUM(address = ?), 0) AS same FROM invitations WHERE ${PENDING_INVITATION_SQL}`,
+      normalized,
+      orgId,
+      now,
+    ).first<{ n: number; same: number }>();
+    if ((pending?.same ?? 0) > 0) reject("conflict", "an invitation to this address is pending");
+    if ((pending?.n ?? 0) >= MAX_PENDING_INVITATIONS)
+      reject("conflict", "too many pending invitations");
     const token = randomToken();
     const id = this.clock.id("inv");
-    await this.db.batch([
+    // Guarded insert: two racing invites cannot both pass the checks above.
+    const [inserted] = await this.db.batch([
       q(
         this.db,
-        "INSERT INTO invitations (id, org_id, address, role, token_hash, invited_by, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        `INSERT INTO invitations (id, org_id, address, role, token_hash, invited_by, expires_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM invitations WHERE ${PENDING_INVITATION_SQL} AND address = ?)
+           AND (SELECT COUNT(*) FROM invitations WHERE ${PENDING_INVITATION_SQL}) < ?`,
         id,
         orgId,
-        normalizeAddress(address),
+        normalized,
         role,
         await sha256Hex(token),
         actorId,
-        this.clock.now() + 7 * 86400_000,
+        now + 7 * 86400_000,
+        orgId,
+        now,
+        normalized,
+        orgId,
+        now,
+        MAX_PENDING_INVITATIONS,
       ),
-      audit(this.db, this.clock, {
+      auditIfChanged(this.db, this.clock, {
         orgId,
         actorId,
         action: "member.invite",
@@ -254,6 +286,7 @@ export class ControlOrganizations {
         detail: { role },
       }),
     ]);
+    if (changesOf(inserted) === 0) reject("conflict", "an invitation to this address is pending");
     return { invitationId: id, token };
   }
 

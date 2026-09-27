@@ -39,6 +39,11 @@ export interface CalKnownInvitation {
   readonly seriesRevision: CalRevision | undefined;
   /** Last applied reply revision per attendee address (organizer side). */
   readonly attendeeRevisions: Readonly<Record<string, CalRevision>>;
+  /**
+   * A live event with this UID exists but was created locally (no ORGANIZER): it never came from
+   * an invitation, so no external sender may claim it by UID.
+   */
+  readonly localEvent?: boolean | undefined;
 }
 
 export type CalItipDecision =
@@ -103,6 +108,8 @@ export const calInterpretItip = (input: CalItipInput): CalItipDecision => {
         return { _tag: "Unauthorized", reason: "message claims our own organizer identity" };
       if (known?.weAreOrganizer)
         return { _tag: "Unauthorized", reason: "event is organized by this account" };
+      if (known?.localEvent)
+        return { _tag: "Unauthorized", reason: "event was not received as an invitation" };
       if (known?.organizer && calNormAddress(known.organizer) !== organizer)
         return { _tag: "Unauthorized", reason: "organizer change rejected" };
       const stale = ordering(known?.revision);

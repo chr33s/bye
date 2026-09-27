@@ -73,7 +73,15 @@ const PartialEventData = Schema.Struct({
 /** Private R2 key of an uploaded day photo (C08): `cal/<space>/photo/<random>`. The one pattern. */
 export const CALENDAR_PHOTO_KEY = /^cal\/[A-Za-z0-9_-]{1,64}\/photo\/[A-Za-z0-9_-]{16,64}$/;
 
-const Person = Schema.Struct({ address: SingleLine, name: Schema.optional(SingleLine) });
+/** An attendee's mail address (each is a recipient of the owner's outbound iTIP). */
+const AttendeeAddress = Schema.String.check(
+  Schema.isMaxLength(320),
+  Schema.isPattern(/^(?:mailto:)?[^\s@<>()",;:]+@[^\s@<>()",;:]+$/i),
+);
+const Person = Schema.Struct({ address: AttendeeAddress, name: Schema.optional(SingleLine) });
+/** Invitees per event: the same ceiling as recipients per message (`MAX_MESSAGE_RECIPIENTS`). */
+export const MAX_CALENDAR_ATTENDEES = 100;
+const Attendees = Schema.Array(Person).check(Schema.isMaxLength(MAX_CALENDAR_ATTENDEES));
 const MessageRef = Schema.Struct({
   mailboxId: Schema.String,
   threadId: Schema.String,
@@ -109,7 +117,7 @@ export const CalendarCommand = Schema.Union([
     rdates: Schema.optional(Schema.Array(CalTimeSchema)),
     exdates: Schema.optional(Schema.Array(CalTimeSchema)),
     data: EventDataInput,
-    attendees: Schema.optional(Schema.Array(Person)),
+    attendees: Schema.optional(Attendees),
     alarms: Schema.optional(Schema.Array(Schema.Int)),
     highlight: Schema.optional(Schema.Boolean),
     countdown: Schema.optional(Schema.Boolean),
@@ -126,7 +134,7 @@ export const CalendarCommand = Schema.Union([
       rrule: Schema.optional(Schema.NullOr(Schema.String)),
       data: Schema.optional(PartialEventData),
       alarms: Schema.optional(Schema.Array(Schema.Int)),
-      attendees: Schema.optional(Schema.Array(Person)),
+      attendees: Schema.optional(Attendees),
       highlight: Schema.optional(Schema.Boolean),
       countdown: Schema.optional(Schema.Boolean),
       privateNote: Schema.optional(Schema.NullOr(Schema.String)),

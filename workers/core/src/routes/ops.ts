@@ -20,7 +20,7 @@ import { validateRestorePoint, awaitRestart } from "../restore.ts";
 import { errorResponse, json, readJson, route, type Route } from "../http.ts";
 import { type PushRegistration, validateRegistration } from "../push.ts";
 import { storeExternalCredential } from "../transports.ts";
-import { authed, authedBody } from "./common.ts";
+import { authed, authedBody, requireUser } from "./common.ts";
 import { decodeAs } from "./decode.ts";
 
 // Push device registration (E23), external send-as credentials (E19), and operator recovery
@@ -123,7 +123,9 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
       PushSubscriptionRequest,
       ({ env, body: b }) =>
         Effect.gen(function* () {
-          const principal = yield* requireScope("read");
+          // A registration outlives the credential that made it, so only the account holder's own
+          // session (browser or signed-in app) registers — never agent/CLI tokens or support access.
+          const principal = yield* requireUser();
           const p256dh = b.p256dh ?? b.keys?.p256dh;
           const auth = b.auth ?? b.keys?.auth;
           const registration: PushRegistration = {
@@ -175,7 +177,7 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
     "/v1/push/subscriptions/:id",
     authed(({ env, params }) =>
       Effect.gen(function* () {
-        const principal = yield* requireScope("read");
+        const principal = yield* requireUser();
         const r = yield* Effect.promise(() =>
           env.DIRECTORY.prepare("DELETE FROM push_devices WHERE id = ? AND user_id = ?")
             .bind(params.id, principal.userId)

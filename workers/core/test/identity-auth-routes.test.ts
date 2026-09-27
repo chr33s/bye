@@ -618,6 +618,84 @@ describe("unauthenticated auth routes", () => {
     expect([bad.status, bad.body.error.code]).toEqual([401, "unauthenticated"]);
   });
 
+  it("[A03] session-issuing routes refuse cross-site and non-JSON posts (login CSRF)", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    const codes = (await call(h, ana, "POST", "/v1/security/recovery-codes", {})).body
+      .codes as Array<string>;
+    const recover = JSON.stringify({ address: "ana@bye.test", code: codes[0] });
+    const attempts: Array<Record<string, string>> = [
+      // A hostile page's auto-submitted text/plain form (no preflight).
+      { origin: "https://evil.example", "content-type": "text/plain" },
+      { origin: "https://evil.example", "content-type": "application/json" },
+      // Origin withheld by referrer policy: only Sec-Fetch-Site same-origin passes.
+      { "sec-fetch-site": "cross-site", "content-type": "application/json" },
+      {},
+      // Same origin, but not JSON.
+      { origin: h.env.APP_ORIGIN, "content-type": "text/plain" },
+      { origin: h.env.APP_ORIGIN, "content-type": "application/x-www-form-urlencoded" },
+    ];
+    for (const path of ["/auth/recover", "/auth/passkey/login", "/auth/passkey/register"]) {
+      for (const headers of attempts) {
+        const r = await handleFetch(
+          new Request(`${h.env.APP_ORIGIN}${path}`, { method: "POST", headers, body: recover }),
+          h.env,
+          ctx,
+        );
+        expect([path, headers, r.status]).toEqual([path, headers, 403]);
+        expect(r.headers.get("set-cookie")).toBeNull();
+      }
+    }
+    // The code was never spent: a same-origin JSON recovery (even without Origin) still works.
+    const ok = await handleFetch(
+      new Request(`${h.env.APP_ORIGIN}/auth/recover`, {
+        method: "POST",
+        headers: {
+          "sec-fetch-site": "same-origin",
+          "content-type": "application/json; charset=utf-8",
+        },
+        body: recover,
+      }),
+      h.env,
+      ctx,
+    );
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("set-cookie")).toMatch(/__Host-session=/);
+  });
+
+  it("[§10] consent form posts read a capped body: an oversized one is refused, not buffered", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    for (const path of ["/device", "/oauth/authorize"]) {
+      // 1 MiB offered in 1 KiB chunks; count how much of it the handler pulls.
+      let pulled = 0;
+      const chunk = new TextEncoder().encode("a".repeat(1024));
+      const body = new ReadableStream<Uint8Array>({
+        start: (c) => c.enqueue(new TextEncoder().encode("user_code=ABCD&decision=allow&pad=")),
+        pull: (c) => {
+          if (pulled >= 1024 * 1024) return c.close();
+          pulled += chunk.byteLength;
+          c.enqueue(chunk);
+        },
+      });
+      const r = await handleFetch(
+        new Request(`${h.env.APP_ORIGIN}${path}`, {
+          method: "POST",
+          headers: {
+            cookie: ana.cookie,
+            origin: h.env.APP_ORIGIN,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          // A stream has no content-length: only the reader's cap bounds it.
+          body,
+          duplex: "half",
+        } as RequestInit),
+        h.env,
+        ctx,
+      );
+      expect([path, r.status]).toEqual([path, 400]);
+      expect(pulled).toBeLessThan(64 * 1024);
+    }
+  });
+
   it("[A04] /auth/forwarding/confirm verifies the emailed token for that address only", async () => {
     const ana = await signup(h, "ana@bye.test");
     const token = "forwarding-token-123";

@@ -23,6 +23,19 @@ export interface InboundMessage {
 export const FORWARD_HOP_HEADER = "X-Bye-Loop";
 export const FORWARD_MAX_HOPS = 5;
 
+/**
+ * Hops already taken, from the hop header values we write (plain non-negative counters).
+ * `Headers.get` joins repeated headers with ", "; the sender controls the header block, so a
+ * negative or non-numeric value is ignored and the highest counter wins — a sender can raise the
+ * count but never reset or lower the one a previous forward of ours wrote.
+ */
+export const forwardHops = (headers: Headers | undefined): number =>
+  (headers?.get(FORWARD_HOP_HEADER) ?? "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter((v) => /^\d{1,6}$/.test(v))
+    .reduce((max, v) => Math.max(max, Number(v)), 0);
+
 export type IngressFault = "throw" | "r2" | "timeout";
 export const FAULT_TIMEOUT_MS = 60_000;
 
@@ -66,7 +79,7 @@ export const handleInbound = async (
     case "Forward": {
       // Post-closure forwarding entitlement (A04) to a verified destination. A hop counter stops
       // loops between forwarding services (e.g. the destination forwarding back to us).
-      const hops = Number.parseInt(message.headers?.get(FORWARD_HOP_HEADER) ?? "0", 10) || 0;
+      const hops = forwardHops(message.headers);
       if (hops >= FORWARD_MAX_HOPS) {
         message.setReject("554 5.4.6 forwarding loop detected");
         return { _tag: "Rejected", reason: "forward-loop" };

@@ -153,9 +153,17 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
   });
 
   it("[E23] sends with aes128gcm headers and classifies push-service responses", async () => {
-    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const calls: Array<{
+      url: string;
+      headers: Record<string, string>;
+      redirect?: string;
+      signal?: AbortSignal;
+    }> = [];
     const result = await sendWebPush(
-      async (url, init) => (calls.push({ url, headers: init.headers }), { status: 201 }),
+      async (url, init) => (
+        calls.push({ url, headers: init.headers, redirect: init.redirect, signal: init.signal }),
+        { status: 201 }
+      ),
       { endpoint: "https://push.example.net/x", p256dh: V.uaPublic, auth: V.auth },
       { title: "t" },
       {
@@ -171,6 +179,10 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
       urgency: "normal",
       topic: "threadthr1",
     });
+    // The endpoint is user-registered: redirects are never followed and the send is time-boxed.
+    expect(calls[0]!.redirect).toBe("manual");
+    expect(calls[0]!.signal).toBeInstanceOf(AbortSignal);
+    expect(classifyPushStatus(302)._tag).toBe("Rejected");
     expect(classifyPushStatus(410)._tag).toBe("Gone");
     expect(classifyPushStatus(404)._tag).toBe("Gone");
     expect(classifyPushStatus(429)._tag).toBe("Retry");

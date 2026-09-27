@@ -12,7 +12,13 @@ import {
   readMailboxView,
 } from "@bye/application";
 import { LocalMailboxRepositoryLive } from "@bye/platform-cloudflare";
-import { makeTestMailbox, summaryFixture } from "@bye/testing";
+import {
+  makeTestMailbox,
+  MemoryDurableStorage,
+  openTestMailbox,
+  summaryFixture,
+  TestClock,
+} from "@bye/testing";
 
 const principal = (over: Partial<PrincipalShape>): PrincipalShape => ({
   userId: "usr_a",
@@ -225,5 +231,63 @@ describe("mailbox use cases (Effect v4)", () => {
     expect(
       await tagOf({ _tag: "PutRule", conditions: {}, actions: { redeliverTo: b.mailboxId } }),
     ).toBe("Forbidden");
+  });
+
+  it("[P01] publish-by-mail to the World address requires the publish scope", async () => {
+    const w = openTestMailbox(
+      new MemoryDurableStorage(),
+      "mbx_world0000000000000000",
+      new TestClock(),
+      "world@bye.test",
+    );
+    w.ctx.cmd("setup-identity", "AddIdentity", () =>
+      w.identities.addIdentity({ address: "me@bye.test", name: "Me", kind: "hosted" }),
+    );
+    stores.set("mbx_world0000000000000000", w);
+    const draftTo = (to: string) =>
+      w.drafts.createDraft({
+        content: {
+          to: [{ name: undefined, address: to }],
+          cc: [],
+          bcc: [],
+          subject: "Post",
+          text: "hello world",
+          attachments: [],
+        },
+      }).draftId;
+    const send = (scopes: PrincipalShape["scopes"], draftId: string, commandId: string) =>
+      Effect.runPromise(
+        Effect.result(
+          executeMailboxCommand("mbx_world0000000000000000", {
+            _tag: "Send",
+            commandId,
+            draftId,
+            expectedRevision: 1,
+            // A client-supplied grant is stripped at decode.
+            publishAllowed: true,
+          }).pipe(
+            Effect.provide(
+              as(principal({ kind: "agent", scopes, mailboxIds: ["mbx_world0000000000000000"] })),
+            ),
+          ),
+        ),
+      );
+    const agent = await send(["read", "draft", "send"], draftTo("world@bye.test"), "p1");
+    expect(Result.isFailure(agent) && agent.failure).toMatchObject({
+      _tag: "MailboxRejected",
+      code: "forbidden",
+    });
+    expect(w.sends.jobs().filter((j) => j.trafficClass === "publish")).toHaveLength(0);
+    // Ordinary mail from the same credential is unaffected.
+    expect(Result.isSuccess(await send(["read", "draft", "send"], draftTo("x@y.test"), "p2"))).toBe(
+      true,
+    );
+    const publisher = await send(
+      ["read", "draft", "send", "publish"],
+      draftTo("world@bye.test"),
+      "p3",
+    );
+    expect(Result.isSuccess(publisher)).toBe(true);
+    expect(w.sends.jobs().filter((j) => j.trafficClass === "publish")).toHaveLength(1);
   });
 });

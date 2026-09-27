@@ -6,11 +6,18 @@ import {
   WorldPostPublishing,
   WorldPublishing,
 } from "@bye/application";
-import { cloudflareApi, isRejection, reject } from "@bye/platform-cloudflare";
+import {
+  cloudflareApi,
+  DEFAULT_SENDING_LIMITS,
+  isRejection,
+  reject,
+  SendingPolicy,
+} from "@bye/platform-cloudflare";
 import { Effect, Layer } from "effect";
-import { escapeHtml, publishedKey } from "@bye/domain";
+import { escapeHtml, normalizeAddress, publishedKey } from "@bye/domain";
 import { settle, settleOr, world } from "./authorities.ts";
 import type { CoreEnv } from "./env.ts";
+import { kernelClock } from "./durable-host.ts";
 import { describeError } from "./http.ts";
 import { publicOrigin, serviceDomain } from "./origins.ts";
 
@@ -19,6 +26,7 @@ import { publicOrigin, serviceDomain } from "./origins.ts";
 // post object. Author HTML is sanitized again before it becomes public.
 
 interface PostView {
+  readonly id: string;
   readonly slug: string;
   readonly status: string;
   readonly title: string;
@@ -115,12 +123,63 @@ const mediaHtml = (handle: string, post: PostView): string =>
     )
     .join("");
 
-/** Rewrite the author's public site; returns the public URLs whose caches must be purged. */
+/** Listing bound per slug when pruning public media (1000 keys per page). */
+const MEDIA_PRUNE_MAX_PAGES = 10;
+
+/** Every public media copy of `slug`, all revisions (the `worldMediaKey` layout: `<slug>-r<n>-<name>`). */
+const slugMediaKeys = async (
+  env: CoreEnv,
+  handle: string,
+  slug: string,
+): Promise<Array<string>> => {
+  const prefix = publishedKey.media(handle, `${slug.slice(0, 60)}-r`);
+  const keys: Array<string> = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MEDIA_PRUNE_MAX_PAGES; page++) {
+    const listed = await env.PUBLISHED.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
+    for (const o of listed.objects) if (/^\d+-/.test(o.key.slice(prefix.length))) keys.push(o.key);
+    if (!listed.truncated) break;
+    cursor = listed.cursor;
+  }
+  return keys;
+};
+
+/**
+ * Delete public media copies of `slugs` that no published revision references: an unpublished
+ * post's media, and a republished post's superseded revisions. The live set is read AFTER listing,
+ * so media of a publish that committed meanwhile (copied only after its commit) is kept. Returns
+ * the deleted keys (their public URLs must be purged too).
+ */
+const pruneMedia = async (
+  env: CoreEnv,
+  handle: string,
+  slugs: ReadonlyArray<string>,
+  keep: ReadonlyArray<string> = [],
+): Promise<ReadonlyArray<string>> => {
+  if (slugs.length === 0) return [];
+  const candidates = new Set<string>();
+  for (const slug of new Set(slugs))
+    for (const key of await slugMediaKeys(env, handle, slug)) candidates.add(key);
+  if (candidates.size === 0) return [];
+  const live = new Set<string>(keep);
+  for (const p of (await settle(world(env, handle).publicPosts())) as ReadonlyArray<PostView>)
+    for (const m of p.media ?? []) live.add(m.publicKey);
+  const doomed = [...candidates].filter((k) => !live.has(k));
+  for (let i = 0; i < doomed.length; i += 1000)
+    await env.PUBLISHED.delete(doomed.slice(i, i + 1000));
+  return doomed;
+};
+
+/**
+ * Rewrite the author's public site; returns the public URLs whose caches must be purged.
+ * `published` names the post version just published: its superseded revisions' media is removed.
+ */
 export const writeSite = async (
   env: CoreEnv,
   handle: string,
   publicOrigin: string,
   removedSlugs: ReadonlyArray<string> = [],
+  published?: PublishPlan,
 ): Promise<ReadonlyArray<string>> => {
   const stub = world(env, handle);
   const posts: ReadonlyArray<PostView> = await settle(stub.publicPosts());
@@ -145,6 +204,19 @@ export const writeSite = async (
     ...removedSlugs.filter((slug) => !liveSlugs.has(slug)),
   ]);
   for (const slug of gone) await env.PUBLISHED.delete(publishedKey.post(handle, slug));
+  // Media copies follow their post: none survive unpublish, and a new revision replaces the old.
+  const republished = published ? live.find((p) => p.id === published.postId) : undefined;
+  const prunedMedia = [
+    ...(await pruneMedia(env, handle, [...gone])),
+    ...(republished
+      ? await pruneMedia(
+          env,
+          handle,
+          [republished.slug],
+          published!.copies.map((c) => c.to),
+        )
+      : []),
+  ];
   const index = live
     .map((p) => `<li><a href="/@${handle}/${p.slug}">${escapeHtml(p.title)}</a></li>`)
     .join("");
@@ -164,6 +236,10 @@ export const writeSite = async (
     `${publicOrigin}/@${handle}`,
     `${publicOrigin}/@${handle}/feed.xml`,
     ...slugs.map((slug) => `${publicOrigin}/@${handle}/${slug}`),
+    ...prunedMedia.map(
+      (key) =>
+        `${publicOrigin}/@${handle}/media/${key.slice(publishedKey.media(handle, "").length)}`,
+    ),
   ];
 };
 
@@ -184,8 +260,9 @@ export const refreshSite = async (
   env: CoreEnv,
   handle: string,
   removedSlugs: ReadonlyArray<string> = [],
+  published?: PublishPlan,
 ): Promise<{ readonly purged: boolean }> => {
-  const urls = await writeSite(env, handle, publicOrigin(env), removedSlugs);
+  const urls = await writeSite(env, handle, publicOrigin(env), removedSlugs, published);
   return { purged: await purgePublic(env, urls).catch(() => false) };
 };
 
@@ -269,7 +346,7 @@ export const renderPublished = async (
   plan: PublishPlan,
 ): Promise<{ readonly purged: boolean }> => {
   await copyPublicMedia(env, plan.copies);
-  const result = await refreshSite(env, handle);
+  const result = await refreshSite(env, handle, [], plan);
   await env.PARTS.put(siteMarkerKey(handle, plan.postId), String(plan.revision));
   return result;
 };
@@ -404,10 +481,79 @@ export const worldPublishingLayer = (env: CoreEnv) =>
     }),
   );
 
-/** Transactional system message (verification links). Never used for subscription traffic. */
+/** Why a system message was not sent. Callers treat it like any failed send (never retried). */
+export class SystemMailRefused extends Error {
+  constructor(readonly reason: "suppressed" | "suspended" | "all-suppressed" | "budget") {
+    super(`system mail refused: ${reason}`);
+    this.name = "SystemMailRefused";
+  }
+}
+
+/**
+ * The platform sending controls for system mail (§10). The service-domain identities
+ * (`no-reply@`, `world@`) are shared by every user, so their own budget is the domain's; the
+ * per-user ramp, suspensions, domain and platform budgets apply unchanged.
+ */
+const systemMailPolicy = (env: CoreEnv) =>
+  new SendingPolicy(env.DIRECTORY, kernelClock, {
+    ...DEFAULT_SENDING_LIMITS,
+    identityPerDay: DEFAULT_SENDING_LIMITS.domainPerDay,
+  });
+
+/**
+ * Send one system message through the transactional binding. A globally suppressed recipient
+ * (hard bounce, complaint, unsubscribe) is never mailed. When a user triggered the message
+ * (`actorUserId`: invitations, imports, forwarding confirmations — recipients they choose), it is
+ * also reserved against that user's sending budget and refused while they are suspended, exactly
+ * like their own outbound mail.
+ */
+const deliverSystemMail = async (
+  env: CoreEnv,
+  from: string,
+  to: string,
+  raw: string,
+  actorUserId: string | undefined,
+): Promise<void> => {
+  const policy = systemMailPolicy(env);
+  const send = () => env.TRANSACTIONAL_EMAIL.send(new EmailMessage(from, to, raw));
+  if (actorUserId === undefined) {
+    const suppressed = await env.DIRECTORY.withSession("first-primary")
+      .prepare(
+        "SELECT 1 AS s FROM suppressions WHERE address = ? AND (expires_at IS NULL OR expires_at > ?)",
+      )
+      .bind(normalizeAddress(to), Date.now())
+      .first();
+    if (suppressed !== null) throw new SystemMailRefused("suppressed");
+    if (await policy.isSuspended("identity", normalizeAddress(from)))
+      throw new SystemMailRefused("suspended");
+    await send();
+    return;
+  }
+  const verdict = await policy.reserve({ userId: actorUserId, identity: from, recipients: [to] });
+  if (!verdict.allowed) throw new SystemMailRefused(verdict.reason);
+  try {
+    await send();
+  } catch (error) {
+    await policy
+      .release({ userId: actorUserId, identity: from, recipients: 1 })
+      .catch(() => undefined);
+    throw error;
+  }
+};
+
+/** Options for user-triggered system mail: the user it is counted against (see `deliverSystemMail`). */
+export interface SystemMailOptions {
+  readonly actorUserId?: string;
+}
+
+/**
+ * Transactional system message (verification links, invitations). Never used for subscription
+ * traffic. Rejects with `SystemMailRefused` when the sending controls refuse it.
+ */
 export const sendSystemEmail = async (
   env: CoreEnv,
   input: { readonly to: string; readonly subject: string; readonly text: string },
+  options: SystemMailOptions = {},
 ): Promise<void> => {
   const domain = serviceDomain(env);
   const from = `no-reply@${domain}`;
@@ -420,20 +566,27 @@ export const sendSystemEmail = async (
     date: Date.now(),
     messageId: `sys-${crypto.randomUUID()}@${domain}`,
   });
-  await env.TRANSACTIONAL_EMAIL.send(
-    new EmailMessage(from, input.to, new TextDecoder().decode(built.bytes)),
+  await deliverSystemMail(
+    env,
+    from,
+    input.to,
+    new TextDecoder().decode(built.bytes),
+    options.actorUserId,
   );
 };
 
 /**
  * Double opt-in confirmation (P02). A single-recipient, user-requested message is transactional
- * traffic; newsletter fanout itself still requires the approved subscription transport.
+ * traffic; newsletter fanout itself still requires the approved subscription transport. An
+ * author's CSV import passes `actorUserId`, so the confirmations count against the author's
+ * sending budget; the anonymous form (rate-limited per IP and address) passes none.
  */
 export const sendSubscriptionConfirmation = async (
   env: CoreEnv,
   handle: string,
   address: string,
   token: string,
+  options: SystemMailOptions = {},
 ): Promise<void> => {
   const origin = publicOrigin(env);
   const domain = serviceDomain(env);
@@ -448,7 +601,11 @@ export const sendSubscriptionConfirmation = async (
     date: Date.now(),
     messageId: `confirm-${crypto.randomUUID()}@${domain}`,
   });
-  await env.TRANSACTIONAL_EMAIL.send(
-    new EmailMessage(from, address, new TextDecoder().decode(built.bytes)),
+  await deliverSystemMail(
+    env,
+    from,
+    address,
+    new TextDecoder().decode(built.bytes),
+    options.actorUserId,
   );
 };

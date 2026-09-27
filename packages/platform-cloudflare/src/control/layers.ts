@@ -125,6 +125,7 @@ const authenticateWith = (auth: ControlAuth) => (token: string) =>
       principal,
       credentialId: principal.sessionId,
       steppedUpAt: cred.kind === "session" ? cred.session.step_up_at : null,
+      interactive: cred.kind === "session",
     };
   }).pipe(
     Effect.catch((e) =>

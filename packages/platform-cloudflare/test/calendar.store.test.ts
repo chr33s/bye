@@ -948,7 +948,10 @@ describe("CalendarStore planning", () => {
     const first = "cal/cal_space1/photo/0123456789abcdef0001";
     const second = "cal/cal_space1/photo/0123456789abcdef0002";
     store.setDayDecoration({ commandId: cmd(), actor: owner, date: day, photoKey: first });
-    store.setDayDecoration({ commandId: cmd(), actor: owner, date: day, photoKey: second });
+    // Replacing a photo releases the prior one (no other day shows it) for deletion.
+    expect(
+      store.setDayDecoration({ commandId: cmd(), actor: owner, date: day, photoKey: second }),
+    ).toEqual({ applied: true, released: first });
     // The scanner rejects the FIRST photo after it was replaced: the day keeps the second.
     expect(
       store.setDayDecoration({
@@ -968,7 +971,7 @@ describe("CalendarStore planning", () => {
         photoKey: null,
         expectedPhotoKey: second,
       }),
-    ).toEqual({ applied: true });
+    ).toEqual({ applied: true, released: second });
     expect(store.dayContext(day).photoKey).toBeUndefined();
   });
 

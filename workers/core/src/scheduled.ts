@@ -10,7 +10,7 @@ import {
 import { sweepBlobGc } from "./blobgc.ts";
 import { kernelClock } from "./durable-host.ts";
 import { type CoreEnv, INGRESS_JOURNAL_PARTITIONS, journalPartition } from "./env.ts";
-import { replayUnverifiedTombstones } from "./erasure.ts";
+import { mailboxErased, replayUnverifiedTombstones } from "./erasure.ts";
 import { metric, storageLevel } from "./metrics.ts";
 import { MAILBOX_METADATA_BUDGET_BYTES } from "./objects/mailbox.ts";
 import { reconcileNewsletters } from "./newsletter.ts";
@@ -213,7 +213,8 @@ export const reportMetadataHealth = async (
 /**
  * Poison MIME (§6 row 7): after the replay budget is exhausted the original is preserved and a
  * quarantined placeholder delivery is committed so the user can see (and recover) it, instead of
- * the message silently disappearing.
+ * the message silently disappearing. Returns false (nothing written) for an erased mailbox: a
+ * journal receipt must never recreate content in it (§12).
  */
 export const quarantineUnprocessable = async (
   env: CoreEnv,
@@ -226,9 +227,11 @@ export const quarantineUnprocessable = async (
     readonly rawSize: number;
     readonly receivedAt: number;
   },
-): Promise<void> => {
+): Promise<boolean> => {
+  if (await mailboxErased(env, r.mailboxId)) return false;
   const from = r.envelopeFrom || "mailer-daemon@invalid";
-  await mailbox(env, r.mailboxId).commitDelivery({
+  // Forced by Cloudflare's RPC type mapping (see consumers.ts commitParsed): the full envelope.
+  const result = (await mailbox(env, r.mailboxId).commitDelivery({
     ingestionId: r.ingestionId,
     recipient: r.recipient,
     messageKey: r.objectKey,
@@ -254,8 +257,10 @@ export const quarantineUnprocessable = async (
     // Quarantine (not just Spam): the unparsed original must never render or release attachments.
     safety: { _tag: "Malware", reason: "unprocessable message quarantined" },
     receivedAt: r.receivedAt,
-  });
+  })) as unknown as { readonly ok: boolean; readonly code?: string };
+  if (result.ok === false && result.code === "gone") return false;
   metric("ingest.quarantined", 1);
+  return true;
 };
 
 export const reconcileIngress = async (env: CoreEnv): Promise<number> => {
@@ -266,8 +271,9 @@ export const reconcileIngress = async (env: CoreEnv): Promise<number> => {
     for (const r of await journal.pendingReplay(10 * 60_000, 100)) {
       if (IngressJournal.exhausted(r)) {
         try {
-          await quarantineUnprocessable(env, r);
-          await journal.markCommitted(r.ingestionId);
+          // An erased mailbox's receipt is rejected (and later pruned): nothing is kept for it.
+          if (await quarantineUnprocessable(env, r)) await journal.markCommitted(r.ingestionId);
+          else await journal.markRejected(r.ingestionId);
         } catch {
           // Never `rejected`: that would let the prune sweep forget an SMTP-acknowledged message.
           // `quarantine-failed` rows are retried at QUARANTINE_RETRY_MS and never pruned.

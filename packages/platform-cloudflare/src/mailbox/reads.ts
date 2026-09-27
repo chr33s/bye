@@ -2,6 +2,7 @@ import { SEND_JOB_STATES, type SendJobState } from "@bye/domain";
 import { type RpcResult, toRpcSync } from "../durable/rpc.ts";
 import { reject } from "./context.ts";
 import type { MailboxStore } from "./store.ts";
+import type { MailboxSendJob } from "./types.ts";
 
 // Typed read queries served by MailboxDO over one RPC method (§8 API sketch). Reads never mutate
 // authoritative state except `recentSearches` bookkeeping, which is explicit in its own query.
@@ -52,6 +53,13 @@ export type MailboxReadQuery =
   | { readonly _tag: "Bundle"; readonly bundleKey: string }
   | { readonly _tag: "Quota" };
 
+/**
+ * Transactional system jobs carry verification codes for a third party: the principal sees that
+ * they exist and how they fared, never a handle on their draft or rendered content.
+ */
+const visibleJob = (j: MailboxSendJob): MailboxSendJob =>
+  j.trafficClass === "transactional" ? { ...j, draftId: "", contentKey: "" } : j;
+
 const isSendJobState = (state: string): state is SendJobState =>
   (SEND_JOB_STATES as ReadonlyArray<string>).includes(state);
 
@@ -68,12 +76,14 @@ export const applyMailboxRead = (store: MailboxStore, q: MailboxReadQuery): unkn
       a.recordSearch(q.query);
       return null;
     case "SendJob":
-      return store.sends.job(q.sendJobId) ?? reject("not_found", "send job");
+      return visibleJob(store.sends.job(q.sendJobId) ?? reject("not_found", "send job"));
     case "SendJobs":
       // An unknown state filter matches nothing rather than everything.
       return {
         items:
-          q.state === undefined || isSendJobState(q.state) ? store.sends.jobs(q.state, 200) : [],
+          q.state === undefined || isSendJobState(q.state)
+            ? store.sends.jobs(q.state, 200).map(visibleJob)
+            : [],
       };
     case "FocusQueue":
       return { items: store.views.focusQueue() };

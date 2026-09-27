@@ -4,8 +4,11 @@ import {
   checkCsrf,
   concatBytes,
   ControlAuth,
+  ControlDeviceAuth,
   ControlDirectory,
   credentialKindOf,
+  DeviceAuthError,
+  pkceChallenge,
   type CborValue,
   cborEncode,
   CHALLENGE_TTL_MS,
@@ -311,6 +314,66 @@ describe("authentication", () => {
       .first<{ revoked_at: number | null; revoke_reason: string }>();
     expect(device).toMatchObject({ revoke_reason: "recovery" });
     expect(device?.revoked_at).not.toBeNull();
+  });
+
+  it("[A03] recovery also spends in-flight OAuth/device-code grants and disables push devices", async () => {
+    const { auth, account, clock } = await setup();
+    const codes = await auth.generateRecoveryCodes(account.userId);
+    const devices = new ControlDeviceAuth(auth.db, clock);
+    // The attacker (holding a stolen session) approves a device code and gets an OAuth code,
+    // redeeming neither before the owner recovers.
+    const started = await devices.startDeviceAuthorization({
+      clientId: "bye-cli",
+      deviceName: "x",
+    });
+    expect(await devices.decideUserCode(account.userId, started.user_code, true)).toBe(true);
+    const verifier = "v".repeat(43);
+    const params = {
+      responseType: "code",
+      clientId: "bye-desktop",
+      redirectUri: "http://127.0.0.1:49152/oauth/callback",
+      codeChallenge: await pkceChallenge(verifier),
+      codeChallengeMethod: "S256",
+      state: "s".repeat(32),
+      deviceName: "Evil Mac",
+    };
+    const oauthCode = await devices.issueCode(account.userId, params);
+    await auth.db
+      .prepare(
+        "INSERT INTO push_devices (id, user_id, kind, endpoint, label, enabled, created_at, failures) VALUES ('pd_1', ?, 'fcm', 'attacker-token-0123456789', '', 1, ?, 0)",
+      )
+      .bind(account.userId, clock.now())
+      .run();
+    await auth.recoverWithCode("alice@bye.test", codes[0]!, "new-phone");
+    const errorCode = (p: Promise<unknown>) =>
+      p.then(
+        () => "ok",
+        (e: unknown) => (e instanceof DeviceAuthError ? e.code : String(e)),
+      );
+    expect(
+      await errorCode(
+        devices.pollDeviceCode({ deviceCode: started.device_code, clientId: "bye-cli" }),
+      ),
+    ).toBe("access_denied");
+    expect(
+      await errorCode(
+        devices.exchangeCode({
+          code: oauthCode,
+          codeVerifier: verifier,
+          redirectUri: params.redirectUri,
+          clientId: params.clientId,
+        }),
+      ),
+    ).toBe("invalid_grant");
+    expect(
+      await auth.db
+        .prepare("SELECT COUNT(*) AS n FROM device_sessions WHERE user_id = ?")
+        .bind(account.userId)
+        .first(),
+    ).toEqual({ n: 0 });
+    expect(
+      await auth.db.prepare("SELECT enabled FROM push_devices WHERE id = 'pd_1'").first(),
+    ).toEqual({ enabled: 0 });
   });
 
   it("[A03] rotation revokes the old token; sessions list by device; stepped-up issue stamps now; revocation ends a session", async () => {

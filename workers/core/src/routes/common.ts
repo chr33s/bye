@@ -304,6 +304,18 @@ export const verifySignupToken = async (
   return fields !== null && fields[0] === userId;
 };
 
+/**
+ * Login-CSRF defense for the unauthenticated routes that issue a session cookie (passkey sign-in,
+ * signup registration, recovery): the same origin rule as cookie-authenticated writes
+ * (`checkCsrf`), and a JSON body, which a cross-site form can't send without a CORS preflight.
+ * Otherwise a hostile page could plant a session for the attacker's own account in the victim's
+ * browser.
+ */
+export const sameOriginJson = (request: Request, env: CoreEnv): boolean =>
+  checkCsrf(request.method, request.headers, env.APP_ORIGIN) &&
+  (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() ===
+    "application/json";
+
 export const currentSession = async (request: Request, env: CoreEnv) => {
   const token = readCookie(request.headers.get("cookie"), SESSION_COOKIE);
   if (!token || !checkCsrf(request.method, request.headers, env.APP_ORIGIN)) return null;

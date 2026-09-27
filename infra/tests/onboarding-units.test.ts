@@ -12,7 +12,7 @@ import { accessVerifier } from "../onboarding/access.ts";
 import { runHealthChecks, withTimeout } from "../onboarding/health.ts";
 import type { Fetch } from "../onboarding/oauth.ts";
 import { releaseMigrations, resolveRelease } from "../onboarding/release.ts";
-import { handler, signSession } from "../onboarding/server.ts";
+import { handler, isLoopbackHost, localOperatorAuth, signSession } from "../onboarding/server.ts";
 import { OnboardingError, type OnboardingService } from "../onboarding/service.ts";
 
 const ORIGIN = "https://onboard.test";
@@ -44,7 +44,7 @@ describe("onboarding server", () => {
     const req = Object.assign(Readable.from(body ? [Buffer.from(body)] : []), {
       method,
       url: path,
-      headers,
+      headers: { host: "onboard.test", ...headers },
     }) as unknown as IncomingMessage;
     const out = { status: 0, headers: {} as Record<string, string>, body: "" };
     const res = {
@@ -188,6 +188,121 @@ describe("onboarding server", () => {
     expect(internal.body).not.toContain("secret-bearing");
     expect(log.mock.calls.flat().join(" ")).not.toContain("secret-bearing");
     log.mockRestore();
+  });
+});
+
+describe("onboarding server: host check and local-operator mode", () => {
+  const service = {
+    status: vi.fn(async (op: string) => ({ operator: op })),
+    recoveryKit: vi.fn(async () => ({ kit: "secrets" })),
+  };
+  const local = localOperatorAuth();
+  const make = (withLocal = true) =>
+    handler({
+      service: service as unknown as OnboardingService,
+      origin: ORIGIN,
+      operator: () => "local-operator",
+      sessionSecret: SECRET,
+      ...(withLocal ? { local } : {}),
+    });
+  const run = async (
+    h: ReturnType<typeof handler>,
+    method: string,
+    path: string,
+    headers: Record<string, string> = {},
+    body = "",
+  ) => {
+    const req = Object.assign(Readable.from(body ? [Buffer.from(body)] : []), {
+      method,
+      url: path,
+      headers: { host: "onboard.test", ...headers },
+    }) as unknown as IncomingMessage;
+    const out = { status: 0, headers: {} as Record<string, string>, body: "" };
+    const res = {
+      writeHead: (status: number, h2: Record<string, string>) => {
+        out.status = status;
+        out.headers = h2;
+      },
+      end: (chunk?: string) => {
+        out.body = chunk ?? "";
+      },
+    } as unknown as ServerResponse;
+    await h(req, res);
+    return out;
+  };
+  const jsonPost = { origin: ORIGIN, "content-type": "application/json" };
+
+  it("refuses a Host other than the configured origin's (DNS rebinding), in every mode", async () => {
+    for (const h of [make(false), make(true)]) {
+      const rebound = await run(h, "GET", "/api/status", {
+        host: "attacker.test",
+        authorization: `Bearer ${local.token}`,
+      });
+      expect(rebound.status).toBe(421);
+      expect((await run(h, "GET", "/api/status", { host: "" })).status).toBe(421);
+    }
+    expect(service.status).not.toHaveBeenCalled();
+  });
+
+  it("local mode: API routes need the per-process bearer token or the login session", async () => {
+    const h = make();
+    // A peer that forges Origin and Content-Type but holds no token gets nothing.
+    const forged = await run(h, "POST", "/api/recovery-kit", jsonPost, "{}");
+    expect(forged.status).toBe(401);
+    expect((await run(h, "GET", "/api/status")).status).toBe(401);
+    expect(
+      (await run(h, "GET", "/api/status", { authorization: `Bearer ${"x".repeat(43)}` })).status,
+    ).toBe(401);
+    expect((await run(h, "GET", "/oauth/callback?state=x&code=y")).status).toBe(401);
+    expect(service.recoveryKit).not.toHaveBeenCalled();
+    // A signed cookie this server minted (without the login URL) is not authentication.
+    const page = await run(h, "GET", "/");
+    expect(page.status).toBe(200);
+    const minted = page.headers["set-cookie"]!.split(";")[0]!;
+    expect((await run(h, "GET", "/api/status", { cookie: minted })).status).toBe(401);
+
+    const bearer = await run(
+      h,
+      "POST",
+      "/api/recovery-kit",
+      {
+        ...jsonPost,
+        authorization: `Bearer ${local.token}`,
+      },
+      "{}",
+    );
+    expect(bearer.status).toBe(200);
+    expect(service.recoveryKit).toHaveBeenCalledWith("local-operator");
+  });
+
+  it("local mode: the login URL works once and opens a fresh authenticated session", async () => {
+    const h = make();
+    expect((await run(h, "GET", "/login?code=wrong")).status).toBe(401);
+    const planted = `__Host-bye-onboarding=${SIGNED}`;
+    const login = await run(h, "GET", `/login?code=${local.loginCode}`, { cookie: planted });
+    expect(login.status).toBe(303);
+    const cookie = login.headers["set-cookie"]!.split(";")[0]!;
+    expect(cookie).not.toBe(planted);
+    const ok = await run(h, "GET", "/api/status", { cookie });
+    expect(ok.status).toBe(200);
+    expect(JSON.parse(ok.body)).toEqual({ operator: "local-operator" });
+    // The planted session was not promoted, and the link is spent.
+    expect((await run(h, "GET", "/api/status", { cookie: planted })).status).toBe(401);
+    expect((await run(h, "GET", `/login?code=${local.loginCode}`)).status).toBe(401);
+  });
+
+  it("local mode binds loopback only", () => {
+    for (const host of ["127.0.0.1", "localhost", "::1", "[::1]", "127.1.2.3"])
+      expect(isLoopbackHost(host)).toBe(true);
+    for (const host of [
+      "0.0.0.0",
+      "::",
+      "192.168.1.5",
+      "10.0.0.1",
+      "example.com",
+      "127.0.0.1.nip.io",
+    ])
+      expect(isLoopbackHost(host)).toBe(false);
   });
 });
 

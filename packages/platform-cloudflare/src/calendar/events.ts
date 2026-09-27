@@ -28,6 +28,7 @@ import {
   calTimeProblem,
   calZonedToInstant,
 } from "@bye/calendar-engine";
+import { MAX_CALENDAR_ATTENDEES } from "@bye/contracts";
 import { CalendarBase } from "./base.ts";
 import {
   calendarError,
@@ -369,6 +370,7 @@ export abstract class CalendarEvents extends CalendarBase {
       const attendees = (input.attendees ?? []).filter(
         (a) => !this.self.includes(calNormAddress(a.address)),
       );
+      this.checkInvitees(input.actor, attendees.length);
       const organizer =
         attendees.length > 0
           ? { address: calNormAddress(this.config.selfAddresses[0]) }
@@ -464,6 +466,24 @@ export abstract class CalendarEvents extends CalendarBase {
         c.data?.location !== undefined ||
         c.data?.summary !== undefined ||
         c.attendees !== undefined;
+      if (!this.isOwner(input.actor)) {
+        // Outbound iTIP is mail from the owner's address, so only the owner may invite, re-invite
+        // or cancel: a write grantee can't change who is invited, nor the shared fields of an
+        // event the owner organizes with invitees (either would mail those invitees).
+        const inviteesChanged =
+          removed.length > 0 ||
+          attendees.some((a) => !current.attendees.some((x) => x.address === a.address));
+        if (inviteesChanged)
+          throw calendarError("forbidden", "only the calendar owner can invite attendees");
+        if (
+          current.weAreOrganizer &&
+          current.attendees.length > 0 &&
+          (significant || input.scope === "future")
+        )
+          throw calendarError("forbidden", "only the calendar owner can change an invitation");
+      }
+      if (attendees.length > MAX_CALENDAR_ATTENDEES)
+        throw calendarError("bad_request", `at most ${MAX_CALENDAR_ATTENDEES} attendees`);
       const organizer = current.weAreOrganizer
         ? (current.organizer ?? { address: calNormAddress(this.config.selfAddresses[0]) })
         : current.organizer;
@@ -596,6 +616,9 @@ export abstract class CalendarEvents extends CalendarBase {
       this.writableCalendar(row.calendar_id);
       const current = this.toRecord(row);
       const organizerView = current.weAreOrganizer;
+      // Deleting an invitation the owner organizes mails a CANCEL from the owner's address.
+      if (organizerView && current.attendees.length > 0 && !this.isOwner(input.actor))
+        throw calendarError("forbidden", "only the calendar owner can cancel an invitation");
       const bumped = organizerView ? current.sequence + 1 : current.sequence;
       if (input.scope === "series" || !current.series.rule) {
         this.removeEventRow(current.id);
@@ -642,6 +665,15 @@ export abstract class CalendarEvents extends CalendarBase {
         });
       return { deleted: true };
     });
+  }
+
+  /** Invitees make the owner's address send mail: owner-only, and bounded. */
+  private checkInvitees(actor: string, count: number): void {
+    if (count === 0) return;
+    if (!this.isOwner(actor))
+      throw calendarError("forbidden", "only the calendar owner can invite attendees");
+    if (count > MAX_CALENDAR_ATTENDEES)
+      throw calendarError("bad_request", `at most ${MAX_CALENDAR_ATTENDEES} attendees`);
   }
 
   private requireKey(occurrenceKey: string | undefined): string {

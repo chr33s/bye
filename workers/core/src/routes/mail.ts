@@ -35,7 +35,7 @@ import { call, mailbox } from "../authorities.ts";
 import type { CoreEnv } from "../env.ts";
 import { errorResponse, type Params, route, type Route } from "../http.ts";
 import { downloadToken, previewToken, renderToken } from "../render.ts";
-import { authed, authedBody } from "./common.ts";
+import { authed, authedBody, readTextCapped } from "./common.ts";
 
 // ---------------------------------------------------------------------------- helpers
 
@@ -553,8 +553,11 @@ export const mailRoutes: ReadonlyArray<Route<CoreEnv>> = [
               code: "bad_request",
               message: "Idempotency-Key header required",
             });
-          const text = yield* Effect.promise(() => request.text());
-          if (text.length > CONTACT_IMPORT_MAX_BYTES)
+          // Streaming cap: an oversized (or unannounced chunked) upload is cancelled, never buffered.
+          const text = yield* Effect.promise(() =>
+            readTextCapped(request, CONTACT_IMPORT_MAX_BYTES),
+          );
+          if (text === null)
             return yield* new ApiError({
               code: "payload_too_large",
               message: "vCard file too large",

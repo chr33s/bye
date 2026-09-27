@@ -74,6 +74,8 @@ export interface SendOptions {
   readonly individually?: boolean;
   readonly limits?: { readonly maxBytes: number; readonly maxRecipients: number };
   readonly trafficClass?: TrafficClass;
+  /** False when the sending principal lacks the "publish" scope (P01); omitted for internal callers. */
+  readonly publishAllowed?: boolean;
 }
 
 export class MailboxSends {
@@ -132,6 +134,8 @@ export class MailboxSends {
     const addressed = [...c.to, ...c.cc, ...c.bcc];
     const allRecipients = addressed.map((a) => normalizeAddress(a.address));
     const publishing = publishAddress !== null && allRecipients.includes(publishAddress);
+    if (publishing && options.publishAllowed === false)
+      reject("forbidden", "missing scope publish");
     const envelope = [...new Set(allRecipients.filter((r) => r !== publishAddress))];
     if (envelope.length === 0 && !publishing) reject("bad_request", "no recipients");
     // Contact-group expansion happens after wire validation, so the ceiling is re-checked here.
@@ -489,7 +493,10 @@ export class MailboxSends {
         sendJobId,
       );
       this.drafts.settleDraft(job.draftId);
-      if (job.trafficClass !== "forwarding") this.recordOutgoing(job, receipt.wireMessageId);
+      // Transactional system mail (verification codes) never becomes a readable outgoing
+      // delivery or snippet in the requester's threads, nor approves its recipient as a sender.
+      if (job.trafficClass !== "forwarding" && job.trafficClass !== "transactional")
+        this.recordOutgoing(job, receipt.wireMessageId);
       this.ctx.change("send", "accepted", { sendJobId });
     });
   }

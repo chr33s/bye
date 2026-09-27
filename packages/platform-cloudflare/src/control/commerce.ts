@@ -174,6 +174,25 @@ const priceFor = (plan: PlanDefinition, interval: PlanInterval, seats: number): 
   (interval === "monthly" ? plan.monthlyCents : plan.annualCents) *
   (plan.perSeat ? Math.max(1, seats) : 1);
 
+/**
+ * A plan must be bought for an organization of its own kind, and only per-seat plans are priced
+ * per seat: otherwise a flat plan could be checked out with many seats (and a domain org could
+ * buy a personal plan), and the processor event would grant seats that were never priced.
+ */
+const planSeatsFor = (
+  plan: PlanDefinition,
+  orgKind: string | undefined,
+  requestedSeats: number,
+): number => {
+  if (orgKind === undefined) return reject("not_found", "organization");
+  if (plan.kind !== orgKind)
+    return reject("bad_request", `the ${plan.id} plan is not available for a ${orgKind} account`);
+  const seats = Math.max(1, Math.floor(requestedSeats));
+  if (!plan.perSeat && seats > 1)
+    return reject("bad_request", `the ${plan.id} plan is not priced per seat`);
+  return seats;
+};
+
 export class ControlCommerce {
   constructor(
     readonly db: D1Like,
@@ -207,6 +226,15 @@ export class ControlCommerce {
       actorId,
       this.clock.now(),
     );
+  }
+
+  private async orgKind(orgId: string): Promise<string | undefined> {
+    const row = await guardD1("organization", () =>
+      q(primary(this.db), "SELECT kind FROM organizations WHERE id = ?", orgId).first<{
+        kind: string;
+      }>(),
+    );
+    return row?.kind;
   }
 
   private requireProvider(): BillingProvider {
@@ -260,11 +288,16 @@ export class ControlCommerce {
       if (taken) reject("conflict", "address unavailable");
     } else if (!input.orgId) {
       reject("bad_request", "organization required");
+    } else if (plan.id === "short-address") {
+      reject("bad_request", "short addresses are purchased separately");
     }
+    const seats =
+      input.purpose === "short-address"
+        ? 1
+        : planSeatsFor(plan, await this.orgKind(input.orgId!), input.seats);
     const provider = this.requireProvider();
     const sessionId = this.clock.id("chk");
     const now = this.clock.now();
-    const seats = Math.max(1, Math.floor(input.seats));
     const sig = await this.returnSignature(sessionId);
     const back = (state: string) =>
       `${input.returnUrl}${input.returnUrl.includes("?") ? "&" : "?"}checkout=${encodeURIComponent(sessionId)}&sig=${sig}&state=${state}`;
@@ -363,18 +396,19 @@ export class ControlCommerce {
     const plan = PLAN_CATALOG[input.plan] ?? reject("bad_request", "unknown plan");
     if (plan.id === "short-address")
       reject("bad_request", "short addresses are purchased separately");
+    const seats = planSeatsFor(plan, await this.orgKind(orgId), input.seats);
     await this.requireProvider().changePlan({
       orgId,
       plan: plan.id,
       interval: input.interval,
-      seats: Math.max(1, Math.floor(input.seats)),
+      seats,
     });
     await this.db.batch([
       this.ledger(
         orgId,
         "plan-change-requested",
         0,
-        `${plan.id}/${input.interval}/${input.seats}`,
+        `${plan.id}/${input.interval}/${seats}`,
         actorId,
       ),
     ]);

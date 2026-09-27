@@ -37,6 +37,8 @@ import {
   oauthError,
   oauthForm,
   provisionCalendar,
+  readTextCapped,
+  sameOriginJson,
   serviceDomain,
   signupToken,
   validTimeZone,
@@ -55,6 +57,9 @@ const allowedForIp = async (env: CoreEnv, request: Request, bucket: string): Pro
       key: `${bucket}:${request.headers.get("cf-connecting-ip") ?? "anon"}`,
     })
   ).success;
+
+/** Refusal for a session-issuing POST that isn't a same-origin JSON request (login CSRF). */
+const crossOrigin = () => errorResponse("forbidden", "cross-origin request rejected");
 
 /** Passkey sign-in happens in the web app on this origin, then returns to `url`. */
 const signInRedirect = (url: URL) =>
@@ -194,6 +199,7 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     return json(await auth.beginChallenge("register", userId));
   }),
   route("POST", "/auth/passkey/register", async (request, _p, env) => {
+    if (!sameOriginJson(request, env)) return crossOrigin();
     if (!(await allowedForIp(env, request, "register")))
       return errorResponse("rate_limited", "slow down");
     const body = decodeAs(PasskeyRegistrationRequest, await readJson(request));
@@ -267,6 +273,7 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     }
   }),
   route("POST", "/auth/passkey/login", async (request, _p, env) => {
+    if (!sameOriginJson(request, env)) return crossOrigin();
     if (!(await allowedForIp(env, request, "login")))
       return errorResponse("rate_limited", "slow down");
     const body = decodeAs(PasskeyAssertionRequest, await readJson(request));
@@ -284,6 +291,7 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     }
   }),
   route("POST", "/auth/recover", async (request, _p, env) => {
+    if (!sameOriginJson(request, env)) return crossOrigin();
     if (!(await allowedForIp(env, request, "recover")))
       return errorResponse("rate_limited", "slow down");
     const body = decodeAs(RecoveryRequest, await readJson(request));
@@ -432,7 +440,8 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     const session = await currentSession(request, env);
     if (!session)
       return consentPage("Session expired", "<p>Sign in again from the desktop app.</p>", 401);
-    const form = new URLSearchParams((await request.text()).slice(0, 8192));
+    // An oversized body reads as an empty form, which validateAuthorize rejects.
+    const form = new URLSearchParams((await readTextCapped(request, 8192)) ?? "");
     const params = authorizeParams(form);
     const devices = deviceAuth(env);
     try {
@@ -573,7 +582,8 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
         429,
       );
     }
-    const form = new URLSearchParams((await request.text()).slice(0, 4096));
+    // An oversized body reads as an empty form: no user code, so nothing is decided.
+    const form = new URLSearchParams((await readTextCapped(request, 4096)) ?? "");
     const allow = form.getAll("decision").at(-1) === "allow";
     const ok = await deviceAuth(env).decideUserCode(
       session.user_id,

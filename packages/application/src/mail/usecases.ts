@@ -91,14 +91,26 @@ export const MAILBOX_COMMAND_SCOPES: Readonly<Record<MailboxCommandTag, Scope>> 
   Redeliver: "send",
 };
 
+/** A Send as executed by the authority: `publishAllowed` is set from the principal's scopes. */
+export type SendCommand = Extract<MailboxCommand, { readonly _tag: "Send" }> & {
+  readonly publishAllowed?: boolean;
+};
+
 /** Decode at the trust boundary, authorize against the current principal, then execute. */
 export const executeMailboxCommand = (mailboxId: string, raw: unknown) =>
   Effect.gen(function* () {
     const command: MailboxCommand = yield* decodeMailboxCommand(raw);
     yield* guardMailboxCommand(mailboxId, command);
-    yield* requireMailbox(mailboxId, MAILBOX_COMMAND_SCOPES[command._tag]);
+    const principal = yield* requireMailbox(mailboxId, MAILBOX_COMMAND_SCOPES[command._tag]);
     const repo = yield* MailboxRepository;
-    return yield* repo.execute(mailboxId, command);
+    // Only the authority knows a draft's recipients, so Send carries whether the principal may
+    // publish: a draft addressed to the World address (publish-by-mail, P01) is refused without
+    // the "publish" scope. Set after decoding, so a client can never supply it.
+    const authorized: MailboxCommand =
+      command._tag === "Send"
+        ? ({ ...command, publishAllowed: principal.scopes.includes("publish") } as SendCommand)
+        : command;
+    return yield* repo.execute(mailboxId, authorized);
   }).pipe(Effect.withSpan("mail.command"));
 
 export const readMailboxView = (mailboxId: string, raw: unknown) =>

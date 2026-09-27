@@ -162,8 +162,17 @@ export type PushResult =
 
 export type PushFetch = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body?: Uint8Array | string },
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body?: Uint8Array | string;
+    redirect?: "manual";
+    signal?: AbortSignal;
+  },
 ) => Promise<{ readonly status: number }>;
+
+/** A push service answers promptly; a stalled endpoint must not hold the notify consumer. */
+export const WEB_PUSH_TIMEOUT_MS = 10_000;
 
 /** Deliver one encrypted Web Push message. 404/410 mean the subscription is gone (RFC 8030 §7.3). */
 export const sendWebPush = async (
@@ -192,6 +201,10 @@ export const sendWebPush = async (
         : {}),
     },
     body,
+    // The endpoint is user-registered: a redirect is never followed (it could point anywhere the
+    // registration-time check refused); a 3xx classifies as Rejected.
+    redirect: "manual",
+    signal: AbortSignal.timeout(WEB_PUSH_TIMEOUT_MS),
   });
   return classifyPushStatus(response.status);
 };

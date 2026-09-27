@@ -25,11 +25,24 @@ import {
 // `calendar.invitation` topic only for approved deliveries (§9), so there is no suppressed mode here.
 
 export abstract class CalendarInvitations extends CalendarCalendars {
+  /**
+   * The live event an iTIP message for `uid` may address. Read-only subscription copies are never
+   * a target (a feed's events are not invitations, and iTIP must not mutate them).
+   */
+  private invitationRow(uid: string): EventRow | undefined {
+    return this.sql.one<EventRow>(
+      `SELECT e.* FROM cal_events e JOIN cal_calendars c ON c.id = e.calendar_id
+       WHERE e.uid = ? AND e.deleted = 0 AND c.deleted = 0 AND c.kind != 'subscription'
+       ORDER BY e.created_at LIMIT 1`,
+      uid,
+    );
+  }
+
   private knownInvitation(
     uid: string,
     recurrenceKey: string,
   ): { known: CalKnownInvitation | undefined; row: EventRow | undefined } {
-    const row = this.eventByUid(uid);
+    const row = this.invitationRow(uid);
     const revision = (key: string) => {
       const r = this.sql.one<{ sequence: number; dtstamp: number | null }>(
         "SELECT sequence, dtstamp FROM cal_invitation_revisions WHERE uid = ? AND recurrence_key = ?",
@@ -57,6 +70,8 @@ export abstract class CalendarInvitations extends CalendarCalendars {
       known: {
         organizer: record?.organizer?.address,
         weAreOrganizer: record?.weAreOrganizer ?? false,
+        // An organizer-less row was created here, not received: iTIP can never claim it by UID.
+        localEvent: record !== undefined && !record.organizer,
         revision: rev,
         seriesRevision: seriesRev,
         attendeeRevisions,
@@ -130,7 +145,7 @@ export abstract class CalendarInvitations extends CalendarCalendars {
               "SELECT new_uid FROM cal_series_links WHERE original_uid = ?",
               event.uid,
             )) {
-              const tail = this.eventByUid(link.new_uid);
+              const tail = this.invitationRow(link.new_uid);
               if (tail)
                 this.applyInvitation(
                   "reply",
@@ -365,10 +380,7 @@ export abstract class CalendarInvitations extends CalendarCalendars {
    * bypass the Screener (C04).
    */
   isOrganizerOf(uid: string): boolean {
-    const direct = this.sql.one<{ we_are_organizer: number }>(
-      "SELECT we_are_organizer FROM cal_events WHERE uid = ? AND deleted = 0 LIMIT 1",
-      uid,
-    );
+    const direct = this.invitationRow(uid);
     if (direct) return bool(direct.we_are_organizer);
     const linked = this.sql.one<{ new_uid: string }>(
       "SELECT new_uid FROM cal_series_links WHERE original_uid = ? LIMIT 1",

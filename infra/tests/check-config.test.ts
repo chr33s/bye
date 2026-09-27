@@ -8,6 +8,7 @@ import {
   missingConfig,
   missingPreviewAttestation,
   personalMailProblems,
+  previewSecretOverreach,
   PROVIDER_PREVIEW_ATTESTATION,
   requiredConfig,
   scanConfig,
@@ -220,6 +221,27 @@ describe("deploy config gate (§15.5, §15.8)", () => {
     expect(CI).toMatch(
       /pnpm build:deploy && \$EGRESS node --experimental-strip-types infra\/policies\/plan-export\.ts/,
     );
+  });
+
+  it("PR-executed preview jobs resolve only the secrets a preview needs", () => {
+    const job = (name: string) =>
+      new RegExp(`\\n  ${name}:[\\s\\S]*?(?=\\n  [a-z-]+:\\n|$)`).exec(CI)?.[0] ?? "";
+    expect(job("preview")).toContain("SESSION_KEY");
+    expect(previewSecretOverreach(job("preview"))).toEqual([]);
+    // preview-destroy reuses the same env anchor.
+    expect(job("preview-destroy")).toMatch(/env: \*deploy-env/);
+    // Every required secret still reaches the preview (check-config must pass there).
+    for (const c of requiredConfig().filter((c) => c.secret))
+      expect(job("preview")).toContain(`${c.name}: \${{ secrets.${c.name} }}`);
+    // The blanked names stay mapped (explicitly empty), so `unmappedInCi` holds.
+    for (const name of ["CF_DNS_API_TOKEN", "ARC_SIGNING_KEY", "BILLING_API_KEY", "OPS_TOKEN"])
+      expect(job("preview")).toMatch(new RegExp(`\\n\\s+${name}: ""\\n`));
+    // Detector: a regression that maps a DNS token into the preview is reported.
+    expect(
+      previewSecretOverreach(
+        `${job("preview")}\n      CF_DNS_API_TOKEN: \${{ secrets.CF_DNS_API_TOKEN }}`,
+      ),
+    ).toEqual(["CF_DNS_API_TOKEN"]);
   });
 
   it("every action is pinned to a full commit SHA", () => {

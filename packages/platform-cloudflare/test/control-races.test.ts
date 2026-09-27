@@ -24,6 +24,7 @@ import {
   verifyBillingSignature,
 } from "@bye/platform-cloudflare";
 import { MemoryD1, TestClock } from "@bye/testing";
+import { MAX_PENDING_INVITATIONS } from "../src/control/orgs.ts";
 
 // Compare-and-set and atomic-reservation regressions for the control plane (§10, A02, A03, O02),
 // plus the SESSION_KEY key ring. Concurrency is exercised with Promise.all: every adapter awaits
@@ -416,6 +417,29 @@ describe("[O02] organization invariants hold in SQL", () => {
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect((await orgs.seats(orgId)).used).toBe(3);
+  });
+
+  it("invitations are deduplicated per address and capped per org (each one mails a third party)", async () => {
+    const { orgs, orgId, owner, carol } = await setup();
+    const actor = { userId: owner.userId, role: "owner" as const };
+    const first = await orgs.invite(orgId, actor, "carol@bye.test", "member");
+    // A second invitation to the same pending address (any case) is refused, also when racing.
+    await expect(orgs.invite(orgId, actor, "Carol@bye.test", "admin")).rejects.toSatisfy(
+      (e) => code(e) === "conflict",
+    );
+    const racing = await Promise.allSettled([
+      orgs.invite(orgId, actor, "zed@bye.test", "member"),
+      orgs.invite(orgId, actor, "zed@bye.test", "member"),
+    ]);
+    expect(racing.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    // Once accepted it is no longer pending.
+    await orgs.acceptInvitation(first.token, carol.userId);
+    // Outstanding invitations per org are bounded.
+    for (let i = 1; i < MAX_PENDING_INVITATIONS; i++)
+      await orgs.invite(orgId, actor, `bulk${i}@example.test`, "member");
+    await expect(orgs.invite(orgId, actor, "onemore@example.test", "member")).rejects.toSatisfy(
+      (e) => code(e) === "conflict",
+    );
   });
 
   it("an invitation never reactivates a suspended member", async () => {

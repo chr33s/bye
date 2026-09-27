@@ -803,6 +803,70 @@ describe("MailCore wiring", () => {
       expect.arrayContaining([`${ana.mailboxId}.mbox`, `${ana.mailboxId}.vcf`]),
     );
   });
+
+  it("[A04] an export stops reading a mailbox the user lost access to, and links are not signed for it", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    await deliver(h, "bob@example.net", "ana@bye.test", "Before removal", "hello");
+    const started = await api(h, ana, "POST", "/v1/exports", {});
+    expect(started.status).toBe(202);
+    const instance = h.workflows.EXPORT_ACCOUNT![0]!;
+    const step = {
+      do: async (_name: string, ...args: ReadonlyArray<unknown>) => {
+        const out = await (args.at(-1) as () => Promise<unknown>)();
+        return out === undefined ? undefined : JSON.parse(JSON.stringify(out));
+      },
+    };
+    // The grant is removed after the request but before the workflow reads the mailbox.
+    await h.d1
+      .prepare("DELETE FROM mailbox_access WHERE user_id = ? AND mailbox_id = ?")
+      .bind(ana.userId, ana.mailboxId)
+      .run();
+    const result = (await new ExportWorkflow({} as never, h.env).run(
+      { payload: instance.params, instanceId: instance.id, timestamp: new Date() } as never,
+      step as never,
+    )) as { files: Array<string> };
+    const prefix = `t/${ana.userId}/export/${started.body.exportId}`;
+    expect(result.files).toEqual([`${prefix}/${ana.calendarId}.ics`]);
+    expect([...h.buckets.EXPORTS.objects.keys()].filter((k) => k.includes(ana.mailboxId))).toEqual(
+      [],
+    );
+    // Files of a mailbox no longer accessible (e.g. written before removal) get no signed links.
+    await h.buckets.EXPORTS.put(`${prefix}/${ana.mailboxId}.mbox`, "From x\n");
+    const status = await api(h, ana, "GET", `/v1/exports/${started.body.exportId}`);
+    expect(status.body.files.map((f: { name: string }) => f.name)).toEqual([
+      `${ana.calendarId}.ics`,
+    ]);
+  });
+
+  it("[A04] one full-account export in flight per user, with a cooldown between requests", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    const first = await api(h, ana, "POST", "/v1/exports", {});
+    expect(first.status).toBe(202);
+    const again = await Promise.all([
+      api(h, ana, "POST", "/v1/exports", {}),
+      api(h, ana, "POST", "/v1/exports", {}),
+    ]);
+    expect(again.map((r) => r.status)).toEqual([429, 429]);
+    expect(h.workflows.EXPORT_ACCOUNT).toHaveLength(1);
+    // Completion releases the in-flight claim, but the cooldown still applies.
+    const step = {
+      do: async (_name: string, ...args: ReadonlyArray<unknown>) => {
+        const out = await (args.at(-1) as () => Promise<unknown>)();
+        return out === undefined ? undefined : JSON.parse(JSON.stringify(out));
+      },
+    };
+    const instance = h.workflows.EXPORT_ACCOUNT![0]!;
+    await new ExportWorkflow({} as never, h.env).run(
+      { payload: instance.params, instanceId: instance.id, timestamp: new Date() } as never,
+      step as never,
+    );
+    expect((await api(h, ana, "POST", "/v1/exports", {})).status).toBe(429);
+    vi.setSystemTime(Date.now() + 61 * 60_000);
+    expect((await api(h, ana, "POST", "/v1/exports", {})).status).toBe(202);
+    // Another user is unaffected.
+    const bob = await signup(h, "bob@bye.test");
+    expect((await api(h, bob, "POST", "/v1/exports", {})).status).toBe(202);
+  });
 });
 
 describe("MailCore sharing and publishing", () => {

@@ -79,6 +79,12 @@ export const SUBSCRIBE_CONFIRM_COOLDOWN_MS = 24 * 60 * 60_000;
 /** Rows per transaction when importing a subscriber CSV. */
 const IMPORT_CHUNK = 100;
 
+/**
+ * Distinct addresses per CSV import. Each one becomes a confirmation mail to a third party, so an
+ * import is refused whole above this (split larger lists; the sending budget still applies).
+ */
+export const IMPORT_MAX_ADDRESSES = 1000;
+
 const mediaSegment = (name: string): string => {
   const dot = name.lastIndexOf(".");
   const base =
@@ -628,6 +634,8 @@ export class WorldStore {
       }
       seen.add(a);
       accepted.push(a);
+      if (accepted.length > IMPORT_MAX_ADDRESSES)
+        fail("bad_request", `at most ${IMPORT_MAX_ADDRESSES} addresses per import`);
     }
     // Chunked: tokens are hashed concurrently per chunk and each chunk commits in one transaction,
     // instead of one await + one transaction per row.

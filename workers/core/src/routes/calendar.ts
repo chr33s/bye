@@ -81,33 +81,65 @@ const rescanDue = (key: string, now: number): boolean => {
   return true;
 };
 
+/** Whether a day-photo key lives in this calendar space (`cal/<space>/photo/…`). */
+const photoInSpace = (spaceId: string, photoKey: string): boolean =>
+  CALENDAR_PHOTO_KEY.test(photoKey) && photoKey.startsWith(`cal/${spaceId}/photo/`);
+
+/**
+ * A short-lived read link for a day photo, bound to the space whose day shows it: the photo route
+ * re-checks that the key belongs to that space, so a key attached elsewhere is never served.
+ */
 export const signDayPhotoUrl = async (
   env: CoreEnv,
+  spaceId: string,
   photoKey: string,
   now: number,
 ): Promise<string> =>
-  `/v1/calendar-photos?t=${await mint(env.PROXY_SIGNING_KEY, "dayphoto", [photoKey], PHOTO_URL_TTL_MS, now)}`;
+  `/v1/calendar-photos?t=${await mint(env.PROXY_SIGNING_KEY, "dayphoto", [spaceId, photoKey], PHOTO_URL_TTL_MS, now)}`;
 
 /** The photo key a day-photo capability link (`?t=`) grants, or null. */
 const dayPhotoKey = async (env: CoreEnv, url: URL, now: number): Promise<string | null> => {
   const token = url.searchParams.get("t");
   if (token === null) return null;
-  return (await verify(env.PROXY_SIGNING_KEY, "dayphoto", token, 1, now))?.[0] ?? null;
+  const fields = await verify(env.PROXY_SIGNING_KEY, "dayphoto", token, 2, now);
+  if (!fields) return null;
+  const [spaceId, key] = fields as [string, string];
+  return photoInSpace(spaceId, key) ? key : null;
 };
 
 const withPhotoUrl = async <T extends { readonly photoKey?: string | undefined }>(
   env: CoreEnv,
+  spaceId: string,
   context: T | undefined,
 ): Promise<(T & { photoUrl?: string }) | undefined> =>
-  context?.photoKey
-    ? { ...context, photoUrl: await signDayPhotoUrl(env, context.photoKey, Date.now()) }
+  // A key from another space (stored before attachments were space-bound) is never signed.
+  context?.photoKey && photoInSpace(spaceId, context.photoKey)
+    ? { ...context, photoUrl: await signDayPhotoUrl(env, spaceId, context.photoKey, Date.now()) }
     : context;
 
-const decorateDay = (env: CoreEnv) => (value: unknown) =>
+const decorateDay = (env: CoreEnv, spaceId: string) => (value: unknown) =>
   Effect.promise(async () => {
     const v = value as { context?: { photoKey?: string } };
-    return v.context ? { ...v, context: await withPhotoUrl(env, v.context) } : value;
+    return v.context ? { ...v, context: await withPhotoUrl(env, spaceId, v.context) } : value;
   });
+
+/**
+ * A SetDayDecoration that replaced or cleared a photo reports it as `released` (no day shows it
+ * any more): delete the stored object so replaced photos don't accumulate outside any quota.
+ */
+const deleteReleasedPhoto = (env: CoreEnv, spaceId: string, result: unknown) =>
+  Effect.promise(async () => {
+    const released = (result as { released?: unknown } | null)?.released;
+    if (typeof released === "string" && photoInSpace(spaceId, released))
+      await env.PARTS.delete(released).catch(() => undefined);
+    return result;
+  });
+
+/** Commands through the generic endpoints; a day-photo change cleans up the photo it released. */
+const executeCommand = (env: CoreEnv, spaceId: string, body: unknown) =>
+  calendarExecuteCommand(spaceId, body).pipe(
+    Effect.flatMap((result) => deleteReleasedPhoto(env, spaceId, result)),
+  );
 
 export const calendarRoutes: ReadonlyArray<Route<CoreEnv>> = [
   // ---- discovery: owned calendar spaces plus calendars shared with this account (C05) ----
@@ -142,12 +174,12 @@ export const calendarRoutes: ReadonlyArray<Route<CoreEnv>> = [
   route(
     "POST",
     "/v1/calendars/:id/events",
-    authed(({ params, body }) => calendarExecuteCommand(params.id!, body)),
+    authed(({ params, body, env }) => executeCommand(env, params.id!, body)),
   ),
   route(
     "POST",
     "/v1/calendars/:id/commands",
-    authed(({ params, body }) => calendarExecuteCommand(params.id!, body)),
+    authed(({ params, body, env }) => executeCommand(env, params.id!, body)),
   ),
   route(
     "GET",
@@ -216,7 +248,7 @@ export const calendarRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(({ params, url, env }) =>
       Effect.flatMap(dateParam(params.date), (date) =>
         calendarReadQuery(params.id!, { type: "Day", date, ...zoneOf(url) }),
-      ).pipe(Effect.flatMap(decorateDay(env))),
+      ).pipe(Effect.flatMap(decorateDay(env, params.id!))),
     ),
   ),
   route(
@@ -292,7 +324,7 @@ export const calendarRoutes: ReadonlyArray<Route<CoreEnv>> = [
         calendarReadQuery(params.id!, { type: "DayContext", date, ...zoneOf(url) }),
       ).pipe(
         Effect.flatMap((ctx) =>
-          Effect.promise(() => withPhotoUrl(env, ctx as { photoKey?: string })),
+          Effect.promise(() => withPhotoUrl(env, params.id!, ctx as { photoKey?: string })),
         ),
       ),
     ),
@@ -308,6 +340,12 @@ export const calendarRoutes: ReadonlyArray<Route<CoreEnv>> = [
           // Owner check first (day photos are owner-only), so a non-owner never stores bytes.
           const principal = yield* requireCalendar(p.id!, "calendar");
           const date = yield* dateParam(p.date);
+          // Each upload stores up to 10 MB and queues a scan: throttle per user before reading.
+          const limited = yield* Effect.promise(() =>
+            env.AUTH_RATE_LIMIT.limit({ key: `dayphoto:${principal.userId}` }),
+          );
+          if (!limited.success)
+            return yield* new ApiError({ code: "rate_limited", message: "slow down" });
           if (Number(request.headers.get("content-length") ?? "0") > DAY_PHOTO_MAX_BYTES)
             return yield* new ApiError({
               code: "payload_too_large",
@@ -359,10 +397,13 @@ export const calendarRoutes: ReadonlyArray<Route<CoreEnv>> = [
             yield* Effect.promise(() => env.PARTS.delete(photoKey));
             return yield* set.failure;
           }
+          yield* deleteReleasedPhoto(env, p.id!, set.success);
           return {
             photoKey,
             scan: "pending",
-            photoUrl: yield* Effect.promise(() => signDayPhotoUrl(env, photoKey, Date.now())),
+            photoUrl: yield* Effect.promise(() =>
+              signDayPhotoUrl(env, p.id!, photoKey, Date.now()),
+            ),
           };
         }),
       { status: 201, rawBody: true },

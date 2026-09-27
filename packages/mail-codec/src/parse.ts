@@ -115,6 +115,17 @@ const splitMultipart = (body: string, boundary: string): SplitResult => {
   return { parts, malformed: true };
 };
 
+/**
+ * Reject a copy before it is allocated: opaque leaves duplicate their entity's bytes, so the
+ * decoded-byte budget has to be enforced up front rather than after the allocation.
+ */
+const exceedsDecodedBudget = (ctx: ParseCtx, length: number): boolean => {
+  if (ctx.decodedBytes + length <= ctx.limits.maxDecodedBytes) return false;
+  limitHit(ctx, "maxDecodedBytes");
+  ctx.stopped = true;
+  return true;
+};
+
 const recordLeaf = (
   ctx: ParseCtx,
   part: {
@@ -203,6 +214,8 @@ const parseEntity = (
   partId: string,
   depth: number,
   headersOverride?: HeaderList,
+  /** True below a multipart/signed whose opaque copy already preserves these exact bytes. */
+  insideSigned = false,
 ): void => {
   if (ctx.stopped) return;
   const { header, body } = splitEntity(entity);
@@ -251,6 +264,7 @@ const parseEntity = (
     split.parts.forEach((child, index) => {
       const childId = `${prefix}${index + 1}`;
       if (subtype === "encrypted") {
+        if (exceedsDecodedBudget(ctx, child.length)) return;
         recordLeaf(
           ctx,
           {
@@ -272,7 +286,14 @@ const parseEntity = (
         return;
       }
       if (subtype === "signed" && index === 0) {
+        // A nested signed entity is a byte range of the enclosing opaque copy, so only the
+        // outermost one is preserved; copying at every level would amplify the input per depth.
+        if (insideSigned) {
+          parseEntity(ctx, child, childId, depth + 1, undefined, true);
+          return;
+        }
         // Preserve the exact signed entity bytes so the signature remains verifiable.
+        if (exceedsDecodedBudget(ctx, child.length)) return;
         recordLeaf(
           ctx,
           {
@@ -287,13 +308,13 @@ const parseEntity = (
           },
           true,
         );
-        parseEntity(ctx, child, childId, depth + 1);
+        parseEntity(ctx, child, childId, depth + 1, undefined, true);
         // The opaque copy is an implementation detail, not a user-visible attachment.
         const idx = ctx.attachments.findIndex((a) => a.partId === `${childId}.signed`);
         if (idx >= 0) ctx.attachments.splice(idx, 1);
         return;
       }
-      parseEntity(ctx, child, childId, depth + 1);
+      parseEntity(ctx, child, childId, depth + 1, undefined, insideSigned);
     });
     return;
   }

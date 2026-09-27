@@ -13,6 +13,13 @@ import type {
 // Drafts (E17). A draft's state is never written ad hoc: `settleDraft` derives it from its send
 // jobs, so every transition (send, undo, acceptance, rejection, publish) agrees.
 
+/**
+ * System drafts behind transactional jobs carry secrets (forwarding and send-as verification
+ * codes) meant only for the destination; the mailbox principal must never read, edit, resend or
+ * delete them. Dispatch renders from `draft_revisions` via the job, not through these reads.
+ */
+const NOT_SYSTEM = `NOT EXISTS (SELECT 1 FROM send_jobs j WHERE j.draft_id = drafts.draft_id AND j.traffic_class = 'transactional')`;
+
 export class MailboxDrafts {
   constructor(
     private readonly ctx: MailboxContext,
@@ -73,18 +80,23 @@ export class MailboxDrafts {
   deleteDraft(draftId: string): void {
     const d = this.draft(draftId);
     if (d && d.state !== "open") reject("conflict", "draft is being sent");
-    this.sql.run("DELETE FROM drafts WHERE draft_id = ?", draftId);
+    this.sql.run(`DELETE FROM drafts WHERE draft_id = ? AND ${NOT_SYSTEM}`, draftId);
     this.ctx.change("draft", "deleted", { draftId });
   }
 
   draft(draftId: string): MailboxDraft | undefined {
-    const r = this.sql.one<DraftRow>("SELECT * FROM drafts WHERE draft_id = ?", draftId);
+    const r = this.sql.one<DraftRow>(
+      `SELECT * FROM drafts WHERE draft_id = ? AND ${NOT_SYSTEM}`,
+      draftId,
+    );
     return r ? toDraft(r) : undefined;
   }
 
   drafts(): ReadonlyArray<MailboxDraft> {
     return this.sql
-      .all<DraftRow>("SELECT * FROM drafts WHERE state = 'open' ORDER BY updated_at DESC")
+      .all<DraftRow>(
+        `SELECT * FROM drafts WHERE state = 'open' AND ${NOT_SYSTEM} ORDER BY updated_at DESC`,
+      )
       .map(toDraft);
   }
 

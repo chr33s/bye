@@ -148,12 +148,58 @@ describe("[A02] commerce: checkout, plan changes, referrals, short addresses", (
     ).toBe("ok");
   });
 
+  it("checkout and plan change bind the plan to the org's kind and price seats only per seat", async () => {
+    const { commerce, alice, calls, d1, clock } = await setup();
+    const orgs = new ControlOrganizations(d1, clock);
+    const domainOrg = await orgs.createOrganization(alice.userId, {
+      name: "Acme",
+      kind: "domain",
+      seatLimit: 5,
+    });
+    const checkout = (orgId: string, plan: string, seats: number) =>
+      commerce
+        .createCheckout({
+          purpose: "subscription",
+          plan,
+          interval: "annual",
+          seats,
+          orgId,
+          userId: alice.userId,
+          returnUrl: "https://x",
+        })
+        .then(
+          () => "ok",
+          (e) => code(e),
+        );
+    const change = (orgId: string, plan: string, seats: number) =>
+      commerce.requestPlanChange(orgId, alice.userId, { plan, interval: "annual", seats }).then(
+        () => "ok",
+        (e) => code(e),
+      );
+    // A domain org cannot buy the flat personal plan with 1000 seats (or at all).
+    expect(await checkout(domainOrg, "personal", 1000)).toBe("bad_request");
+    expect(await checkout(domainOrg, "family", 1)).toBe("bad_request");
+    expect(await change(domainOrg, "personal", 1000)).toBe("bad_request");
+    // A flat plan on its own kind is still refused extra seats.
+    expect(await checkout(alice.organizationId, "personal", 1000)).toBe("bad_request");
+    expect(await change(alice.organizationId, "personal", 5)).toBe("bad_request");
+    expect(await checkout(alice.organizationId, "domain", 5)).toBe("bad_request");
+    expect(await checkout(alice.organizationId, "short-address", 1)).toBe("bad_request");
+    expect(await checkout("org_missing", "domain", 5)).toBe("not_found");
+    expect(calls).toEqual([]);
+    // The matching per-seat plan prices every seat.
+    expect(await checkout(domainOrg, "domain", 7)).toBe("ok");
+    expect(calls.at(-1)!.input).toMatchObject({ plan: "domain", seats: 7, amountCents: 7 * 12000 });
+    expect(await change(domainOrg, "domain", 7)).toBe("ok");
+    expect(calls.at(-1)!.input).toMatchObject({ plan: "domain", seats: 7 });
+  });
+
   it("plan change and cancel go to the provider and are recorded; no provider → unavailable", async () => {
     const { commerce, alice, calls, d1 } = await setup();
     await commerce.requestPlanChange(alice.organizationId, alice.userId, {
-      plan: "family",
+      plan: "personal",
       interval: "monthly",
-      seats: 4,
+      seats: 1,
     });
     await commerce.requestCancel(alice.organizationId, alice.userId, true);
     expect(calls.map((c) => c.op)).toEqual(["change", "cancel"]);

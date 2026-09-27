@@ -44,6 +44,13 @@ export { icsUid as itipUid } from "@bye/mail-codec";
  */
 export const MAILBOX_METADATA_BUDGET_BYTES = 10 * 1024 * 1024 * 1024;
 
+const ERASED_KEY = "erased";
+const ERASED_REJECTION = {
+  ok: false as const,
+  code: "gone" as const,
+  message: "mailbox erased",
+};
+
 export class MailboxDO extends DurableObject<CoreEnv> {
   /** Per-instance identity; changes when the object restarts (used to observe a completed restore). */
   private readonly epoch = crypto.randomUUID();
@@ -175,7 +182,17 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     return this.rpc.changes(cursor);
   }
 
+  /**
+   * Erasure fence (§12): set by `eraseAll` and kept across the storage reset, so queued ingest,
+   * journal quarantine or redelivery can never rebuild content in an erased authority.
+   */
+  private erased(): boolean {
+    return this.ctx.storage.kv.get(ERASED_KEY) !== undefined;
+  }
+
   async commitDelivery(input: MailboxDeliveryCommit) {
+    // Permanent rejection: the ingest consumer records it and stops replaying the receipt.
+    if (this.erased()) return ERASED_REJECTION;
     // C04: an iTIP REPLY from an unscreened sender bypasses the Screener only when the owner's
     // calendar authority confirms it organizes the event. REQUESTs are always screened.
     const organizerReply =
@@ -204,7 +221,13 @@ export class MailboxDO extends DurableObject<CoreEnv> {
   }
 
   /** Authorized internal redelivery (E19): bypasses the Screener only, never safety checks. */
-  receiveTransfer(input: MailboxDeliveryCommit & { readonly transferId: string }) {
+  async receiveTransfer(input: MailboxDeliveryCommit & { readonly transferId: string }) {
+    if (this.erased()) {
+      // Drop the transfer and the copy already written under this (erased) mailbox's prefix.
+      if (input.messageKey.startsWith(`t/${this.mailboxId}/`))
+        await this.env.ORIGINALS.delete(input.messageKey).catch(() => undefined);
+      return null;
+    }
     return this.call(
       () =>
         this.store.ingest.commitDelivery({
@@ -457,6 +480,8 @@ export class MailboxDO extends DurableObject<CoreEnv> {
   async eraseAll(): Promise<void> {
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
+    // Written after the reset so it survives it: the fresh authority stays fenced.
+    this.ctx.storage.kv.put(ERASED_KEY, Date.now());
     // Reset the live object: its in-memory store references dropped tables. The next request
     // constructs a fresh, migrated, empty authority.
     const abort = (this.ctx as { abort?: (reason?: string) => void }).abort;

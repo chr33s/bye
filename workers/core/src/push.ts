@@ -8,6 +8,7 @@ import {
   sendWebPush,
   type VapidKeys,
 } from "@bye/platform-cloudflare";
+import { type DohFetch, forbiddenResolution } from "./dns.ts";
 import type { CoreEnv } from "./env.ts";
 import { metric } from "./metrics.ts";
 
@@ -79,10 +80,16 @@ const fcmAccount = (env: CoreEnv): FcmServiceAccount | null => {
 
 type Sender = (device: PushDeviceRow, request: NotificationRequest) => Promise<PushResult | null>;
 
-/** Transport selection per device kind; null = the kind is not configured in this environment. */
+/**
+ * Transport selection per device kind; null = the kind is not configured in this environment.
+ * Web Push endpoints are user-registered URLs: the host is resolved over DoH and refused when any
+ * answer is non-public (rebinding defense, as for the image proxy) before every send, and the send
+ * itself never follows redirects (sendWebPush). APNs/FCM hosts are fixed.
+ */
 export const makePushSender = (
   env: CoreEnv,
   fetchFn: typeof fetch = (u, i) => fetch(u, i),
+  doh: DohFetch = (u, i) => fetch(u, i),
 ): Sender => {
   const vapid = vapidKeys(env);
   const apns = apnsConfig(env);
@@ -98,6 +105,12 @@ export const makePushSender = (
     switch (device.kind) {
       case "webpush":
         if (!vapid || !device.p256dh || !device.auth) return null;
+        {
+          const refused = await forbiddenResolution(new URL(device.endpoint).hostname, doh);
+          // A failed lookup is transient (retry); a non-public answer counts toward disabling.
+          if (refused === "resolution failed") return { _tag: "Retry", status: 0 };
+          if (refused) return { _tag: "Rejected", status: 0 };
+        }
         return sendWebPush(
           f,
           { endpoint: device.endpoint, p256dh: device.p256dh, auth: device.auth },

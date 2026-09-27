@@ -95,6 +95,39 @@ export const unmappedInCi = (
     .filter((c) => !new RegExp(`^\\s+${c.name}:\\s`, "m").test(ciWorkflow))
     .map((c) => c.name);
 
+/**
+ * Secrets the PR-executed `preview`/`preview-destroy` jobs may resolve (besides the tiered
+ * NONPROD Cloudflare and state credentials): the required runtime secrets (`requiredConfig`) plus
+ * the sandboxed personal-mail pair. Every other optional application secret is pinned to "" in the
+ * preview env, so PR code never sees a DNS/cache-purge token, a signing key or a provider API key
+ * (RUNBOOK "Previews": runtime secrets are environment-scoped with preview-only values).
+ */
+export const PREVIEW_OPTIONAL_SECRETS: ReadonlyArray<string> = [
+  "PERSONAL_MAIL_API_KEY",
+  "SEND_EVENTS_WEBHOOK_SECRET",
+];
+
+/** Tiered deploy credentials the preview job resolves by their nonprod names. */
+export const PREVIEW_DEPLOY_SECRETS: ReadonlyArray<string> = [
+  "BYE_STATE_TOKEN",
+  "NONPROD_CLOUDFLARE_ACCOUNT_ID",
+  "NONPROD_CLOUDFLARE_API_TOKEN",
+];
+
+/** `secrets.X` names referenced by a workflow job's text that previews must not resolve. */
+export const previewSecretOverreach = (
+  jobText: string,
+  names: ReadonlyArray<ConfigName> = declaredConfig(),
+): ReadonlyArray<string> => {
+  const allowed = new Set([
+    ...names.filter((c) => !c.optional && c.secret).map((c) => c.name),
+    ...PREVIEW_OPTIONAL_SECRETS,
+    ...PREVIEW_DEPLOY_SECRETS,
+  ]);
+  const used = [...jobText.matchAll(/secrets\.([A-Z0-9_]+)/g)].map((m) => m[1]!);
+  return [...new Set(used)].filter((n) => !allowed.has(n)).sort();
+};
+
 /** Credentials that let the platform send mail to arbitrary recipients. */
 export const MAIL_CREDENTIALS: ReadonlyArray<string> = [
   "PERSONAL_MAIL_API_KEY",

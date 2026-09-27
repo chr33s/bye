@@ -10,6 +10,12 @@
 
 export interface LocalDraft {
   readonly localId: string;
+  /**
+   * The signed-in user and mailbox that wrote this draft. A browser can be shared: drafts are only
+   * ever shown to (and pushed for) the same account, and records without an owner are never shown.
+   */
+  readonly ownerId?: string;
+  readonly mailboxId?: string;
   readonly draftId: string | null;
   readonly baseRevision: number;
   readonly to: string;
@@ -58,10 +64,43 @@ const tx = async <T>(
   });
 };
 
+/** An ownerless draft is never written: it could not be scoped to an account on reload. */
 export const saveLocalDraft = (draft: LocalDraft): Promise<IDBValidKey> =>
-  tx("readwrite", (s) => s.put(draft));
-export const loadLocalDrafts = (): Promise<Array<LocalDraft>> =>
-  tx("readonly", (s) => s.getAll() as IDBRequest<Array<LocalDraft>>);
+  draft.ownerId && draft.mailboxId
+    ? tx("readwrite", (s) => s.put(draft))
+    : Promise.resolve(draft.localId);
+export interface DraftOwner {
+  readonly userId: string;
+  readonly mailboxId: string;
+}
+
+/** Only the drafts this account wrote in this mailbox. */
+export const draftsOwnedBy = (
+  drafts: ReadonlyArray<LocalDraft>,
+  owner: DraftOwner,
+): Array<LocalDraft> =>
+  drafts.filter((d) => d.ownerId === owner.userId && d.mailboxId === owner.mailboxId);
+
+export const loadLocalDrafts = async (owner: DraftOwner): Promise<Array<LocalDraft>> =>
+  draftsOwnedBy(await tx("readonly", (s) => s.getAll() as IDBRequest<Array<LocalDraft>>), owner);
+
+/** Remove records written before drafts carried an owner: they can't be attributed to anyone. */
+export const pruneUnownedDrafts = async (): Promise<void> => {
+  const all = await tx("readonly", (s) => s.getAll() as IDBRequest<Array<LocalDraft>>);
+  for (const d of all) if (!d.ownerId) await tx("readwrite", (s) => s.delete(d.localId));
+};
+
+/** localStorage key naming the account this browser's local data belongs to. */
+export const LOCAL_OWNER_KEY = "bye:owner";
+
+/**
+ * What to do with local data when `/v1/me` names `userId`: keep it (same account), claim it (no
+ * recorded owner yet: drop unowned drafts), or wipe it (another account's data is here).
+ */
+export const localOwnerAction = (
+  stored: string | null,
+  userId: string,
+): "keep" | "claim" | "wipe" => (stored === null ? "claim" : stored === userId ? "keep" : "wipe");
 export const deleteLocalDraft = (localId: string): Promise<undefined> =>
   tx("readwrite", (s) => s.delete(localId));
 

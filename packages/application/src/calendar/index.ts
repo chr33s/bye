@@ -152,6 +152,14 @@ export const calendarExecuteCommand = (spaceId: string, body: unknown) =>
     const envelope = yield* decodeCalendarCommandEnvelope(body).pipe(
       Effect.mapError((e) => invalid(String(e))),
     );
+    // Inviting attendees mails them from the owner's address (iTIP), so it
+    // needs send authority, not just the calendar scope.
+    const command = envelope.command as {
+      readonly attendees?: ReadonlyArray<unknown>;
+      readonly changes?: { readonly attendees?: ReadonlyArray<unknown> };
+    };
+    const attendees = command.attendees ?? command.changes?.attendees;
+    if (attendees !== undefined && attendees.length > 0) yield* requireScope("send");
     const repository = yield* CalendarRepository;
     return yield* repository.execute(spaceId, principal.userId, envelope.command);
   }).pipe(Effect.withSpan("calendar.command"));

@@ -16,6 +16,7 @@ import {
   type VersionedKeys,
 } from "@bye/platform-cloudflare";
 import { EmailMessage } from "cloudflare:email";
+import { guardedFetch } from "./dns.ts";
 import type { CoreEnv } from "./env.ts";
 
 // Transport wiring (§5.3). Each traffic class gets an adapter only when its approval/credentials
@@ -183,9 +184,15 @@ export const buildTransportAdapters = async (
       ),
     );
   }
+  // External identities POST to user-chosen relay/token endpoints: resolve-then-check every
+  // request and never follow redirects (registration only checks the URL string).
   if (sealKeys(env))
     adapters.push(
-      makeExternalIdentityApiTransport(externalCredentialStore(env, mailboxId), content, f),
+      makeExternalIdentityApiTransport(
+        externalCredentialStore(env, mailboxId),
+        content,
+        guardedFetch(fetchFn) as never,
+      ),
     );
   // Preview mail sandbox (§15.8): every adapter may only mail the stage's disposable domains.
   const sandbox = parseSandboxDomains(env.MAIL_SANDBOX_DOMAINS);
