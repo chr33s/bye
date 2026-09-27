@@ -606,12 +606,19 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.18.1
       - name: Install (exact lockfile)
         working-directory: apps/mobile
         run: npm ci --no-audit --no-fund
+      # The shared screens import @bye/contracts and @bye/domain (and their Effect types) from the
+      # pnpm workspace, which the npm-installed host does not include.
+      - name: Install shared workspace packages (frozen lockfile)
+        run: pnpm install --frozen-lockfile --filter "@bye/native-shared..."
       - name: Typecheck shared screens and host
         working-directory: apps/mobile
         run: npm run typecheck
@@ -644,12 +651,19 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.18.1
       - name: Install (exact lockfile)
         working-directory: apps/desktop
         run: npm ci --no-audit --no-fund
+      # The shared screens import @bye/contracts and @bye/domain (and their Effect types) from the
+      # pnpm workspace, which the npm-installed host does not include.
+      - name: Install shared workspace packages (frozen lockfile)
+        run: pnpm install --frozen-lockfile --filter "@bye/native-shared..."
       - name: Typecheck shared screens and host
         working-directory: apps/desktop
         run: npm run typecheck
@@ -661,7 +675,8 @@ jobs:
         run: npm run macos:build
 
   native-windows:
-    runs-on: windows-2022
+    # react-native-windows 0.81 builds with the v145 toolset (Visual Studio 2026, >= 18.6).
+    runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
