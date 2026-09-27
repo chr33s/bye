@@ -1,5 +1,8 @@
 {
   // Solution config: lets editors and oxlint's type-aware mode map each file to its owning project.
+  // The React Native hosts (apps/mobile, apps/desktop) are left out: they install with npm outside
+  // the pnpm workspace and extend a package only present there, which would break tools that load
+  // every reference (vitest's transform, oxlint). They keep their own tsconfig and CI typecheck.
   "files": [],
   "references": [
     { "path": "./tsconfig.node.json" },
@@ -7,8 +10,6 @@
     { "path": "./tsconfig.workers-test.json" },
     { "path": "./tsconfig.web.json" },
     { "path": "./tsconfig.sw.json" },
-    { "path": "./infra/tsconfig.json" },
-    { "path": "./apps/mobile/tsconfig.json" },
-    { "path": "./apps/desktop/tsconfig.json" }
+    { "path": "./infra/tsconfig.json" }
   ]
 }

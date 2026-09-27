@@ -8,6 +8,10 @@
   "env": {
     "builtin": true
   },
+  // React Native hosts install with npm outside the pnpm workspace, and their tsconfig (the only
+  // one covering the shared UI screens) extends a package only present there; the native CI jobs
+  // typecheck them.
+  "ignorePatterns": ["apps/mobile/**", "apps/desktop/**", "packages/native-shared/src/ui/**"],
   "options": {
     "typeAware": true,
     "typeCheck": true

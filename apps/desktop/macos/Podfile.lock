@@ -1749,7 +1749,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - SocketRocket
     - Yoga
-  - react-native-webview (14.0.1):
+  - react-native-webview (16.0.0):
     - boost
     - DoubleConversion
     - fast_float
@@ -2588,7 +2588,7 @@ SPEC CHECKSUMS:
   React-Mapbuffer: 45ec5cdca592f4dc6522c59b8f4575abf573e0b1
   React-microtasksnativemodule: a0f271cefc1bae9ff0cb8f4237b9f7481cd97543
   react-native-get-random-values: e2acf4070fe4b7325705a05af047449637a27a21
-  react-native-webview: 254a8650a0213d9adcb2d5103a245c701edd9649
+  react-native-webview: 1452b1902d8925429669e0b59569fe021d506aec
   React-NativeModulesApple: 02b57ec4dced7eb81bedcccdad1ca62fee961c4d
   React-oscompat: 66d4c9c770c0690b00c652a568f30b4713104ebf
   React-perflogger: 0834475c95233811e2095a13fc6fad0bac270dae

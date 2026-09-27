@@ -8,6 +8,7 @@
 
 #include "NativeModules.h"
 
+#include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/Microsoft.Windows.AppLifecycle.h>
 #include <winrt/Windows.ApplicationModel.Activation.h>
 #include <winrt/Windows.Foundation.h>
@@ -62,6 +63,10 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE instance, HINSTANCE, PSTR 
   WCHAR appDirectory[MAX_PATH];
   GetModuleFileNameW(NULL, appDirectory, MAX_PATH);
   PathCchRemoveFileSpec(appDirectory, MAX_PATH);
+
+  // XAML hosting for components that render WinUI content in XAML islands (react-native-webview's
+  // WebView2). react-native-windows 0.82+ does this itself for XamlSupport components; 0.81 does not.
+  auto xamlManager{winrt::Microsoft::UI::Xaml::Hosting::WindowsXamlManager::InitializeForCurrentThread()};
 
   // Create a ReactNativeWin32App with the ReactNativeAppBuilder
   auto reactNativeWin32App{winrt::Microsoft::ReactNative::ReactNativeAppBuilder().Build()};

@@ -1,0 +1,14 @@
+diff --git a/node_modules/react-native-webview/windows/ReactNativeWebView/RCTWebView2ComponentView.cpp b/node_modules/react-native-webview/windows/ReactNativeWebView/RCTWebView2ComponentView.cpp
+index 3910258..89da4e7 100644
+--- a/node_modules/react-native-webview/windows/ReactNativeWebView/RCTWebView2ComponentView.cpp
++++ b/node_modules/react-native-webview/windows/ReactNativeWebView/RCTWebView2ComponentView.cpp
+@@ -32,7 +32,8 @@ void RegisterRCTWebView2ComponentView(
+     RNCWebViewCodegen::RegisterRCTWebView2NativeComponent<RCTWebView2ComponentView>(
+         packageBuilder,
+         [](const winrt::Microsoft::ReactNative::Composition::IReactCompositionViewComponentBuilder &builder) {
+-            builder.as<winrt::Microsoft::ReactNative::IReactViewComponentBuilder>().XamlSupport(true);
++            // react-native-windows < 0.82 has no IReactViewComponentBuilder.XamlSupport; the host
++            // app initializes XAML itself (see ByeDesktop.cpp).
+             
+             // Use SetContentIslandComponentViewInitializer for XAML hosting
+             builder.SetContentIslandComponentViewInitializer(

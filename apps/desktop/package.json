@@ -4,6 +4,7 @@
   "private": true,
   "description": "bye for macOS and Windows (React Native macOS/Windows). Installed with npm, outside the pnpm workspace.",
   "scripts": {
+    "postinstall": "patch-package",
     "start": "react-native start",
     "macos": "react-native run-macos",
     "windows": "react-native run-windows",
@@ -19,7 +20,7 @@
     "react-native-get-random-values": "2.0.0",
     "react-native-macos": "0.81.9",
     "react-native-url-polyfill": "4.0.0",
-    "react-native-webview": "14.0.1",
+    "react-native-webview": "16.0.0",
     "react-native-windows": "0.81.37"
   },
   "devDependencies": {
@@ -31,6 +32,7 @@
     "@react-native/metro-config": "0.81.6",
     "@react-native/typescript-config": "0.81.6",
     "@types/react": "19.1.17",
+    "patch-package": "8.0.1",
     "typescript": "5.9.3"
   },
   "engines": {

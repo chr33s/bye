@@ -1,0 +1,31 @@
+diff --git a/node_modules/@react-native-async-storage/async-storage/windows/ReactNativeAsyncStorage/ReactNativeAsyncStorage.vcxproj b/node_modules/@react-native-async-storage/async-storage/windows/ReactNativeAsyncStorage/ReactNativeAsyncStorage.vcxproj
+index 9b23b29..3d65434 100644
+--- a/node_modules/@react-native-async-storage/async-storage/windows/ReactNativeAsyncStorage/ReactNativeAsyncStorage.vcxproj
++++ b/node_modules/@react-native-async-storage/async-storage/windows/ReactNativeAsyncStorage/ReactNativeAsyncStorage.vcxproj
+@@ -3,7 +3,7 @@
+ <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+   <Import Project="$(SolutionDir)\ExperimentalFeatures.props" Condition="Exists('$(SolutionDir)\ExperimentalFeatures.props')" />
+   <Choose>
+-    <When Condition="'$(UseFabric)'=='true'">
++    <When Condition="'$(UseFabric)'=='true' Or '$(RnwNewArch)'=='true'">
+       <PropertyGroup Label="Globals">
+         <CppWinRTOptimized>true</CppWinRTOptimized>
+         <MinimalCoreWin>true</MinimalCoreWin>
+@@ -73,7 +73,7 @@
+   <PropertyGroup Label="Configuration">
+     <ConfigurationType>DynamicLibrary</ConfigurationType>
+     <CharacterSet>Unicode</CharacterSet>
+-    <PlatformToolset>v143</PlatformToolset>
++    <PlatformToolset>v145</PlatformToolset>
+     <GenerateManifest>false</GenerateManifest>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+@@ -89,7 +89,7 @@
+   <ImportGroup Label="PropertySheets">
+     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+   </ImportGroup>
+-  <ImportGroup Label="PropertySheets" Condition="'$(UseFabric)'!='true'">
++  <ImportGroup Label="PropertySheets" Condition="'$(UseFabric)'!='true' And '$(RnwNewArch)'!='true'">
+     <Import Project="PropertySheet.props" />
+   </ImportGroup>
+   <ImportGroup Label="ReactNativeWindowsPropertySheets" Condition="'$(ReactNativeWindowsCanary)'!='true' And '$([MSBuild]::VersionLessThan($(ReactNativeWindowsMajor).$(ReactNativeWindowsMinor).$(ReactNativeWindowsPatch), 0.76.0))'">

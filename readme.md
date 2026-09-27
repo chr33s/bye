@@ -75,7 +75,7 @@ Deployment goes through `pnpm deploy:plan` / `pnpm run deploy` with `STAGE` set 
 
 ## Parity status
 
-All 47 ledger rows in §2 have at least one tagged executable test; `infra/tests/parity.test.ts` fails otherwise. A tag records test coverage, not production acceptance. This repository has not been deployed to Cloudflare. Key open gates:
+All 47 ledger rows in §2 have at least one tagged executable test; `infra/tests/parity.test.ts` fails otherwise. A tag records test coverage, not production acceptance. Key open gates:
 
 | Area                           | Current status                                                                                                                                                                                                                                                 |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
