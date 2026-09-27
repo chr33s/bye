@@ -11,6 +11,8 @@ export interface ExportedPlanRow {
   readonly action: "create" | "update" | "adopted" | "replace" | "delete" | "orphaned" | "noop";
   /** Worker `env` keys (binding names) from the planned props, when the row is a Worker. */
   readonly envBindings?: ReadonlyArray<string>;
+  /** Hostnames the row attaches (Worker `domain`/`routes`, or a custom-domain row's hostname). */
+  readonly domains?: ReadonlyArray<string>;
 }
 
 export interface ExportedPlan {

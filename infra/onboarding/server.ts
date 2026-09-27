@@ -223,11 +223,19 @@ export const handler = ({
         return void res.end();
       }
       if (req.method === "GET") {
+        const opMatch = /^\/api\/operations\/([A-Za-z0-9_-]{1,64})$/.exec(url.pathname);
+        if (opMatch) return send(res, 200, await service.operation(op, opMatch[1]!), setCookie);
         switch (url.pathname) {
           case "/api/status":
             return send(res, 200, await service.status(op), setCookie);
           case "/api/accounts":
             return send(res, 200, { accounts: await service.accounts(op) }, setCookie);
+          case "/api/zones": {
+            const accountId = url.searchParams.get("accountId") ?? "";
+            if (!/^[A-Za-z0-9]{1,64}$/.test(accountId))
+              throw new OnboardingError("invalid", "accountId is required");
+            return send(res, 200, { zones: await service.zones(op, accountId) }, setCookie);
+          }
           case "/api/guide":
             return send(res, 200, await service.guide(op), setCookie);
           case "/api/handoff":
@@ -246,6 +254,15 @@ export const handler = ({
       switch (url.pathname) {
         case "/api/authorize":
           return send(res, 200, await service.startAuthorization(op, session), setCookie);
+        case "/api/install": {
+          // Only ids and the label: zone name, hostname and stage are derived server-side.
+          const result = await service.install(op, {
+            accountId: str(body, "accountId"),
+            zoneId: str(body, "zoneId"),
+            label: typeof body.label === "string" ? body.label : "bye",
+          });
+          return send(res, result.status === "deploying" ? 202 : 200, result);
+        }
         case "/api/bind":
           await service.bind(op, str(body, "accountId"), str(body, "stage"));
           return send(res, 200, await service.status(op));

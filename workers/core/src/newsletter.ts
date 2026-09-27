@@ -20,6 +20,7 @@ import { settle, world } from "./authorities.ts";
 import type { CoreEnv } from "./env.ts";
 import { escapeHtml } from "./html.ts";
 import { metric } from "./metrics.ts";
+import { loadRuntimeNewsletterConfig } from "./newsletter-config.ts";
 import { origins } from "./origins.ts";
 import { publicHtml } from "./publishing.ts";
 
@@ -42,24 +43,43 @@ export type NewsletterSetup =
     }
   | { readonly _tag: "Blocked"; readonly reason: string };
 
-/** The configured provider (and whether it may dispatch), or why newsletters are unavailable. */
-export const newsletterSetup = (
+/**
+ * The configured provider (and whether it may dispatch), or why newsletters are unavailable.
+ * Resolution order (infra/onboarding/spec.md §26): the sealed runtime configuration an operator entered,
+ * else the legacy deployment env (`NEWSLETTER_*`), else blocked. The two sources are never mixed: a
+ * runtime row that cannot be opened blocks rather than falling through to env credentials.
+ * Credentials are decrypted per call and live only as long as the returned provider.
+ */
+export const newsletterSetup = async (
   env: CoreEnv,
   fetchFn: typeof fetch = (u, i) => fetch(u, i),
-): NewsletterSetup => {
-  const name = (env.NEWSLETTER_PROVIDER ?? "").trim();
-  if (!name) return { _tag: "Blocked", reason: "no newsletter provider configured" };
-  if (name !== "resend") return { _tag: "Blocked", reason: `unknown newsletter provider ${name}` };
-  if (!env.NEWSLETTER_API_KEY || !env.NEWSLETTER_WEBHOOK_SECRET || !env.NEWSLETTER_ACCOUNT)
-    return { _tag: "Blocked", reason: "newsletter credentials incomplete" };
+): Promise<NewsletterSetup> => {
+  const runtime = await loadRuntimeNewsletterConfig(env);
+  if (runtime._tag === "Unusable") return { _tag: "Blocked", reason: runtime.reason };
+  let credentials: { apiKey: string; webhookSecret: string; account: string; provider: string };
+  if (runtime._tag === "Present") credentials = runtime.credentials;
+  else {
+    const name = (env.NEWSLETTER_PROVIDER ?? "").trim();
+    if (!name) return { _tag: "Blocked", reason: "no newsletter provider configured" };
+    if (name !== "resend")
+      return { _tag: "Blocked", reason: `unknown newsletter provider ${name}` };
+    if (!env.NEWSLETTER_API_KEY || !env.NEWSLETTER_WEBHOOK_SECRET || !env.NEWSLETTER_ACCOUNT)
+      return { _tag: "Blocked", reason: "newsletter credentials incomplete" };
+    credentials = {
+      provider: name,
+      apiKey: env.NEWSLETTER_API_KEY,
+      webhookSecret: env.NEWSLETTER_WEBHOOK_SECRET,
+      account: env.NEWSLETTER_ACCOUNT,
+    };
+  }
   // Previews never hold production subscriber data: their sandbox forbids external audiences.
   if ((env.MAIL_SANDBOX_DOMAINS ?? "").trim())
     return { _tag: "Blocked", reason: "newsletters are disabled in sandboxed stages" };
   const provider = makeResendNewsletterProvider(
     {
-      apiKey: env.NEWSLETTER_API_KEY,
-      webhookSecret: env.NEWSLETTER_WEBHOOK_SECRET,
-      account: env.NEWSLETTER_ACCOUNT,
+      apiKey: credentials.apiKey,
+      webhookSecret: credentials.webhookSecret,
+      account: credentials.account,
     },
     (u, i) => fetchFn(u, i as RequestInit),
   );
@@ -67,11 +87,12 @@ export const newsletterSetup = (
     _tag: "Ready",
     provider,
     config: {
-      provider: name,
-      account: env.NEWSLETTER_ACCOUNT,
+      provider: credentials.provider,
+      account: credentials.account,
       configVersion: `${provider.capabilities.apiVersion}#${(env.NEWSLETTER_QUALIFIED ?? "").trim()}`,
     },
-    // Release qualification is evidence, not a default: without it dispatch stays blocked.
+    // Release qualification is evidence, not a default: without it dispatch stays blocked. It is
+    // deployment configuration only; the runtime config API cannot set it.
     dispatchBlocked: (env.NEWSLETTER_QUALIFIED ?? "").trim()
       ? null
       : "newsletter provider not qualified for this stage",
@@ -139,7 +160,7 @@ export const approveNewsletter = async (
   revision: number,
   scheduledAt: number | null = null,
 ): Promise<PublicationRow | { readonly blocked: string }> => {
-  const setup = newsletterSetup(env);
+  const setup = await newsletterSetup(env);
   if (setup._tag === "Blocked") return { blocked: setup.reason };
   if (setup.dispatchBlocked) return { blocked: setup.dispatchBlocked };
   const post = await loadPost(env, handle, postId, revision);
@@ -186,7 +207,7 @@ export const runNewsletter = async (
   handle: string,
   fetchFn?: typeof fetch,
 ): Promise<NewsletterRun> => {
-  const setup = newsletterSetup(env, fetchFn);
+  const setup = await newsletterSetup(env, fetchFn);
   if (setup._tag === "Blocked") return { blocked: setup.reason, synced: 0 };
   const { provider, config, dispatchBlocked } = setup;
   const L = ledgerOf(env, handle);
@@ -564,7 +585,7 @@ export const intakeNewsletterEvents = async (
   headers: Headers,
   now = Date.now(),
 ): Promise<EventIntake> => {
-  const setup = newsletterSetup(env);
+  const setup = await newsletterSetup(env);
   if (setup._tag === "Blocked") return { _tag: "Unavailable" };
   const verified = await Effect.runPromise(setup.provider.verifyEvents(body, headers, now));
   if (verified._tag === "Unauthenticated")
@@ -673,7 +694,7 @@ export const reconcileNewsletters = async (
   env: CoreEnv,
   now = Date.now(),
 ): Promise<{ readonly events: number; readonly creators: number; readonly failures: number }> => {
-  const setup = newsletterSetup(env);
+  const setup = await newsletterSetup(env);
   if (setup._tag === "Blocked") return { events: 0, creators: 0, failures: 0 };
   const { provider, account } = setup.config;
   let events = 0;

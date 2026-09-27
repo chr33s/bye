@@ -41,6 +41,7 @@ export const WEB_ROUTES = [
   ["share", "share"],
   ["public-link", "public-link"],
   ["world/:postId?", "world"],
+  ["newsletters", "newsletters"],
   ["calendar/event/:eventId?", "calendar-event"],
   ["calendar/new", "calendar-event"],
   ["calendar/planning", "calendar-planning"],

@@ -1,13 +1,21 @@
-// Cloudflare onboarding (spec.md §15.11): authorize → bind → review → approve → deploy →
-// verify → hand off, for one self-hosted installation per operator. The service owns ordering and
-// safety; Alchemy (through executor.ts) owns resources and state. Nothing here deletes resources
-// or state, changes domains or mail routing, or exposes management tokens.
-import { randomBytes } from "node:crypto";
+// Cloudflare onboarding (spec.md §15.11, infra/onboarding/spec.md): Cloudflare account → Bye hostname →
+// "Create Bye" (bind, plan, policy review, deploy, verify) → first owner, for one self-hosted
+// installation per operator. A standard clean first install is approved by policy against the
+// recorded install intent; anything else falls back to the operator review (`needs-review`). The
+// service owns ordering and safety; Alchemy (through executor.ts) owns resources and state.
+// Nothing here deletes resources or state, changes DNS, MX or mail routing (only MailCore's
+// custom hostname), or exposes management tokens.
+import { createPublicKey, generateKeyPairSync, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { addInstanceLink } from "../../packages/native-shared/src/instance/handoff.ts";
 import { requiredConfig } from "../policies/check-config.ts";
 import type { ExportedPlan } from "../policies/plan-normalize.ts";
-import { type Account, CloudflareApiError, type CloudflareReader } from "./cloudflare.ts";
+import {
+  type Account,
+  CloudflareApiError,
+  type CloudflareReader,
+  type Zone,
+} from "./cloudflare.ts";
 import type { DeployExecutor, ExecutionContext } from "./executor.ts";
 import { manualGuide, type ManualGuide } from "./guide.ts";
 import { runHealthChecks } from "./health.ts";
@@ -25,11 +33,20 @@ import {
 } from "./oauth.ts";
 import { qrSvg } from "./qr.ts";
 import type { ReleaseResolution } from "./release.ts";
-import { allowedStage, approvalCovers, buildReview, configHash } from "./review.ts";
+import {
+  allowedStage,
+  approvalCovers,
+  autoApprovalBlockers,
+  buildReview,
+  canonical,
+  configHash,
+} from "./review.ts";
+import type { ScopeGrant } from "./scopes.ts";
 import { encode, type KeyRing, open, seal } from "./seal.ts";
 import type {
   Approval,
   HealthResult,
+  InstallIntent,
   Installation,
   InstanceUrls,
   OnboardingEvent,
@@ -52,25 +69,95 @@ export const GENERATED_SECRETS = [
   "SIGMIRROR_WRITE_TOKEN",
   // Single-use first-account token (workers/core/src/bootstrap.ts): stands in for Turnstile.
   "BOOTSTRAP_TOKEN",
+  // Seals the newsletter provider credentials entered on first use (newsletter-config.ts).
+  "NEWSLETTER_CONFIG_SEAL_KEY",
+  // Seals the zone-scoped Cloudflare token the owner may enter for incoming-email activation.
+  "ZONE_TOKEN_SEAL_KEY",
 ] as const;
 
 /** Required by the stack but deliberately empty: no approved mail provider, no Turnstile without a domain. */
-export const DISABLED_SECRETS = ["PERSONAL_MAIL_API_KEY", "TURNSTILE_SECRET"] as const;
+export const DISABLED_SECRETS = ["TURNSTILE_SECRET"] as const;
 
-export const SECRET_NAMES: ReadonlyArray<string> = [...GENERATED_SECRETS, ...DISABLED_SECRETS];
+/**
+ * Generated key pairs: the DKIM private key (PKCS#8 PEM) that signs outbound personal mail. Its
+ * public half (MAIL_DKIM_PUBLIC_KEY) is derived from it and published by incoming-email
+ * activation at `bye1._domainkey.<domain>`.
+ */
+export const GENERATED_KEYPAIRS = ["MAIL_DKIM_PRIVATE_KEY"] as const;
 
-/** Shown before authorization (flow step 1). */
+export const SECRET_NAMES: ReadonlyArray<string> = [
+  ...GENERATED_SECRETS,
+  ...GENERATED_KEYPAIRS,
+  ...DISABLED_SECRETS,
+];
+
+/** Every generated runtime secret for a new installation. */
+export const generateRuntimeSecrets = (): Record<string, string> => ({
+  ...Object.fromEntries(GENERATED_SECRETS.map((k) => [k, b64(32)])),
+  MAIL_DKIM_PRIVATE_KEY: generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: "spki", format: "pem" },
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  }).privateKey,
+});
+
+/** The DKIM `p=` value (base64 SPKI DER) for a PKCS#8 PEM private key. */
+export const dkimPublicKey = (privatePem: string): string =>
+  encode(createPublicKey(privatePem).export({ type: "spki", format: "der" }), "base64");
+
+/** The "What Bye creates" disclosure; never a mandatory screen. */
+export const WHAT_BYE_CREATES: ReadonlyArray<string> = [
+  "Workers (the Bye app, its public site and a render origin), with Durable Objects, Workflows and Containers.",
+  "A D1 database, R2 buckets, a KV namespace and Queues for your mail and data.",
+  "Deployment state in your own account (Cloudflare state store).",
+  "One Worker custom hostname: the Bye address you choose. No DNS, MX or Email Routing changes.",
+];
+
+/** Kept for stage-bound (internal/operator) installations and older clients. */
 export const PREREQUISITES: ReadonlyArray<string> = [
   "A Cloudflare account you administer, on a Workers plan that includes Durable Objects, Queues and Containers.",
   "A workers.dev subdomain registered for that account (Workers & Pages → Overview).",
-  "No existing Bye deployment for the chosen stage in that account.",
+  "An active zone in that account for the Bye address.",
 ];
 
 export const MANUAL_STEPS: ReadonlyArray<string> = [
-  "Custom app/public domains and the mail cutover are manual (see the guide); onboarding never changes DNS, MX or Email Routing.",
-  "Download the recovery kit once the account is chosen and store it safely: it is issued only once and is the only copy of the instance's generated secrets outside this service.",
-  "Create the first account with the one-time setup link once the instance is ready; that account becomes the instance's operator.",
+  "Incoming email for your domain is a separate, optional step offered in Bye after you create your owner account; onboarding never changes DNS, MX or Email Routing.",
+  "The recovery kit is available from the Recovery section at any time after Bye is created; it is issued once.",
 ];
+
+/** Default label for the Bye hostname (`bye.<zone>`). */
+export const DEFAULT_HOSTNAME_LABEL = "bye";
+
+const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** Validates and normalizes a hostname label; null when invalid. */
+export const normalizeLabel = (label: string): string | null => {
+  const l = label.trim().toLowerCase();
+  return LABEL.test(l) ? l : null;
+};
+
+/** `label.zone`, lowercase without a trailing dot, when it is a strict subdomain of `zone`. */
+export const appHostnameFor = (label: string, zoneName: string): string | null => {
+  const l = normalizeLabel(label);
+  const zone = zoneName.trim().toLowerCase().replace(/\.$/, "");
+  if (l === null || zone === "" || !zone.includes(".")) return null;
+  const host = `${l}.${zone}`;
+  return host.length <= 253 ? host : null;
+};
+
+/** Normal-path states (infra/onboarding/spec.md §30) plus the exceptional ones. */
+export type InstallState =
+  | "new"
+  | "authorized"
+  | "target-selected"
+  | "planning"
+  | "deploying"
+  | "verifying"
+  | "ready"
+  | "needs-review"
+  | "failed"
+  | "interrupted"
+  | "disconnected";
 
 /** The one-time recovery kit (flow: after binding). Holds no Cloudflare credentials. */
 export interface RecoveryKit {
@@ -78,6 +165,10 @@ export interface RecoveryKit {
   readonly issuedAt: string;
   readonly installationId: string;
   readonly account: { readonly id: string; readonly name: string | null };
+  /** The chosen zone and Bye hostname; null on stage-bound installations. */
+  readonly zone: { readonly id: string; readonly name: string } | null;
+  readonly appHostname: string | null;
+  readonly ownerAddressDomain: string | null;
   readonly stage: string;
   readonly stack: "MailboxPlatform";
   readonly state: NonNullable<Installation["stateRef"]>;
@@ -124,6 +215,8 @@ export interface ServiceDeps {
   readonly dataDir: string;
   readonly now?: () => number;
   readonly healthTimeouts?: { readonly request?: number; readonly async?: number };
+  /** Scope matrix used for plan coverage (default: ONBOARDING_SCOPES). */
+  readonly scopeMatrix?: ReadonlyArray<ScopeGrant>;
 }
 
 interface StoredCredentials {
@@ -148,11 +241,84 @@ export const workersDevUrls = (workerName: string, subdomain: string): InstanceU
   render: `https://${workerName}-render.${subdomain}.workers.dev`,
 });
 
+/**
+ * Standard installs serve the app on the chosen hostname; the public site and the separate render
+ * origin stay on workers.dev (no second domain decision).
+ */
+export const customDomainUrls = (
+  appHostname: string,
+  workerName: string,
+  subdomain: string,
+): InstanceUrls => ({ ...workersDevUrls(workerName, subdomain), app: `https://${appHostname}` });
+
+/**
+ * Whether public DNS already answers for `host` (DNS-over-HTTPS; no zone DNS scope needed). A
+ * wildcard in the zone answers for every name, which a custom domain can still take over, so an
+ * answer for a random sibling means "can't tell" (null), as does any lookup failure.
+ */
+export const hostnameInUse = async (
+  fetcher: Fetch,
+  host: string,
+  zone: string,
+): Promise<boolean | null> => {
+  const answers = async (name: string): Promise<boolean | null> => {
+    for (const type of ["CNAME", "A", "AAAA"]) {
+      try {
+        const r = await fetcher(
+          `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${type}`,
+          { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(5_000) },
+        );
+        if (!r.ok) return null;
+        const body = (await r.json()) as { Status?: number; Answer?: ReadonlyArray<unknown> };
+        if (body.Status !== 0 && body.Status !== 3) return null;
+        if ((body.Answer ?? []).length > 0) return true;
+      } catch {
+        return null;
+      }
+    }
+    return false;
+  };
+  const direct = await answers(host);
+  if (direct !== true) return direct;
+  const wildcard = await answers(`bye-probe-${hex(6)}.${zone}`);
+  return wildcard === false ? true : null;
+};
+
+/** Derived installation state for the progress UI (infra/onboarding/spec.md §30). */
+export const installState = (
+  inst: Installation,
+  operation: Operation | null,
+  planning = false,
+): InstallState => {
+  if (inst.authorization.status === "disconnected" || inst.authorization.status === "expired")
+    return "disconnected";
+  if (operation && (operation.status === "queued" || operation.status === "running"))
+    return operation.step === "revalidate"
+      ? "planning"
+      : operation.step === "health"
+        ? "verifying"
+        : "deploying";
+  if (planning) return "planning";
+  if (inst.ready) return "ready";
+  if (inst.pendingReviewId) return "needs-review";
+  if (operation?.status === "interrupted") return "interrupted";
+  if (operation && operation.status !== "succeeded") return "failed";
+  if (inst.boundAt !== null) return "target-selected";
+  if (inst.authorization.status === "connected") return "authorized";
+  return "new";
+};
+
 export interface StatusView {
+  readonly state: InstallState;
   readonly installation: {
     readonly id: string;
     readonly accountId: string | null;
     readonly accountName: string | null;
+    readonly zoneId: string | null;
+    readonly zoneName: string | null;
+    readonly appHostname: string | null;
+    readonly ownerAddressDomain: string | null;
+    readonly pendingReviewId: string | null;
     readonly stage: string | null;
     readonly stateRef: Installation["stateRef"];
     readonly urls: InstanceUrls | null;
@@ -168,8 +334,18 @@ export interface StatusView {
   readonly progress: ReadonlyArray<OnboardingEvent>;
   readonly prerequisites: ReadonlyArray<string>;
   readonly manualSteps: ReadonlyArray<string>;
+  readonly whatByeCreates: ReadonlyArray<string>;
   readonly handoff: Handoff | null;
 }
+
+/** Result of "Create Bye": a started (or resumed) deployment, or a plan that needs review. */
+export type InstallResult =
+  | { readonly status: "deploying"; readonly operationId: string; readonly appUrl: string }
+  | {
+      readonly status: "needs-review";
+      readonly reviewId: string;
+      readonly reasons: ReadonlyArray<string>;
+    };
 
 export interface Handoff {
   readonly url: string;
@@ -179,6 +355,8 @@ export interface Handoff {
 
 export class OnboardingService {
   private readonly active = new Map<string, { opId: string; controller: AbortController }>();
+  /** Installations with a "Create Bye" request being planned (duplicate submissions are refused). */
+  private readonly installing = new Set<string>();
   private readonly running = new Map<string, Promise<void>>();
   private readonly now: () => number;
   private readonly deps: ServiceDeps;
@@ -232,6 +410,12 @@ export class OnboardingService {
       ready: false,
       readyAt: null,
       recoveryKitIssuedAt: null,
+      zoneId: null,
+      zoneName: null,
+      appHostname: null,
+      ownerAddressDomain: null,
+      installIntent: null,
+      pendingReviewId: null,
     };
     await this.deps.store.putInstallation(created);
     await this.event(created.id, "installation.created", "installation created");
@@ -406,7 +590,223 @@ export class OnboardingService {
     return this.deps.cloudflare.accounts(await this.accessToken(inst));
   }
 
-  // ── Binding: one operator, one account, one stage ───────────────────────────────────────
+  /** Active zones of an account this authorization reaches (never the OAuth token itself). */
+  async zones(
+    operatorId: string,
+    accountId: string,
+  ): Promise<ReadonlyArray<{ readonly id: string; readonly name: string }>> {
+    const inst = await this.installation(operatorId);
+    const token = await this.accessToken(inst);
+    if (!(await this.deps.cloudflare.accounts(token)).some((a) => a.id === accountId))
+      throw new OnboardingError("invalid", "that account is not available to this authorization");
+    return (await this.activeZones(token, accountId)).map((z) => ({ id: z.id, name: z.name }));
+  }
+
+  private async activeZones(token: string, accountId: string): Promise<ReadonlyArray<Zone>> {
+    return (await this.deps.cloudflare.zones(token, accountId))
+      .filter((z) => z.status === "active")
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // ── Standard install: account + zone + label → Create Bye ───────────────────────────────
+
+  /**
+   * "Create Bye" (infra/onboarding/spec.md §5–§6): binds the immutable install target (fixed stage
+   * `prod`), records the install intent, plans, and — only for a standard clean first install —
+   * approves by policy and starts the deployment. Otherwise the plan waits in `needs-review`.
+   * Zone name and hostname are derived here from Cloudflare, never taken from the browser.
+   */
+  async install(
+    operatorId: string,
+    input: { readonly accountId: string; readonly zoneId: string; readonly label: string },
+  ): Promise<InstallResult> {
+    const inst = await this.installation(operatorId);
+    if (this.installing.has(inst.id))
+      throw new OnboardingError("conflict", "Bye is already being prepared", "Wait for it");
+    this.installing.add(inst.id);
+    try {
+      return await this.runInstall(operatorId, inst, input);
+    } finally {
+      this.installing.delete(inst.id);
+    }
+  }
+
+  private async runInstall(
+    operatorId: string,
+    initial: Installation,
+    input: { readonly accountId: string; readonly zoneId: string; readonly label: string },
+  ): Promise<InstallResult> {
+    const label = normalizeLabel(input.label);
+    if (label === null)
+      throw new OnboardingError(
+        "invalid",
+        "the Bye address must be 1–63 lowercase letters, digits or hyphens, not starting or ending with a hyphen",
+      );
+    // A running deployment is simply reported (duplicate "Create Bye").
+    const active = await this.activeOperation(initial.id);
+    if (active && initial.urls)
+      return { status: "deploying", operationId: active.id, appUrl: initial.urls.app };
+    const inst = await this.bindTarget(initial, input.accountId, input.zoneId, label);
+    const resolved = this.deps.release.resolve();
+    if (!resolved.ok)
+      throw new OnboardingError("blocked", resolved.reason, "Contact the Bye release owner");
+    // The intent is recorded before planning; a retry keeps the first one (same target).
+    const intent: InstallIntent =
+      inst.installIntent &&
+      canonical(inst.installIntent.release) === canonical(resolved.release.ref) &&
+      inst.installIntent.zoneId === inst.zoneId
+        ? inst.installIntent
+        : {
+            id: hex(12),
+            installationId: inst.id,
+            accountId: inst.accountId!,
+            zoneId: inst.zoneId!,
+            zoneName: inst.zoneName!,
+            appHostname: inst.appHostname!,
+            stage: "prod",
+            release: resolved.release.ref,
+            createdAt: this.iso(),
+            operatorId,
+          };
+    if (intent !== inst.installIntent) {
+      await this.deps.store.putInstallation({
+        ...(await this.fresh(inst.id)),
+        installIntent: intent,
+      });
+      await this.event(
+        inst.id,
+        "install.intent",
+        `Create Bye at ${intent.appHostname} (release ${intent.release.version})`,
+      );
+    }
+    const review = await this.review(operatorId);
+    const current = await this.fresh(inst.id);
+    const reasons = autoApprovalBlockers({
+      installation: current,
+      intent,
+      review,
+      release: resolved.release.ref,
+      releaseMigrations: await this.deps.release.migrations(resolved.release.dir),
+    });
+    if (reasons.length > 0) {
+      await this.deps.store.putInstallation({ ...current, pendingReviewId: review.id });
+      await this.event(inst.id, "install.needs-review", reasons.join("; "));
+      return { status: "needs-review", reviewId: review.id, reasons };
+    }
+    const approval: Approval = {
+      id: hex(12),
+      reviewId: review.id,
+      installationId: inst.id,
+      digest: review.digest,
+      subject: review.subject,
+      approvedAt: this.iso(),
+      approvedBy: operatorId,
+      policy: "standard-first-install",
+      installIntentId: intent.id,
+    };
+    await this.deps.store.putApproval(approval);
+    await this.deps.store.putInstallation({
+      ...(await this.fresh(inst.id)),
+      pendingReviewId: null,
+    });
+    await this.event(
+      inst.id,
+      "approval.recorded",
+      `standard first install approved by policy for install intent ${intent.id} (plan ${review.digest.slice(0, 12)})`,
+    );
+    const op = await this.deploy(operatorId, approval.id);
+    return { status: "deploying", operationId: op.id, appUrl: current.urls!.app };
+  }
+
+  /** Binds account + zone + hostname once; a retry with the same target returns the record. */
+  private async bindTarget(
+    inst: Installation,
+    accountId: string,
+    zoneId: string,
+    label: string,
+  ): Promise<Installation> {
+    if (inst.boundAt !== null) {
+      const same =
+        inst.accountId === accountId &&
+        inst.zoneId === zoneId &&
+        inst.appHostname === appHostnameFor(label, inst.zoneName ?? "");
+      if (same) return inst;
+      // Before the first deployment write nothing exists yet, so a standard install may still
+      // move to another hostname (e.g. the first one was taken). Afterwards the target is fixed,
+      // and once the recovery kit (which names the target) is out it is fixed too.
+      const movable =
+        !!inst.appHostname &&
+        inst.firstWriteAt === null &&
+        !inst.recoveryKitIssuedAt &&
+        (await this.activeOperation(inst.id)) === null;
+      if (!movable)
+        throw new OnboardingError(
+          "conflict",
+          inst.appHostname
+            ? `this installation is bound to ${inst.appHostname} in ${inst.accountName ?? inst.accountId}`
+            : `this installation is bound to ${inst.accountName ?? inst.accountId} / ${inst.stage}`,
+          "Retries always use the recorded account, zone and hostname; changing them needs a separately reviewed workflow",
+        );
+    }
+    const token = await this.accessToken(inst);
+    const account = (await this.deps.cloudflare.accounts(token)).find((a) => a.id === accountId);
+    if (!account)
+      throw new OnboardingError("invalid", "that account is not available to this authorization");
+    const zone = (await this.activeZones(token, accountId)).find((z) => z.id === zoneId);
+    if (!zone)
+      throw new OnboardingError(
+        "invalid",
+        "that domain is not an active zone in the selected Cloudflare account",
+        "Add or activate the domain in Cloudflare, then refresh domains",
+      );
+    const appHostname = appHostnameFor(label, zone.name);
+    if (appHostname === null)
+      throw new OnboardingError("invalid", "that Bye address is not a valid hostname in the zone");
+    // A Worker custom domain never overrides an existing record, so catch the conflict before
+    // anything is created instead of at the final attach.
+    if ((await hostnameInUse(this.deps.fetch, appHostname, zone.name)) === true)
+      throw new OnboardingError(
+        "conflict",
+        `${appHostname} already has DNS records`,
+        "Choose another Bye address, or remove those records in Cloudflare first",
+      );
+    const other = await this.deps.store.installationForTarget(accountId, "prod");
+    if (other && other.id !== inst.id)
+      throw new OnboardingError("conflict", "another installation already targets this account");
+    const subdomain = await this.deps.cloudflare.workersSubdomain(token, accountId);
+    if (!subdomain)
+      throw new OnboardingError(
+        "blocked",
+        "the account has no workers.dev subdomain",
+        "Register a workers.dev subdomain in the Cloudflare dashboard (Workers & Pages), then continue",
+      );
+    const workerName = `bye-${inst.id.slice(0, 10)}`;
+    // A move before the first write keeps the already generated secrets.
+    const runtimeSecrets =
+      inst.runtimeSecrets ?? seal(this.deps.keys, generateRuntimeSecrets(), inst.id);
+    const bound: Installation = {
+      ...(await this.fresh(inst.id)),
+      installIntent: null,
+      pendingReviewId: null,
+      accountId,
+      accountName: account.name,
+      stage: "prod",
+      workerName,
+      urls: customDomainUrls(appHostname, workerName, subdomain),
+      stateRef: { backend: "cloudflare", accountId, stack: "MailboxPlatform", stage: "prod" },
+      runtimeSecrets,
+      boundAt: this.iso(),
+      zoneId: zone.id,
+      zoneName: zone.name,
+      appHostname,
+      ownerAddressDomain: zone.name,
+    };
+    await this.deps.store.putInstallation(bound);
+    await this.event(inst.id, "installation.bound", `account ${account.name}, ${appHostname}`);
+    return bound;
+  }
+
+  // ── Stage binding (internal/test/operator pathway; the normal UI never asks for a stage) ──
 
   async bind(operatorId: string, accountId: string, stage: string): Promise<Installation> {
     const inst = await this.installation(operatorId);
@@ -438,7 +838,7 @@ export class OnboardingService {
         "Register a workers.dev subdomain in the Cloudflare dashboard, then continue",
       );
     const workerName = `bye-${inst.id.slice(0, 10)}`;
-    const secrets = Object.fromEntries(GENERATED_SECRETS.map((k) => [k, b64(32)]));
+    const secrets = generateRuntimeSecrets();
     const bound: Installation = {
       ...(await this.fresh(inst.id)),
       accountId,
@@ -457,10 +857,37 @@ export class OnboardingService {
 
   private config(inst: Installation): Record<string, string> {
     const secrets = open<Record<string, string>>(this.deps.keys, inst.runtimeSecrets!, inst.id);
+    // Newsletter dispatch qualification comes only from the pinned release's own evidence file,
+    // never from the operator. It is part of the configuration digest, so a release that changes
+    // it needs a fresh review.
+    const resolved = this.deps.release.resolve();
+    const qualified = resolved.ok ? (resolved.release.qualification?.newsletter ?? null) : null;
     return {
       APP_ORIGIN: inst.urls!.app,
       MAIL_RENDER_ORIGIN: inst.urls!.render,
       BYE_WORKERS_DEV_NAME: inst.workerName!,
+      // The chosen Bye hostname becomes MailCore's custom domain. Installation metadata is
+      // non-secret: the bootstrap address domain and the zone incoming email binds to later.
+      ...(inst.appHostname
+        ? {
+            APP_DOMAIN: inst.appHostname,
+            BOOTSTRAP_ADDRESS_DOMAIN: inst.ownerAddressDomain ?? inst.zoneName ?? "",
+            INSTALL_ACCOUNT_ID: inst.accountId!,
+            INSTALL_ZONE_ID: inst.zoneId ?? "",
+            INSTALL_ZONE_NAME: inst.zoneName ?? "",
+            // The Worker incoming email's catch-all routes to (MailCore's fixed name).
+            MAIL_WORKER_NAME: inst.workerName!,
+          }
+        : {}),
+      ...(qualified ? { NEWSLETTER_QUALIFIED: qualified } : {}),
+      // Outbound personal mail through Cloudflare Email Sending, DKIM-signed with the generated
+      // key (installations bound before key generation keep transactional mail only).
+      ...(secrets.MAIL_DKIM_PRIVATE_KEY
+        ? {
+            MAIL_DKIM_PUBLIC_KEY: dkimPublicKey(secrets.MAIL_DKIM_PRIVATE_KEY),
+            MAIL_TRAFFIC_CLASSES: "transactional,personal",
+          }
+        : {}),
       ...secrets,
       ...Object.fromEntries(DISABLED_SECRETS.map((k) => [k, ""])),
     };
@@ -491,8 +918,18 @@ export class OnboardingService {
     if (!accounts.some((a) => a.id === inst.accountId))
       blockers.push("the bound account is no longer reachable with this authorization");
     const subdomain = await this.deps.cloudflare.workersSubdomain(token, inst.accountId!);
-    if (!subdomain || workersDevUrls(inst.workerName!, subdomain).app !== inst.urls!.app)
+    if (!subdomain || workersDevUrls(inst.workerName!, subdomain).render !== inst.urls!.render)
       blockers.push("the account's workers.dev subdomain changed or was removed");
+    if (inst.zoneId) {
+      // The chosen zone must still be an active zone of the bound account, with the same name.
+      const zone = (await this.deps.cloudflare.zones(token, inst.accountId!)).find(
+        (z) => z.id === inst.zoneId,
+      );
+      if (!zone || zone.status !== "active" || zone.name !== inst.zoneName)
+        blockers.push(`the zone ${inst.zoneName} is no longer an active zone in the bound account`);
+      else if (!inst.appHostname?.endsWith(`.${zone.name}`))
+        blockers.push("the Bye hostname is not a subdomain of the bound zone");
+    }
     if (inst.firstWriteAt === null) {
       const names = new Set(await this.deps.cloudflare.workerNames(token, inst.accountId!));
       const n = inst.workerName!;
@@ -513,7 +950,7 @@ export class OnboardingService {
   async review(operatorId: string): Promise<Review> {
     const inst = await this.installation(operatorId);
     if (inst.boundAt === null)
-      throw new OnboardingError("invalid", "choose an account and stage first");
+      throw new OnboardingError("invalid", "choose where Bye should live first");
     const token = await this.accessToken(inst);
     const resolved = this.deps.release.resolve();
     if (!resolved.ok)
@@ -544,6 +981,7 @@ export class OnboardingService {
       releaseMigrations: await this.deps.release.migrations(resolved.release.dir),
       prerequisiteBlockers: blockers,
       grantedScopes: inst.authorization.scopes,
+      ...(this.deps.scopeMatrix ? { scopeMatrix: this.deps.scopeMatrix } : {}),
     });
     const review: Review = {
       id: hex(12),
@@ -584,8 +1022,12 @@ export class OnboardingService {
       subject: review.subject,
       approvedAt: this.iso(),
       approvedBy: operatorId,
+      policy: "operator",
     };
     await this.deps.store.putApproval(approval);
+    const current = await this.fresh(inst.id);
+    if (current.pendingReviewId)
+      await this.deps.store.putInstallation({ ...current, pendingReviewId: null });
     await this.event(
       inst.id,
       "approval.recorded",
@@ -655,6 +1097,15 @@ export class OnboardingService {
       await this.deps.store.releaseWriter(inst.id, op.id);
     });
     this.running.set(op.id, run);
+    return op;
+  }
+
+  /** One of this operator's operations (progress polling). */
+  async operation(operatorId: string, operationId: string): Promise<Operation> {
+    const inst = await this.installation(operatorId);
+    const op = await this.deps.store.getOperation(operationId);
+    if (!op || op.installationId !== inst.id)
+      throw new OnboardingError("not_found", "operation not found");
     return op;
   }
 
@@ -747,6 +1198,7 @@ export class OnboardingService {
           ...this.requiredConfigGaps(resolved.release.dir, this.config(inst)),
         ],
         grantedScopes: inst.authorization.scopes,
+        ...(this.deps.scopeMatrix ? { scopeMatrix: this.deps.scopeMatrix } : {}),
       });
       // A retry after a partial apply is not a first deployment: existing rows are its own.
       const blockers = fresh.blockers.filter(
@@ -1018,10 +1470,16 @@ export class OnboardingService {
     const events = await this.deps.store.events(inst.id);
     const resolved = this.deps.release.resolve();
     return {
+      state: installState(inst, operation, this.installing.has(inst.id)),
       installation: {
         id: inst.id,
         accountId: inst.accountId,
         accountName: inst.accountName,
+        zoneId: inst.zoneId ?? null,
+        zoneName: inst.zoneName ?? null,
+        appHostname: inst.appHostname ?? null,
+        ownerAddressDomain: inst.ownerAddressDomain ?? null,
+        pendingReviewId: inst.pendingReviewId ?? null,
         stage: inst.stage,
         stateRef: inst.stateRef,
         urls: inst.urls,
@@ -1039,6 +1497,7 @@ export class OnboardingService {
       progress: operation ? events.filter((e) => e.operationId === operation.id).slice(-50) : [],
       prerequisites: PREREQUISITES,
       manualSteps: MANUAL_STEPS,
+      whatByeCreates: WHAT_BYE_CREATES,
       handoff: inst.ready && inst.urls ? handoffFor(inst.urls.app) : null,
     };
   }
@@ -1051,8 +1510,9 @@ export class OnboardingService {
   }
 
   /**
-   * The setup link for the instance's first account (`/#bootstrap=<token>`, in a fragment so it
-   * never reaches a server log). The instance accepts it once, and only while it has no users.
+   * The setup link for the instance's first account (`/#bootstrap=<token>&domain=<zone>`, in a
+   * fragment so it never reaches a server log). The instance accepts it once, only while it has
+   * no users, and only for an address on BOOTSTRAP_ADDRESS_DOMAIN; `domain` is display input.
    */
   async firstAccountLink(operatorId: string): Promise<{ readonly link: string }> {
     const inst = await this.installation(operatorId);
@@ -1070,7 +1530,10 @@ export class OnboardingService {
         "Create the first account through OPERATOR_USER_IDS and a reviewed deploy",
       );
     await this.event(inst.id, "first-account.link", "setup link shown to the operator");
-    return { link: `${inst.urls.app}/#bootstrap=${token}` };
+    const domain = inst.ownerAddressDomain ?? null;
+    return {
+      link: `${inst.urls.app}/#bootstrap=${token}${domain ? `&domain=${encodeURIComponent(domain)}` : ""}`,
+    };
   }
 
   /**
@@ -1081,7 +1544,7 @@ export class OnboardingService {
   async recoveryKit(operatorId: string): Promise<RecoveryKit> {
     const inst = await this.installation(operatorId);
     if (inst.boundAt === null || !inst.runtimeSecrets || !inst.urls || !inst.stateRef)
-      throw new OnboardingError("invalid", "choose an account and stage first");
+      throw new OnboardingError("invalid", "choose where Bye should live first");
     if (inst.recoveryKitIssuedAt)
       throw new OnboardingError(
         "conflict",
@@ -1103,6 +1566,9 @@ export class OnboardingService {
       issuedAt,
       installationId: inst.id,
       account: { id: inst.accountId!, name: inst.accountName },
+      zone: inst.zoneId && inst.zoneName ? { id: inst.zoneId, name: inst.zoneName } : null,
+      appHostname: inst.appHostname ?? null,
+      ownerAddressDomain: inst.ownerAddressDomain ?? null,
       stage: inst.stage!,
       stack: "MailboxPlatform",
       state: inst.stateRef,
@@ -1116,7 +1582,7 @@ export class OnboardingService {
       },
       notes: [
         "Store this file like a password: it contains the instance's session, signing and probe secrets.",
-        "Keep BYE_WORKERS_DEV_NAME and every secret unchanged on redeploys; changing the name replaces the Workers and their Durable Object data, and changing SESSION_KEY signs everyone out.",
+        "Keep BYE_WORKERS_DEV_NAME, APP_DOMAIN and every secret unchanged on redeploys; changing the name replaces the Workers and their Durable Object data, and changing SESSION_KEY signs everyone out.",
         'To manage the installation without the onboarding service, deploy the recorded release with these values and a scoped Cloudflare API token (infra/RUNBOOK.md, "Cloudflare deployment token"); follow "Onboarding installations" and "Interrupted deploy" there.',
         "Alchemy state lives in your account (Cloudflare state store); resources and data are unaffected by losing the onboarding service.",
       ],

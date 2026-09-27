@@ -23,6 +23,31 @@ const envKeysOf = (node: unknown): ReadonlyArray<string> | undefined => {
     : undefined;
 };
 
+/**
+ * Hostnames a row attaches: a Worker's `domain` (canonical name, aliases, redirects) and `routes`
+ * patterns, or a custom-domain resource's own hostname. Onboarding review checks them against
+ * the installation's chosen Bye hostname.
+ */
+export const domainsOf = (node: unknown, type: string): ReadonlyArray<string> | undefined => {
+  const props = (node as { props?: Record<string, unknown> } | undefined)?.props;
+  if (!props) return undefined;
+  const out: Array<string> = [];
+  const str = (v: unknown) => (typeof v === "string" && v !== "" ? [v] : []);
+  const strs = (v: unknown) => (Array.isArray(v) ? v.flatMap(str) : []);
+  if (type === "Cloudflare.Worker") {
+    const d = props.domain;
+    if (typeof d === "string") out.push(...str(d));
+    else if (d && typeof d === "object") {
+      const c = d as { name?: unknown; aliases?: unknown; redirects?: unknown };
+      out.push(...str(c.name), ...strs(c.aliases), ...strs(c.redirects));
+    }
+    for (const r of Array.isArray(props.routes) ? props.routes : [])
+      out.push(...str(typeof r === "string" ? r : (r as { pattern?: unknown })?.pattern));
+  } else if (/customdomain|route/i.test(type))
+    out.push(...str(props.hostname), ...str(props.name), ...str(props.pattern));
+  return out.length > 0 ? out.map((h) => h.toLowerCase()) : undefined;
+};
+
 export const exportPlan = async (
   stage: string,
   operation: "deploy" | "destroy",
@@ -39,12 +64,14 @@ export const exportPlan = async (
     const node = nodes[r.fqn];
     const envBindings =
       r.resourceType === "Cloudflare.Worker" && node ? envKeysOf(node) : undefined;
+    const domains = node ? domainsOf(node, r.resourceType) : undefined;
     return {
       fqn: r.fqn,
       logicalId: r.logicalId,
       resourceType: r.resourceType,
       action: r.action,
       ...(envBindings ? { envBindings } : {}),
+      ...(domains ? { domains } : {}),
     };
   });
   return {

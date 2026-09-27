@@ -201,6 +201,197 @@ export const planMailDns = (
   return ops;
 };
 
+/** How a domain's current mail setup relates to the proposed Bye configuration. */
+export type MailSetupKind = "new" | "existing-provider" | "conflicted";
+
+export interface MailSetupClassification {
+  /**
+   * `new`: no foreign MX, Bye can configure inbound mail after one confirmation.
+   * `existing-provider`: MX points at another provider; switching needs an explicit cutover.
+   * `conflicted`: a non-MX conflict (several SPF records, DKIM selector in use) blocks setup.
+   */
+  readonly kind: MailSetupKind;
+  /** Recognized provider behind the current MX records, or a description of the host. */
+  readonly provider: string | null;
+  readonly currentMx: ReadonlyArray<DnsRecord>;
+  /** Non-MX conflicts the customer must resolve; never applied automatically. */
+  readonly conflicts: ReadonlyArray<DnsOperation>;
+  /** Replacing the current MX (and routing) needs the separate cutover confirmation. */
+  readonly requiresCutover: boolean;
+}
+
+const MAIL_PROVIDERS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/(^|\.)(google|googlemail)\.com$/i, "Google Workspace"],
+  [/(^|\.)outlook\.com$/i, "Microsoft 365"],
+  [/(^|\.)messagingengine\.com$/i, "Fastmail"],
+  [/(^|\.)zoho\.(com|eu|in)$/i, "Zoho Mail"],
+  [/(^|\.)(protonmail\.ch|proton\.me)$/i, "Proton Mail"],
+  [/(^|\.)icloud\.com$/i, "iCloud Mail"],
+  [/(^|\.)mimecast\.com$/i, "Mimecast"],
+  [/(^|\.)pphosted\.com$/i, "Proofpoint"],
+  [/(^|\.)secureserver\.net$/i, "GoDaddy"],
+  [/(^|\.)mx\.cloudflare\.net$/i, "Cloudflare Email Routing"],
+];
+
+/** Best-effort name of the provider the MX records point at (display only). */
+export const detectMailProvider = (mx: ReadonlyArray<DnsRecord>): string | null => {
+  if (mx.length === 0) return null;
+  const hosts = mx.map((r) => r.content.toLowerCase().replace(/\.$/, ""));
+  for (const [pattern, name] of MAIL_PROVIDERS) if (hosts.some((h) => pattern.test(h))) return name;
+  return `another mail provider (${hosts[0]})`;
+};
+
+/** A Cloudflare Email Routing rule (catch-all or address rule), recorded exactly. */
+export interface EmailRoutingRule {
+  readonly enabled: boolean;
+  readonly name?: string;
+  readonly matchers: ReadonlyArray<{
+    readonly type: string;
+    readonly field?: string;
+    readonly value?: string;
+  }>;
+  readonly actions: ReadonlyArray<{
+    readonly type: string;
+    readonly value?: ReadonlyArray<string>;
+  }>;
+}
+
+/** The zone's Email Routing state, as read through the zone API. */
+export interface RoutingState {
+  readonly enabled: boolean;
+  readonly catchAll: EmailRoutingRule | null;
+  /** Address rules (not the catch-all). */
+  readonly rules: ReadonlyArray<EmailRoutingRule>;
+}
+
+/** Whether an enabled rule delivers mail somewhere other than the MailCore Worker. */
+const deliversElsewhere = (rule: EmailRoutingRule | null, workerName: string | null): boolean =>
+  rule !== null &&
+  rule.enabled &&
+  rule.actions.some(
+    (a) =>
+      a.type === "forward" ||
+      (a.type === "worker" && (workerName === null || !(a.value ?? []).includes(workerName))),
+  );
+
+/** The catch-all delivers somewhere other than MailCore (replacing it hijacks that mail). */
+export const catchAllElsewhere = (routing: RoutingState | null, workerName: string | null) =>
+  routing !== null && deliversElsewhere(routing.catchAll, workerName);
+
+/**
+ * Classifies a planned change set (`planMailDns`) against the current MX records and, when known,
+ * the zone's Email Routing rules. MX pointing at Cloudflare Email Routing is still an existing
+ * provider when the routing forwards mail elsewhere (or, without zone access, when the rules can't
+ * be read): switching it to Bye needs the same explicit cutover confirmation as a foreign MX.
+ */
+export const classifyMailSetup = (
+  domain: string,
+  existing: ReadonlyArray<DnsRecord>,
+  plan: ReadonlyArray<DnsOperation>,
+  profile: MailDnsProfile,
+  routing: RoutingState | null = null,
+  workerName: string | null = null,
+): MailSetupClassification => {
+  const currentMx = existing.filter((r) => r.type === "MX" && sameName(r.name, domain));
+  const foreign = currentMx.filter(
+    (r) => !profile.mxHosts.some((h) => sameName(h.host, r.content)),
+  );
+  const routedByCloudflare = currentMx.length > 0 && foreign.length === 0;
+  const forwarding =
+    routedByCloudflare &&
+    (routing === null
+      ? true
+      : // Rules count even while Email Routing is off: enabling it would put them back in force.
+        deliversElsewhere(routing.catchAll, workerName) ||
+        routing.rules.some((r) => deliversElsewhere(r, workerName)));
+  const conflicts = plan.filter((op) => op.op === "conflict" && op.purpose !== "inbound");
+  const existingProvider = foreign.length > 0 || forwarding;
+  return {
+    kind: conflicts.length > 0 ? "conflicted" : existingProvider ? "existing-provider" : "new",
+    provider:
+      foreign.length > 0
+        ? detectMailProvider(foreign)
+        : forwarding
+          ? routing === null
+            ? "Cloudflare Email Routing (its current rules are not visible to Bye)"
+            : "Cloudflare Email Routing forwarding"
+          : detectMailProvider(currentMx),
+    currentMx,
+    conflicts,
+    requiresCutover: existingProvider,
+  };
+};
+
+/**
+ * Mail configuration recorded before any cutover write, for "Restore previous mail setup".
+ * `routing` is null when it could not be read (no zone API access).
+ */
+export interface MailSnapshot {
+  readonly capturedAt: number;
+  readonly mx: ReadonlyArray<DnsRecord>;
+  readonly spf: ReadonlyArray<DnsRecord>;
+  readonly dkim: ReadonlyArray<DnsRecord>;
+  readonly dmarc: ReadonlyArray<DnsRecord>;
+  readonly routing: RoutingState | null;
+}
+
+export const snapshotMailDns = (
+  domain: string,
+  records: ReadonlyArray<DnsRecord>,
+  profile: MailDnsProfile,
+  routing: MailSnapshot["routing"],
+  capturedAt: number,
+): MailSnapshot => {
+  const strip = (r: DnsRecord): DnsRecord => ({
+    type: r.type,
+    name: r.name,
+    content: unquote(r.content),
+    ...(r.priority !== undefined ? { priority: r.priority } : {}),
+  });
+  const at = (name: string) => records.filter((r) => sameName(r.name, name)).map(strip);
+  return {
+    capturedAt,
+    mx: at(domain).filter((r) => r.type === "MX"),
+    spf: at(domain).filter(isSpf),
+    dkim: at(`${profile.dkimSelector}._domainkey.${domain}`).filter((r) => r.type === "TXT"),
+    dmarc: at(`_dmarc.${domain}`).filter(isDmarc),
+    routing,
+  };
+};
+
+/** How Bye changed a zone's mail setup; rollback restores through the same path. */
+export type MailWriteMode = "api" | "manual";
+
+export type ZoneAuthMethod = "service-zone" | "delegated-token" | "manual-records";
+
+/** Installation binding and cutover record of a domain (infra/onboarding/spec.md §12, §15). */
+export interface DomainMailLink {
+  readonly installAccountId: string | null;
+  readonly installZoneId: string | null;
+  readonly cutoverConfirmedAt: number | null;
+  readonly snapshot: MailSnapshot | null;
+  /** Recorded zone authorization; a restarted Workflow resumes from it. */
+  readonly zoneAuthMethod: ZoneAuthMethod | null;
+  readonly writeMode: MailWriteMode | null;
+  /** After a manual-records rollback: the setup the customer still has to restore by hand. */
+  readonly restorePending: MailSnapshot | null;
+  /** End-to-end inbound check address and when a message to it reached MailCore. */
+  readonly inboundProbe: { readonly address: string; readonly receivedAt: number | null } | null;
+}
+
+/** Local part prefix of the inbound verification address (`bye-verify-<token>@<domain>`). */
+export const INBOUND_PROBE_PREFIX = "bye-verify-";
+
+const probeToken = () =>
+  Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+
+/** States from which "Restore previous mail setup" applies (zone authorization onwards). */
+export const rollbackStates: ReadonlyArray<DomainOnboardingState> = DOMAIN_SEQUENCE.slice(
+  DOMAIN_SEQUENCE.indexOf("ownership-proven"),
+);
+
 export type DiagnosticStatus = "pass" | "fail" | "warn";
 
 export interface DomainDiagnostic {
@@ -367,6 +558,263 @@ export class ControlDomains {
       reject("conflict", "domain already claimed");
     }
     return this.get(id);
+  }
+
+  /**
+   * Binds the onboarding-selected zone as this organization's customer domain without asking for
+   * the name again (infra/onboarding/spec.md §15). Onboarding already established that the connected
+   * Cloudflare account holds the zone, so the ownership step is satisfied by that link instead of
+   * a TXT record. The domain can never be re-linked to another account or zone. Reuses an existing
+   * row of the same organization (re-entrant).
+   */
+  async requestFromInstallation(
+    orgId: string,
+    actorId: string,
+    link: { readonly name: string; readonly accountId: string; readonly zoneId: string },
+  ): Promise<DomainRow> {
+    const name = link.name.trim().toLowerCase().replace(/\.$/, "");
+    if (!DOMAIN_NAME.test(name)) reject("bad_request", "invalid domain name");
+    if (!link.accountId || !link.zoneId) reject("conflict", "installation zone is not recorded");
+    const prior = await guardD1("domain", () =>
+      q(
+        primary(this.db),
+        "SELECT id, org_id, state, install_account_id, install_zone_id FROM domains WHERE name = ?",
+        name,
+      ).first<{
+        id: string;
+        org_id: string;
+        state: string;
+        install_account_id: string | null;
+        install_zone_id: string | null;
+      }>(),
+    );
+    const mine = prior !== null && prior.org_id === orgId && prior.state !== "removed";
+    if (
+      mine &&
+      ((prior.install_zone_id !== null && prior.install_zone_id !== link.zoneId) ||
+        (prior.install_account_id !== null && prior.install_account_id !== link.accountId))
+    )
+      reject("conflict", "domain is bound to a different Cloudflare account or zone");
+    const row = mine ? await this.get(prior.id) : await this.request(orgId, actorId, name);
+    await this.db.batch([
+      q(
+        this.db,
+        "UPDATE domains SET install_account_id = ?, install_zone_id = ?, updated_at = ? WHERE id = ? AND install_zone_id IS NULL",
+        link.accountId,
+        link.zoneId,
+        this.clock.now(),
+        row.id,
+      ),
+      audit(this.db, this.clock, {
+        orgId,
+        actorId,
+        action: "domain.installation-link",
+        target: row.id,
+        detail: { accountId: link.accountId, zoneId: link.zoneId },
+      }),
+    ]);
+    return row.state === "requested"
+      ? this.advance(row, "requested", actorId, {
+          method: "installation-zone",
+          accountId: link.accountId,
+          zoneId: link.zoneId,
+        })
+      : row;
+  }
+
+  async mailLink(domainId: string): Promise<DomainMailLink> {
+    const r = await guardD1("domain", () =>
+      q(
+        primary(this.db),
+        "SELECT name, install_account_id, install_zone_id, cutover_confirmed_at, cutover_snapshot, zone_auth_method, mail_write_mode, restore_pending, inbound_probe_token, inbound_probe_at FROM domains WHERE id = ?",
+        domainId,
+      ).first<{
+        name: string;
+        install_account_id: string | null;
+        install_zone_id: string | null;
+        cutover_confirmed_at: number | null;
+        cutover_snapshot: string | null;
+        zone_auth_method: string | null;
+        mail_write_mode: string | null;
+        restore_pending: string | null;
+        inbound_probe_token: string | null;
+        inbound_probe_at: number | null;
+      }>(),
+    );
+    if (!r) return reject("not_found", "domain");
+    return {
+      installAccountId: r.install_account_id,
+      installZoneId: r.install_zone_id,
+      cutoverConfirmedAt: r.cutover_confirmed_at === null ? null : Number(r.cutover_confirmed_at),
+      snapshot: r.cutover_snapshot ? (JSON.parse(r.cutover_snapshot) as MailSnapshot) : null,
+      zoneAuthMethod: (r.zone_auth_method as ZoneAuthMethod | null) ?? null,
+      writeMode: (r.mail_write_mode as MailWriteMode | null) ?? null,
+      restorePending: r.restore_pending ? (JSON.parse(r.restore_pending) as MailSnapshot) : null,
+      inboundProbe: r.inbound_probe_token
+        ? {
+            address: `${INBOUND_PROBE_PREFIX}${r.inbound_probe_token}@${r.name}`,
+            receivedAt: r.inbound_probe_at === null ? null : Number(r.inbound_probe_at),
+          }
+        : null,
+    };
+  }
+
+  /**
+   * Records how zone authorization was given (so a restarted Workflow resumes without waiting for
+   * the event again) and issues a fresh inbound verification address for this attempt.
+   */
+  async recordAuthorization(
+    domainId: string,
+    actorId: string,
+    method: ZoneAuthMethod,
+  ): Promise<DomainMailLink> {
+    const d = await this.get(domainId);
+    await this.db.batch([
+      q(
+        this.db,
+        "UPDATE domains SET zone_auth_method = ?, inbound_probe_token = ?, inbound_probe_at = NULL, mail_write_mode = COALESCE(mail_write_mode, ?), updated_at = ? WHERE id = ?",
+        method,
+        probeToken(),
+        method === "manual-records" ? "manual" : null,
+        this.clock.now(),
+        d.id,
+      ),
+      audit(this.db, this.clock, {
+        orgId: d.org_id,
+        actorId,
+        action: "domain.zone.authorize",
+        target: d.id,
+        detail: { method },
+      }),
+    ]);
+    return this.mailLink(d.id);
+  }
+
+  /** Bye wrote DNS or Email Routing itself; once `api`, it stays `api` until a rollback. */
+  async recordWriteMode(domainId: string, mode: MailWriteMode): Promise<void> {
+    await q(
+      this.db,
+      "UPDATE domains SET mail_write_mode = CASE WHEN mail_write_mode = 'api' THEN 'api' ELSE ? END WHERE id = ?",
+      mode,
+      domainId,
+    ).run();
+  }
+
+  /**
+   * A message to `bye-verify-<token>@<domain>` reached MailCore: proof the zone's MX and routing
+   * deliver to Bye. Returns whether the address matched a domain's current verification token.
+   */
+  async recordInboundProbe(address: string): Promise<boolean> {
+    const at = address.trim().toLowerCase().lastIndexOf("@");
+    if (at <= 0) return false;
+    const local = address.trim().toLowerCase().slice(0, at);
+    const domain = address
+      .trim()
+      .toLowerCase()
+      .slice(at + 1);
+    if (!local.startsWith(INBOUND_PROBE_PREFIX)) return false;
+    const token = local.slice(INBOUND_PROBE_PREFIX.length);
+    if (!/^[a-f0-9]{24}$/.test(token)) return false;
+    const r = await q(
+      this.db,
+      "UPDATE domains SET inbound_probe_at = COALESCE(inbound_probe_at, ?) WHERE name = ? AND inbound_probe_token = ? AND state != 'removed'",
+      this.clock.now(),
+      domain,
+      token,
+    ).run();
+    return r.meta.changes > 0;
+  }
+
+  /** The customer restored their previous setup by hand (after a manual-records rollback). */
+  async acknowledgeRestore(domainId: string, actorId: string): Promise<DomainMailLink> {
+    const d = await this.get(domainId);
+    await this.db.batch([
+      q(
+        this.db,
+        "UPDATE domains SET restore_pending = NULL, updated_at = ? WHERE id = ?",
+        this.clock.now(),
+        d.id,
+      ),
+      audit(this.db, this.clock, {
+        orgId: d.org_id,
+        actorId,
+        action: "domain.mail.restore-acknowledged",
+        target: d.id,
+      }),
+    ]);
+    return this.mailLink(d.id);
+  }
+
+  /**
+   * Records the pre-change snapshot (the first one wins until a rollback clears it; a setup still
+   * waiting to be restored by hand is kept as the snapshot, never replaced by Bye's own records)
+   * and, when the admin confirmed replacing the current provider, the cutover confirmation.
+   */
+  async recordCutover(
+    domainId: string,
+    actorId: string,
+    snapshot: MailSnapshot,
+    confirmed: boolean,
+  ): Promise<DomainMailLink> {
+    const d = await this.get(domainId);
+    await this.db.batch([
+      q(
+        this.db,
+        "UPDATE domains SET cutover_snapshot = COALESCE(cutover_snapshot, restore_pending, ?), restore_pending = NULL, cutover_confirmed_at = CASE WHEN ? THEN COALESCE(cutover_confirmed_at, ?) ELSE cutover_confirmed_at END, updated_at = ? WHERE id = ?",
+        JSON.stringify(snapshot),
+        confirmed ? 1 : 0,
+        this.clock.now(),
+        this.clock.now(),
+        d.id,
+      ),
+      audit(this.db, this.clock, {
+        orgId: d.org_id,
+        actorId,
+        action: confirmed ? "domain.cutover.confirm" : "domain.mail.snapshot",
+        target: d.id,
+      }),
+    ]);
+    return this.mailLink(d.id);
+  }
+
+  /**
+   * After "Restore previous mail setup": the domain returns to `ownership-proven` and setup can be
+   * started again (a fresh Workflow; `workflow_instance` is cleared). Mailboxes, address routes and
+   * accepted mail are untouched; the snapshot, confirmation, authorization and write mode are
+   * cleared (kept in the audit log). A manual-records rollback keeps the recorded setup in
+   * `restore_pending` until the customer confirms they restored it. Fails when the state moved
+   * since `expected` was read, so a restore is never reported against a state it did not see.
+   */
+  async rewindAfterRollback(
+    domainId: string,
+    actorId: string,
+    detail: unknown,
+    options: {
+      readonly expected: DomainOnboardingState;
+      readonly restorePending: MailSnapshot | null;
+    },
+  ): Promise<DomainRow> {
+    const d = await this.get(domainId);
+    if (!rollbackStates.includes(d.state))
+      reject("conflict", `domain is ${d.state}; nothing to restore`);
+    const r = await q(
+      this.db,
+      "UPDATE domains SET state = 'ownership-proven', cutover_confirmed_at = NULL, cutover_snapshot = NULL, restore_pending = ?, zone_auth_method = NULL, mail_write_mode = NULL, inbound_probe_token = NULL, inbound_probe_at = NULL, workflow_instance = NULL, updated_at = ? WHERE id = ? AND state = ?",
+      options.restorePending === null ? null : JSON.stringify(options.restorePending),
+      this.clock.now(),
+      d.id,
+      options.expected,
+    ).run();
+    if (r.meta.changes !== 1)
+      reject("conflict", "the domain changed while its mail setup was being restored; try again");
+    await audit(this.db, this.clock, {
+      orgId: d.org_id,
+      actorId,
+      action: "domain.mail.rollback",
+      target: d.id,
+      detail,
+    }).run();
+    return this.get(d.id);
   }
 
   private async advance(

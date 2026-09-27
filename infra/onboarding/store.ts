@@ -56,6 +56,23 @@ export interface InstanceUrls {
   readonly render: string;
 }
 
+/**
+ * The user's "Create Bye" click, recorded before planning: consent to exactly this standard
+ * installation target. A plan is auto-approved only while it still matches the intent.
+ */
+export interface InstallIntent {
+  readonly id: string;
+  readonly installationId: string;
+  readonly accountId: string;
+  readonly zoneId: string;
+  readonly zoneName: string;
+  readonly appHostname: string;
+  readonly stage: "prod";
+  readonly release: ReleaseRef;
+  readonly createdAt: string;
+  readonly operatorId: string;
+}
+
 export interface Installation {
   readonly id: string;
   readonly operatorId: string;
@@ -81,6 +98,17 @@ export interface Installation {
   readonly readyAt: string | null;
   /** When the one-time recovery kit was handed out; absent on records from before it existed. */
   readonly recoveryKitIssuedAt?: string | null;
+  // Install target (infra/onboarding/spec.md §5): the Cloudflare zone and Bye hostname chosen in the
+  // standard flow. Immutable once `firstWriteAt` is set. Absent/null on stage-bound installations.
+  readonly zoneId?: string | null;
+  readonly zoneName?: string | null;
+  /** Bye hostname, e.g. `bye.example.com` (lowercase, no trailing dot). */
+  readonly appHostname?: string | null;
+  /** Domain for the owner's address (initially the zone); never activates mail routing. */
+  readonly ownerAddressDomain?: string | null;
+  readonly installIntent?: InstallIntent | null;
+  /** Review awaiting the operator because the standard plan could not be auto-approved. */
+  readonly pendingReviewId?: string | null;
 }
 
 export interface PlannedAction {
@@ -121,6 +149,9 @@ export interface Approval {
   readonly subject: ApprovalSubject;
   readonly approvedAt: string;
   readonly approvedBy: string;
+  /** How it was approved: by the operator on a reviewed plan, or by policy after an install intent. */
+  readonly policy?: "operator" | "standard-first-install";
+  readonly installIntentId?: string;
 }
 
 export type OperationStatus =

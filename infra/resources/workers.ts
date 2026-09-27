@@ -84,18 +84,11 @@ export const coreEnv = {
   // Ingress fault injection for §14.2 evidence; empty everywhere except explicit evidence runs.
   BYE_FAULT_INGRESS: Config.String("BYE_FAULT_INGRESS").pipe(Config.withDefault("")),
   AUTH_RATE_LIMIT: AuthRateLimit,
-  // Approved personal-mail transport (§15.5): credential and submission URL. Both empty = personal
-  // mail unavailable (transactional only); check-config refuses a deploy with only one of the two,
-  // or with a non-https/placeholder (`.invalid`) endpoint.
-  PERSONAL_MAIL_API_KEY: Config.Redacted("PERSONAL_MAIL_API_KEY").pipe(
-    Config.withDefault(Redacted.make("")),
-  ),
-  PERSONAL_MAIL_ENDPOINT: Config.String("PERSONAL_MAIL_ENDPOINT").pipe(Config.withDefault("")),
   SESSION_KEY: Config.Redacted("SESSION_KEY"),
   PROXY_SIGNING_KEY: Config.Redacted("PROXY_SIGNING_KEY"),
   BILLING_WEBHOOK_SECRET: Config.Redacted("BILLING_WEBHOOK_SECRET"),
   // Signing secret (>= 32 chars, `t=<unix>,v1=<hex>` scheme) for /webhooks/send-events, shared
-  // only with the personal-mail provider. Empty = every delivery event is refused.
+  // only with a delivery-event source. Empty = every delivery event is refused.
   SEND_EVENTS_WEBHOOK_SECRET: Config.Redacted("SEND_EVENTS_WEBHOOK_SECRET").pipe(
     Config.withDefault(Redacted.make("")),
   ),
@@ -111,7 +104,9 @@ export const coreEnv = {
   FORWARDING_ENDPOINT: Config.String("FORWARDING_ENDPOINT").pipe(Config.withDefault("")),
   FORWARDING_DOMAIN: Config.String("FORWARDING_DOMAIN").pipe(Config.withDefault("")),
   ARC_SELECTOR: Config.String("ARC_SELECTOR").pipe(Config.withDefault("")),
-  // Traffic classes MailTransport may dispatch in this stage (spec.md §5.3); empty = transactional only.
+  // Traffic classes MailTransport may dispatch in this stage (spec.md §5.3); empty = transactional
+  // only. `personal` sends personal correspondence through the TransactionalEmail binding
+  // (Cloudflare Email Sending), DKIM-signed with MAIL_DKIM_PRIVATE_KEY when set.
   MAIL_TRAFFIC_CLASSES: Config.String("MAIL_TRAFFIC_CLASSES").pipe(Config.withDefault("")),
   // Newsletter provider (spec.md §5.5). Empty provider or qualification evidence = newsletters blocked.
   NEWSLETTER_PROVIDER: Config.String("NEWSLETTER_PROVIDER").pipe(Config.withDefault("")),
@@ -148,11 +143,34 @@ export const coreEnv = {
   CF_PUBLIC_ZONE_ID: Config.String("CF_PUBLIC_ZONE_ID").pipe(Config.withDefault("")),
   MAIL_WORKER_NAME: Config.String("MAIL_WORKER_NAME").pipe(Config.withDefault("")),
   MAIL_DKIM_PUBLIC_KEY: Config.String("MAIL_DKIM_PUBLIC_KEY").pipe(Config.withDefault("")),
+  // PKCS#8 PEM private key for MAIL_DKIM_PUBLIC_KEY (selector `bye1`): signs outbound personal
+  // mail. Empty = personal mail is not DKIM-signed by Bye.
+  MAIL_DKIM_PRIVATE_KEY: Config.Redacted("MAIL_DKIM_PRIVATE_KEY").pipe(
+    Config.withDefault(Redacted.make("")),
+  ),
   BILLING_CHECKOUT_URL: Config.String("BILLING_CHECKOUT_URL").pipe(Config.withDefault("")),
   BILLING_API_KEY: Config.Redacted("BILLING_API_KEY").pipe(Config.withDefault(Redacted.make(""))),
   OPERATOR_USER_IDS: Config.String("OPERATOR_USER_IDS").pipe(Config.withDefault("")),
   // First-account bootstrap for onboarding installations (workers/core/src/bootstrap.ts). Empty = off.
   BOOTSTRAP_TOKEN: Config.Redacted("BOOTSTRAP_TOKEN").pipe(Config.withDefault(Redacted.make(""))),
+  // Address domain the bootstrap account must use (the zone chosen in onboarding). Non-secret; it
+  // does not activate MX or Email Routing. Empty = any domain the signup rules accept.
+  BOOTSTRAP_ADDRESS_DOMAIN: Config.String("BOOTSTRAP_ADDRESS_DOMAIN").pipe(Config.withDefault("")),
+  // Onboarding-selected Cloudflare account and zone (non-secret installation metadata). Incoming
+  // email activation binds the customer domain to exactly this zone. Empty on CI-managed stages.
+  INSTALL_ACCOUNT_ID: Config.String("INSTALL_ACCOUNT_ID").pipe(Config.withDefault("")),
+  INSTALL_ZONE_ID: Config.String("INSTALL_ZONE_ID").pipe(Config.withDefault("")),
+  INSTALL_ZONE_NAME: Config.String("INSTALL_ZONE_NAME").pipe(Config.withDefault("")),
+  // Seals the runtime newsletter provider credentials (newsletter-config.ts). 32 random bytes,
+  // generated once by onboarding. Empty = runtime newsletter configuration unavailable.
+  NEWSLETTER_CONFIG_SEAL_KEY: Config.Redacted("NEWSLETTER_CONFIG_SEAL_KEY").pipe(
+    Config.withDefault(Redacted.make("")),
+  ),
+  // Seals the owner-entered Cloudflare token scoped to the installation zone (zone-token.ts). 32
+  // random bytes, generated once by onboarding. Empty = incoming email stays in manual-records mode.
+  ZONE_TOKEN_SEAL_KEY: Config.Redacted("ZONE_TOKEN_SEAL_KEY").pipe(
+    Config.withDefault(Redacted.make("")),
+  ),
 };
 
 /**

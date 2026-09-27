@@ -205,3 +205,440 @@ describe("[O01] customer-domain onboarding through a scoped Cloudflare API", () 
     await expect(cloudflareApi("wrong", cf.fetch).findZone("bye.test")).rejects.toThrow();
   });
 });
+
+describe("incoming email for the onboarding-selected zone (infra/onboarding/spec.md Part B)", () => {
+  const installed = async () => {
+    const s = await setup();
+    const zoneId = s.cf.addZone("example.test");
+    const d = await s.domains.requestFromInstallation(s.orgId, s.owner.userId, {
+      name: "Example.test.",
+      accountId: "acc_1",
+      zoneId,
+    });
+    return { ...s, zoneId, d };
+  };
+
+  it("binds the installation zone at ownership-proven, re-entrantly, and never to another zone", async () => {
+    const { orgs, domains, owner, orgId, zoneId, d, clock, d1 } = await installed();
+    expect(d).toMatchObject({ name: "example.test", state: "ownership-proven" });
+    const again = await domains.requestFromInstallation(orgId, owner.userId, {
+      name: "example.test",
+      accountId: "acc_1",
+      zoneId,
+    });
+    expect(again.id).toBe(d.id);
+    expect(
+      code(
+        await domains
+          .requestFromInstallation(orgId, owner.userId, {
+            name: "example.test",
+            accountId: "acc_1",
+            zoneId: "zone-other",
+          })
+          .catch((e) => e),
+      ),
+    ).toBe("conflict");
+    // Another organization cannot take the bound name.
+    const other = await new ControlDirectory(d1, clock).provisionPersonalAccount({
+      address: "eve@bye.test",
+      displayName: "Eve",
+    });
+    const eveOrg = await orgs.createOrganization(other.userId, {
+      name: "Eve",
+      kind: "domain",
+      seatLimit: 1,
+    });
+    expect(
+      code(
+        await domains
+          .requestFromInstallation(eveOrg, other.userId, {
+            name: "example.test",
+            accountId: "acc_1",
+            zoneId,
+          })
+          .catch((e) => e),
+      ),
+    ).toBe("conflict");
+  });
+
+  it("classifies new, existing-provider and conflicted setups before any write", async () => {
+    const { cf, zoneId, d, onboarding } = await installed();
+    const ob = onboarding(true);
+    expect((await ob.preview(d.id)).classification).toMatchObject({
+      kind: "new",
+      provider: null,
+      requiresCutover: false,
+    });
+    cf.records.push({
+      id: "mx",
+      zoneId,
+      type: "MX",
+      name: "example.test",
+      content: "in1-smtp.messagingengine.com",
+      priority: 10,
+    });
+    expect((await ob.preview(d.id)).classification).toMatchObject({
+      kind: "existing-provider",
+      provider: "Fastmail",
+      requiresCutover: true,
+    });
+    cf.records.push(
+      { id: "s1", zoneId, type: "TXT", name: "example.test", content: "v=spf1 -all" },
+      { id: "s2", zoneId, type: "TXT", name: "example.test", content: "v=spf1 ~all" },
+    );
+    const conflicted = (await ob.preview(d.id)).classification;
+    expect(conflicted.kind).toBe("conflicted");
+    expect(conflicted.conflicts.map((c) => c.purpose)).toContain(
+      "spf (multiple SPF records are invalid)",
+    );
+    cf.records.splice(-2, 2);
+    cf.records.push({
+      id: "dk",
+      zoneId,
+      type: "TXT",
+      name: "bye1._domainkey.example.test",
+      content: "v=DKIM1; k=rsa; p=someoneelse",
+    });
+    expect((await ob.preview(d.id)).classification.conflicts[0]?.purpose).toBe(
+      "dkim selector in use",
+    );
+    // Previews wrote nothing.
+    expect(cf.calls.filter((c) => !c.startsWith("GET"))).toEqual([]);
+  });
+
+  it("confirmed cutover replaces the foreign MX, merges SPF, keeps DMARC and unrelated records; rollback restores", async () => {
+    const { cf, zoneId, d, onboarding, domains, owner, d1 } = await installed();
+    const foreign = [
+      {
+        id: "g1",
+        zoneId,
+        type: "MX" as const,
+        name: "example.test",
+        content: "aspmx.l.google.com",
+        priority: 1,
+      },
+      {
+        id: "spf",
+        zoneId,
+        type: "TXT" as const,
+        name: "example.test",
+        content: "v=spf1 include:_spf.google.com ~all",
+      },
+      {
+        id: "dmarc",
+        zoneId,
+        type: "TXT" as const,
+        name: "_dmarc.example.test",
+        content: "v=DMARC1; p=reject",
+      },
+      { id: "www", zoneId, type: "CNAME" as const, name: "www.example.test", content: "x.test" },
+    ];
+    cf.records.push(...foreign.map((r) => ({ ...r })));
+    const ob = onboarding(true);
+
+    // Without the confirmation, even an authorized zone keeps the foreign MX.
+    await ob.domains.authorizeZone(d.id, owner.userId, { method: "delegated-token" });
+    const held = await ob.configureDns(d.id, owner.userId);
+    expect(held.conflicts.some((c) => c.purpose === "inbound")).toBe(true);
+    expect(cf.records.find((r) => r.id === "g1")).toBeDefined();
+    // The pre-change snapshot was recorded before the first write.
+    const snap = (await domains.mailLink(d.id)).snapshot!;
+    expect(snap.mx.map((r) => r.content)).toEqual(["aspmx.l.google.com"]);
+    expect(snap.routing).toEqual({ enabled: false, catchAll: null, rules: [] });
+
+    await domains.recordCutover(d.id, owner.userId, snap, true);
+    const dns = await ob.configureDns(d.id, owner.userId);
+    expect(dns.conflicts).toEqual([]);
+    const mx = () =>
+      cf.records
+        .filter((r) => r.type === "MX")
+        .map((r) => r.content)
+        .sort();
+    expect(mx()).toEqual([
+      "route1.mx.cloudflare.net",
+      "route2.mx.cloudflare.net",
+      "route3.mx.cloudflare.net",
+    ]);
+    const spf = cf.records.filter((r) => r.type === "TXT" && r.content.startsWith("v=spf1"));
+    expect(spf).toHaveLength(1);
+    expect(spf[0]!.content).toBe(
+      "v=spf1 include:_spf.mx.cloudflare.net include:_spf.google.com ~all",
+    );
+    expect(cf.records.find((r) => r.id === "dmarc")!.content).toBe("v=DMARC1; p=reject");
+    expect(cf.records.find((r) => r.id === "www")).toMatchObject({ content: "x.test" });
+
+    // Not active until inbound is verified; routing enables only in the inbound step.
+    expect((await domains.get(d.id)).state).toBe("dns-configured");
+    expect(cf.routing.get(zoneId)).toEqual({ enabled: false, catchAll: null });
+    expect((await ob.testInbound(d.id, owner.userId)).passed).toBe(true);
+    expect(cf.routing.get(zoneId)).toEqual({ enabled: true, catchAll: "mailcore" });
+    expect((await domains.get(d.id)).state).not.toBe("active");
+
+    // Mail already accepted for the owner stays: rollback never touches mailboxes or routes.
+    const routesBefore = await d1.prepare("SELECT COUNT(*) AS n FROM address_routes").first();
+    const back = await ob.rollback(d.id, owner.userId);
+    expect(back.domain.state).toBe("ownership-proven");
+    expect(mx()).toEqual(["aspmx.l.google.com"]);
+    expect(
+      cf.records.filter((r) => r.type === "TXT" && r.content.startsWith("v=spf1"))[0]!.content,
+    ).toBe("v=spf1 include:_spf.google.com ~all");
+    expect(cf.records.some((r) => r.name === "bye1._domainkey.example.test")).toBe(false);
+    expect(cf.records.find((r) => r.id === "dmarc")!.content).toBe("v=DMARC1; p=reject");
+    expect(cf.records.find((r) => r.id === "www")).toBeDefined();
+    expect(cf.routing.get(zoneId)).toEqual({ enabled: false, catchAll: null });
+    expect(await d1.prepare("SELECT COUNT(*) AS n FROM address_routes").first()).toEqual(
+      routesBefore,
+    );
+    expect((await domains.mailLink(d.id)).cutoverConfirmedAt).toBeNull();
+    // A retry resumes from zone authorization.
+    expect(
+      (await ob.domains.authorizeZone(d.id, owner.userId, { method: "delegated-token" })).state,
+    ).toBe("zone-authorized");
+  });
+
+  it("refuses a zone the API reaches that is not the installation's", async () => {
+    const { cf, d, onboarding, owner, d1 } = await installed();
+    await d1
+      .prepare("UPDATE domains SET install_zone_id = 'zone-elsewhere' WHERE id = ?")
+      .bind(d.id)
+      .run();
+    const ob = onboarding(true);
+    await ob.domains.authorizeZone(d.id, owner.userId, { method: "delegated-token" });
+    expect(code(await ob.configureDns(d.id, owner.userId).catch((e) => e))).toBe("conflict");
+    expect(cf.calls.filter((c) => !c.startsWith("GET"))).toEqual([]);
+  });
+
+  const authorized = async (automated = true) => {
+    const s = await installed();
+    const ob = s.onboarding(automated);
+    await ob.domains.recordCutover(s.d.id, s.owner.userId, await ob.snapshot(s.d.id), false);
+    await ob.domains.recordAuthorization(
+      s.d.id,
+      s.owner.userId,
+      automated ? "delegated-token" : "manual-records",
+    );
+    await ob.domains.authorizeZone(s.d.id, s.owner.userId, {
+      method: automated ? "delegated-token" : "manual-records",
+    });
+    return { ...s, ob };
+  };
+  const forwardRule = {
+    enabled: true,
+    name: "to gmail",
+    matchers: [{ type: "all" }],
+    actions: [{ type: "forward", value: ["someone@gmail.test"] }],
+  };
+  const cfMx = (zoneId: string) =>
+    ["route1", "route2", "route3"].map((h, i) => ({
+      id: `cfmx${i}`,
+      zoneId,
+      type: "MX" as const,
+      name: "example.test",
+      content: `${h}.mx.cloudflare.net`,
+      priority: 10 * (i + 1),
+    }));
+
+  it("treats Cloudflare Email Routing that forwards elsewhere as an existing provider", async () => {
+    const { cf, zoneId, d, onboarding } = await installed();
+    cf.records.push(...cfMx(zoneId));
+    cf.routing.get(zoneId)!.enabled = true;
+    cf.setCatchAll(zoneId, forwardRule);
+    const ob = onboarding(true);
+    expect((await ob.preview(d.id)).classification).toMatchObject({
+      kind: "existing-provider",
+      provider: "Cloudflare Email Routing forwarding",
+      requiresCutover: true,
+    });
+    // An address rule forwarding elsewhere counts too.
+    cf.setCatchAll(zoneId, { ...forwardRule, enabled: false });
+    cf.routingRules.set(zoneId, [
+      {
+        enabled: true,
+        matchers: [{ type: "literal", field: "to", value: "ceo@example.test" }],
+        actions: [{ type: "forward", value: ["ceo@gmail.test"] }],
+      },
+    ]);
+    expect((await ob.preview(d.id)).classification.requiresCutover).toBe(true);
+    // Routing that already delivers to MailCore is not a provider to replace.
+    cf.routingRules.set(zoneId, []);
+    cf.setCatchAll(zoneId, { ...forwardRule, actions: [{ type: "worker", value: ["mailcore"] }] });
+    expect((await ob.preview(d.id)).classification).toMatchObject({
+      kind: "new",
+      requiresCutover: false,
+    });
+    // Without zone access the rules can't be read: Cloudflare MX still needs a confirmation.
+    expect((await onboarding(false).preview(d.id)).classification).toMatchObject({
+      kind: "existing-provider",
+      provider: "Cloudflare Email Routing (its current rules are not visible to Bye)",
+      requiresCutover: true,
+    });
+  });
+
+  it("never replaces a catch-all that delivers elsewhere without a confirmed cutover, and restores it exactly", async () => {
+    const { cf, zoneId, d, ob, owner, domains } = await authorized();
+    cf.setCatchAll(zoneId, forwardRule);
+    // Snapshot was taken before the forward rule existed; record the real pre-change state.
+    await ob.domains.rewindAfterRollback(
+      d.id,
+      owner.userId,
+      {},
+      {
+        expected: "zone-authorized",
+        restorePending: null,
+      },
+    );
+    const snap = await ob.snapshot(d.id);
+    expect(snap.routing?.catchAll).toEqual(forwardRule);
+    await domains.recordCutover(d.id, owner.userId, snap, false);
+    await ob.domains.authorizeZone(d.id, owner.userId, { method: "delegated-token" });
+    expect((await ob.configureDns(d.id, owner.userId)).domain.state).toBe("dns-configured");
+    const held = await ob.testInbound(d.id, owner.userId);
+    expect(held.passed).toBe(false);
+    expect(held.detail).toMatch(/confirm the switch/);
+    expect(cf.catchAllRules.get(zoneId)).toEqual(forwardRule);
+    expect((await ob.preview(d.id)).cutoverPending).toBe(true);
+
+    await domains.recordCutover(d.id, owner.userId, snap, true);
+    expect((await ob.testInbound(d.id, owner.userId)).passed).toBe(true);
+    expect(cf.routing.get(zoneId)!.catchAll).toBe("mailcore");
+    expect((await domains.mailLink(d.id)).writeMode).toBe("api");
+
+    const back = await ob.rollback(d.id, owner.userId);
+    expect(back.manual).toBeNull();
+    expect(back.domain.state).toBe("ownership-proven");
+    expect(cf.catchAllRules.get(zoneId)).toEqual(forwardRule);
+  });
+
+  it("adds Bye's MX before removing the previous provider's", async () => {
+    const { cf, zoneId, d, ob, owner, domains } = await installed().then(async (s) => {
+      s.cf.records.push({
+        id: "g1",
+        zoneId: s.zoneId,
+        type: "MX",
+        name: "example.test",
+        content: "aspmx.l.google.com",
+        priority: 1,
+      });
+      const ob = s.onboarding(true);
+      await ob.domains.recordCutover(s.d.id, s.owner.userId, await ob.snapshot(s.d.id), true);
+      await ob.domains.authorizeZone(s.d.id, s.owner.userId, { method: "delegated-token" });
+      return { ...s, ob };
+    });
+    cf.calls.length = 0;
+    await ob.configureDns(d.id, owner.userId);
+    const writes = cf.calls.filter((c) => !c.startsWith("GET"));
+    const firstDelete = writes.findIndex((c) => c.startsWith("DELETE"));
+    expect(firstDelete).toBeGreaterThan(2); // three MX creates first
+    expect(writes.slice(0, 3).every((c) => c.startsWith("POST"))).toBe(true);
+    expect(cf.records.some((r) => r.content === "aspmx.l.google.com")).toBe(false);
+    expect((await domains.mailLink(d.id)).writeMode).toBe("api");
+    expect(zoneId).toBeTruthy();
+  });
+
+  it("decides the cutover from authoritative zone records, not stale public answers", async () => {
+    const { cf, d, onboarding } = await installed();
+    // Public DNS still answers with an old provider the zone no longer has.
+    cf.external.push({
+      id: "stale",
+      type: "MX",
+      name: "example.test",
+      content: "aspmx.l.google.com",
+      priority: 1,
+    });
+    const viaApi = await onboarding(true).preview(d.id);
+    expect(viaApi.source).toBe("zone-api");
+    expect(viaApi.classification.requiresCutover).toBe(false);
+    expect((await onboarding(false).preview(d.id)).classification.requiresCutover).toBe(true);
+  });
+
+  it("manual records: MX alone never passes inbound; the verification message does", async () => {
+    const { cf, zoneId, d, ob, owner, domains } = await authorized(false);
+    cf.records.push(...cfMx(zoneId));
+    await domains.recordCutover(d.id, owner.userId, await ob.snapshot(d.id), true);
+    // Publish the rest of the records by hand (the plan's creates), then verify.
+    for (const op of (await ob.preview(d.id)).plan)
+      if (op.op === "create")
+        cf.records.push({ id: `m${cf.records.length}`, zoneId, ...op.record });
+    expect((await ob.configureDns(d.id, owner.userId)).domain.state).toBe("dns-configured");
+    const waiting = await ob.testInbound(d.id, owner.userId);
+    expect(waiting.passed).toBe(false);
+    const probe = (await domains.mailLink(d.id)).inboundProbe!;
+    expect(waiting.detail).toContain(probe.address);
+    expect(probe.address).toMatch(/^bye-verify-[a-f0-9]{24}@example\.test$/);
+    expect(
+      await domains.recordInboundProbe("bye-verify-000000000000000000000000@example.test"),
+    ).toBe(false);
+    expect(await domains.recordInboundProbe(probe.address.toUpperCase())).toBe(true);
+    expect((await ob.testInbound(d.id, owner.userId)).passed).toBe(true);
+    expect((await domains.get(d.id)).state).toBe("inbound-tested");
+  });
+
+  it("manual rollback keeps the recorded setup until the owner restores it, and reuses it as the next snapshot", async () => {
+    const { cf, zoneId, d, ob, owner, domains } = await installed().then(async (s) => {
+      s.cf.records.push({
+        id: "g1",
+        zoneId: s.zoneId,
+        type: "MX",
+        name: "example.test",
+        content: "aspmx.l.google.com",
+        priority: 1,
+      });
+      const ob = s.onboarding(false);
+      await ob.domains.recordCutover(s.d.id, s.owner.userId, await ob.snapshot(s.d.id), true);
+      await ob.domains.recordAuthorization(s.d.id, s.owner.userId, "manual-records");
+      await ob.domains.authorizeZone(s.d.id, s.owner.userId, { method: "manual-records" });
+      return { ...s, ob };
+    });
+    // The owner switched MX by hand; then verification failed and they restore.
+    cf.records.splice(
+      cf.records.findIndex((r) => r.id === "g1"),
+      1,
+    );
+    cf.records.push(...cfMx(zoneId));
+    expect((await ob.rollbackPlan(d.id)).mode).toBe("manual");
+    const back = await ob.rollback(d.id, owner.userId);
+    expect(back.manual?.mx.map((r) => r.content)).toEqual(["aspmx.l.google.com"]);
+    const link = await domains.mailLink(d.id);
+    expect(link.restorePending?.mx.map((r) => r.content)).toEqual(["aspmx.l.google.com"]);
+    expect(link.snapshot).toBeNull();
+    expect(link.zoneAuthMethod).toBeNull();
+    // A new attempt records the still-pending original, not Bye's MX, as its snapshot.
+    await domains.recordCutover(d.id, owner.userId, await ob.snapshot(d.id), true);
+    const again = await domains.mailLink(d.id);
+    expect(again.snapshot?.mx.map((r) => r.content)).toEqual(["aspmx.l.google.com"]);
+    expect(again.restorePending).toBeNull();
+    // Acknowledging clears a pending restore.
+    await ob.domains.authorizeZone(d.id, owner.userId, { method: "manual-records" });
+    await ob.rollback(d.id, owner.userId);
+    expect((await domains.acknowledgeRestore(d.id, owner.userId)).restorePending).toBeNull();
+  });
+
+  it("rolls back through the path the change was made, and never against a state it did not see", async () => {
+    const { d, ob, owner, domains, onboarding } = await authorized(true);
+    // Authorized for the API but nothing written through it yet: restore is manual.
+    expect((await ob.rollbackPlan(d.id)).mode).toBe("manual");
+    await domains.recordWriteMode(d.id, "api");
+    expect((await ob.rollbackPlan(d.id)).mode).toBe("api");
+    // With the API gone, the recorded setup is handed to the customer instead.
+    expect((await onboarding(false).rollbackPlan(d.id)).mode).toBe("manual");
+    expect(
+      code(
+        await domains
+          .rewindAfterRollback(
+            d.id,
+            owner.userId,
+            {},
+            {
+              expected: "dns-configured",
+              restorePending: null,
+            },
+          )
+          .catch((e) => e),
+      ),
+    ).toBe("conflict");
+    expect((await domains.get(d.id)).state).toBe("zone-authorized");
+    // Nothing to restore once rewound.
+    await ob.rollback(d.id, owner.userId);
+    expect(code(await ob.rollbackPlan(d.id).catch((e) => e))).toBe("conflict");
+  });
+});

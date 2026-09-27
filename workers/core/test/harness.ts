@@ -339,12 +339,17 @@ export const makeHarness = () => {
   const workflowEvents: Record<string, Array<{ id: string; type: string; payload: unknown }>> = {};
   /** Instance status per workflow binding and id; tests may overwrite it to simulate progress. */
   const workflowStatus: Record<string, Map<string, { status: string; output?: unknown }>> = {};
+  const workflowUnstoppable = new Set<string>();
   const workflow = (name: string) => {
     const instance = (id: string) => ({
       id,
       status: async () => structuredClone(workflowStatus[name]!.get(id)!),
       sendEvent: async (event: { type: string; payload: unknown }) =>
         void (workflowEvents[name] ??= []).push({ id, ...structuredClone(event) }),
+      terminate: async () => {
+        // Tests add an id to `workflowUnstoppable` to simulate a stop that does not take effect.
+        if (!workflowUnstoppable.has(id)) workflowStatus[name]!.get(id)!.status = "terminated";
+      },
     });
     return {
       create: async (options: { id: string; params: unknown }) => {
@@ -465,9 +470,7 @@ export const makeHarness = () => {
         return { success: !rateLimit.deny(key) };
       },
     },
-    PERSONAL_MAIL_API_KEY: "",
-    PERSONAL_MAIL_ENDPOINT: "https://mail-provider.example/v1/messages",
-    MAIL_TRAFFIC_CLASSES: "transactional,personal,external-identity,forwarding",
+    MAIL_TRAFFIC_CLASSES: "transactional,external-identity,forwarding",
     SESSION_KEY: "test-session-key-0123456789abcdef",
     PROXY_SIGNING_KEY: "test-proxy-key-0123456789abcdef",
     BILLING_WEBHOOK_SECRET: "test-billing-secret-0123456789abcdef",
@@ -563,6 +566,7 @@ export const makeHarness = () => {
     deadLettered,
     rateLimit,
     workflowStatus,
+    workflowUnstoppable,
     buckets,
     sent,
     workflows,
@@ -670,4 +674,10 @@ export const installWebSocketPair = () => {
       delete g.WebSocketPair;
     },
   };
+};
+
+/** Enables the `personal` traffic class (Cloudflare send_email; sent mail lands in `h.sent`). */
+export const enablePersonalMail = (h: { env: CoreEnv }): void => {
+  (h.env as { MAIL_TRAFFIC_CLASSES: string }).MAIL_TRAFFIC_CLASSES =
+    "transactional,personal,external-identity,forwarding";
 };

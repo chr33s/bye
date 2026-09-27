@@ -137,17 +137,6 @@ const base = {
   deliveryEvents: true,
 } as const;
 
-export const PERSONAL_MAIL_CAPABILITIES: TransportCapabilities = {
-  ...base,
-  name: "personal-mail",
-  trafficClasses: ["personal"],
-  maxMessageBytes: 25 * 1024 * 1024,
-  maxRecipients: 100,
-  idempotentSubmission: true,
-  reconciliation: true,
-  exposesWireMessageId: true,
-};
-
 export const EXTERNAL_IDENTITY_CAPABILITIES: TransportCapabilities = {
   ...base,
   name: "external-identity",
@@ -170,11 +159,6 @@ export const FORWARDING_CAPABILITIES: TransportCapabilities = {
   exposesWireMessageId: false,
 };
 
-export const makePersonalMailTransport = (
-  c: Omit<HttpTransportConfig, "capabilities">,
-  content: RawContentSource,
-  f: FetchLike,
-) => makeHttpTransport({ ...c, capabilities: PERSONAL_MAIL_CAPABILITIES }, content, f);
 export const makeExternalIdentityTransport = (
   c: Omit<HttpTransportConfig, "capabilities">,
   content: RawContentSource,

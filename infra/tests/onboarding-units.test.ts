@@ -391,6 +391,7 @@ describe("onboarding release pinning", () => {
           commit: git("rev-parse", "HEAD"),
           lockfileDigest: createHash("sha256").update("lockfileVersion: '9.0'\n").digest("hex"),
         },
+        qualification: { newsletter: null },
       },
     });
   });

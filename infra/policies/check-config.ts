@@ -79,6 +79,12 @@ export const CI_UNMAPPED: ReadonlyArray<string> = [
   "BYE_FAULT_INGRESS",
   "BYE_WORKERS_DEV_NAME",
   "BOOTSTRAP_TOKEN",
+  "BOOTSTRAP_ADDRESS_DOMAIN",
+  "INSTALL_ACCOUNT_ID",
+  "INSTALL_ZONE_ID",
+  "INSTALL_ZONE_NAME",
+  "NEWSLETTER_CONFIG_SEAL_KEY",
+  "ZONE_TOKEN_SEAL_KEY",
 ];
 
 /**
@@ -98,14 +104,11 @@ export const unmappedInCi = (
 /**
  * Secrets the PR-executed `preview`/`preview-destroy` jobs may resolve (besides the tiered
  * NONPROD Cloudflare and state credentials): the required runtime secrets (`requiredConfig`) plus
- * the sandboxed personal-mail pair. Every other optional application secret is pinned to "" in the
+ * the send-events webhook secret. Every other optional application secret is pinned to "" in the
  * preview env, so PR code never sees a DNS/cache-purge token, a signing key or a provider API key
  * (RUNBOOK "Previews": runtime secrets are environment-scoped with preview-only values).
  */
-export const PREVIEW_OPTIONAL_SECRETS: ReadonlyArray<string> = [
-  "PERSONAL_MAIL_API_KEY",
-  "SEND_EVENTS_WEBHOOK_SECRET",
-];
+export const PREVIEW_OPTIONAL_SECRETS: ReadonlyArray<string> = ["SEND_EVENTS_WEBHOOK_SECRET"];
 
 /** Tiered deploy credentials the preview job resolves by their nonprod names. */
 export const PREVIEW_DEPLOY_SECRETS: ReadonlyArray<string> = [
@@ -128,18 +131,34 @@ export const previewSecretOverreach = (
   return [...new Set(used)].filter((n) => !allowed.has(n)).sort();
 };
 
-/** Credentials that let the platform send mail to arbitrary recipients. */
+/**
+ * Credentials that let the platform send mail to arbitrary recipients. Personal mail itself needs
+ * no credential (it uses the Cloudflare sending binding once MAIL_TRAFFIC_CLASSES enables
+ * `personal`); its DKIM key is listed so a stage that signs as a real domain is treated as mailing.
+ */
 export const MAIL_CREDENTIALS: ReadonlyArray<string> = [
-  "PERSONAL_MAIL_API_KEY",
+  "MAIL_DKIM_PRIVATE_KEY",
   "NEWSLETTER_API_KEY",
   "FORWARDING_API_KEY",
   "EXTERNAL_IDENTITY_SEAL_KEY",
 ];
 
+/** Traffic classes that mail arbitrary recipients without any credential of their own. */
+export const CREDENTIAL_FREE_CLASSES: ReadonlyArray<string> = ["personal"];
+
+const enabledClasses = (env: Readonly<Record<string, string | undefined>>) =>
+  new Set(
+    (env.MAIL_TRAFFIC_CLASSES ?? "")
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean),
+  );
+
 /**
- * Preview mail sandbox (§15.8): on ephemeral stages (preview-*, dev-*) any mail credential makes
- * a non-empty MAIL_SANDBOX_DOMAINS mandatory, otherwise a preview could mail real people. Returns
- * the credential names that are set without a sandbox.
+ * Preview mail sandbox (§15.8): on ephemeral stages (preview-*, dev-*) any mail credential, or a
+ * credential-free class such as `personal` in MAIL_TRAFFIC_CLASSES, makes a non-empty
+ * MAIL_SANDBOX_DOMAINS mandatory, otherwise a preview could mail real people. Returns the names
+ * that are set without a sandbox (`MAIL_TRAFFIC_CLASSES=<class>` for classes).
  */
 export const unsandboxedMail = (
   env: Readonly<Record<string, string | undefined>>,
@@ -148,7 +167,13 @@ export const unsandboxedMail = (
   const classified = classifyStage(stage);
   if (classified._tag !== "Valid" || classified.stage.persistent) return [];
   if ((env.MAIL_SANDBOX_DOMAINS ?? "").trim() !== "") return [];
-  return MAIL_CREDENTIALS.filter((n) => (env[n] ?? "").trim() !== "");
+  const classes = enabledClasses(env);
+  return [
+    ...MAIL_CREDENTIALS.filter((n) => (env[n] ?? "").trim() !== ""),
+    ...CREDENTIAL_FREE_CLASSES.filter((c) => classes.has(c)).map(
+      (c) => `MAIL_TRAFFIC_CLASSES=${c}`,
+    ),
+  ];
 };
 
 export const missingConfig = (
@@ -156,36 +181,6 @@ export const missingConfig = (
   names = requiredConfig(),
 ): ReadonlyArray<string> =>
   names.filter((c) => !env[c.name] || env[c.name]!.trim() === "").map((c) => c.name);
-
-/** Hosts that can never accept mail: RFC 2606 reserved names and loopback. */
-const PLACEHOLDER_HOST =
-  /(^|\.)(invalid|example|test|localhost)$|(^|\.)example\.(com|net|org)$|^127\.|^\[?::1\]?$/;
-
-/**
- * Personal-mail transport pairing (§15.5): the credential and the submission endpoint are set
- * together or not at all, and the endpoint is a real https host. A key with no endpoint (or a
- * placeholder one) would make every personal send fail at the provider; an endpoint with no key
- * is a half-configured provider. Returns the problems, by name only.
- */
-export const personalMailProblems = (
-  env: Readonly<Record<string, string | undefined>>,
-): ReadonlyArray<string> => {
-  const key = (env.PERSONAL_MAIL_API_KEY ?? "").trim();
-  const endpoint = (env.PERSONAL_MAIL_ENDPOINT ?? "").trim();
-  if (key === "" && endpoint === "") return [];
-  if (endpoint === "") return ["PERSONAL_MAIL_API_KEY is set but PERSONAL_MAIL_ENDPOINT is empty"];
-  if (key === "") return ["PERSONAL_MAIL_ENDPOINT is set but PERSONAL_MAIL_API_KEY is empty"];
-  let url: URL;
-  try {
-    url = new URL(endpoint);
-  } catch {
-    return ["PERSONAL_MAIL_ENDPOINT is not a URL"];
-  }
-  if (url.protocol !== "https:") return ["PERSONAL_MAIL_ENDPOINT must be an https URL"];
-  if (PLACEHOLDER_HOST.test(url.hostname.toLowerCase().replace(/\.$/, "")))
-    return ["PERSONAL_MAIL_ENDPOINT names a placeholder host"];
-  return [];
-};
 
 /**
  * HMAC webhook secrets verified in the `t=<unix>,v1=<hex>` scheme. The worker refuses every
@@ -252,7 +247,12 @@ export const missingPreviewAttestation = (
 ): boolean => {
   const classified = classifyStage(stage);
   if (classified._tag !== "Valid" || !classified.stage.persistent) return false;
-  if (!MAIL_CREDENTIALS.some((n) => (env[n] ?? "").trim() !== "")) return false;
+  const classes = enabledClasses(env);
+  if (
+    !MAIL_CREDENTIALS.some((n) => (env[n] ?? "").trim() !== "") &&
+    !CREDENTIAL_FREE_CLASSES.some((c) => classes.has(c))
+  )
+    return false;
   return (
     (env[PROVIDER_PREVIEW_ATTESTATION.name] ?? "").trim() !== PROVIDER_PREVIEW_ATTESTATION.value
   );
@@ -274,11 +274,7 @@ if (import.meta.main) {
     console.error(
       `config: ${PROVIDER_PREVIEW_ATTESTATION.name} must be "${PROVIDER_PREVIEW_ATTESTATION.value}" on ${process.env.STAGE} (provider sent-email previews off, §10)`,
     );
-  const pairing = [
-    ...personalMailProblems(process.env),
-    ...webhookSecretProblems(process.env),
-    ...scannerProblems(process.env),
-  ];
+  const pairing = [...webhookSecretProblems(process.env), ...scannerProblems(process.env)];
   for (const problem of pairing) console.error(`config: ${problem}`);
   if (missing.length || forbidden.length || unsandboxed.length || attestation || pairing.length)
     process.exit(1);

@@ -25,8 +25,8 @@ Everything that could be fixed in code has been removed from this list. What rem
     - `BYE_STATE_TOKEN`, in the nonprod-scoped grant form (for example `staging|preview-*|dev-*=<token>`).
     - `PROD_BYE_STATE_TOKEN`, in the prod environments only.
     - `NONPROD_`/`PROD_CLOUDFLARE_ACCOUNT_ID` and `NONPROD_`/`PROD_CLOUDFLARE_API_TOKEN`, with scopes per `infra/RUNBOOK.md`.
-  - Runtime secrets: `SESSION_KEY`, `PROXY_SIGNING_KEY`, `BILLING_WEBHOOK_SECRET` (at least 32 characters), `SEND_EVENTS_WEBHOOK_SECRET` (at least 32 characters), `TURNSTILE_SECRET`, `PERSONAL_MAIL_API_KEY`, `SIGMIRROR_WRITE_TOKEN`, `PROBE_TOKEN`, `OPS_TOKEN`.
-- [ ] **Create the vars:** `BYE_STATE_URL`, `PROD_BYE_STATE_URL`, `PREVIEW_DOMAIN`, `APP_ORIGIN`, `MAIL_RENDER_ORIGIN`, `APP_DOMAIN`, `PUBLIC_DOMAIN`, `MAIL_ZONE`, `PERSONAL_MAIL_ENDPOINT`, `PROVIDER_SENT_PREVIEWS=disabled`, `SCANNER_SIGNATURES`/`SCANNER_IMAGE`, `MAIL_SANDBOX_DOMAINS`, `TURNSTILE_SITEKEY`.
+  - Runtime secrets: `SESSION_KEY`, `PROXY_SIGNING_KEY`, `BILLING_WEBHOOK_SECRET` (at least 32 characters), `SEND_EVENTS_WEBHOOK_SECRET` (at least 32 characters), `TURNSTILE_SECRET`, `MAIL_DKIM_PRIVATE_KEY`, `SIGMIRROR_WRITE_TOKEN`, `PROBE_TOKEN`, `OPS_TOKEN`.
+- [ ] **Create the vars:** `BYE_STATE_URL`, `PROD_BYE_STATE_URL`, `PREVIEW_DOMAIN`, `APP_ORIGIN`, `MAIL_RENDER_ORIGIN`, `APP_DOMAIN`, `PUBLIC_DOMAIN`, `MAIL_ZONE`, `MAIL_TRAFFIC_CLASSES`, `PROVIDER_SENT_PREVIEWS=disabled`, `SCANNER_SIGNATURES`/`SCANNER_IMAGE`, `MAIL_SANDBOX_DOMAINS`, `TURNSTILE_SITEKEY`.
 - [ ] **Run the account pre-flight** (RUNBOOK "Account prerequisites"): Workers Paid, Containers, `send_email` sender domain, Turnstile, Email Routing permissions, and Workers Routes Write on `PREVIEW_DOMAIN`.
 - [ ] **Bootstrap the foundation and state backend** (RUNBOOK "Self-hosted state backend").
   - Generate and escrow `BYE_STATE_TOKEN`, `BYE_STATE_ENCRYPTION_KEY` and `BYE_STATE_ADMIN_TOKEN`.
@@ -38,7 +38,7 @@ Everything that could be fixed in code has been removed from this list. What rem
 
 ### Mail providers
 
-- [ ] **Get written provider approval** for each traffic class: personal, subscription, forwarding and newsletter (EVIDENCE #1). Set `PERSONAL_MAIL_ENDPOINT` and the key together; `check-config` refuses one without the other.
+- [ ] **Get written provider approval** for each traffic class: personal, subscription, forwarding and newsletter (EVIDENCE #1). Personal mail then only needs `personal` in `MAIL_TRAFFIC_CLASSES` (Cloudflare Email Sending) and a DKIM key pair.
 - [ ] **Turn off sent-email previews** in each provider console, then attest with `PROVIDER_SENT_PREVIEWS=disabled`.
 - [ ] **Switch the send-events provider webhook** to the new scheme: `x-bye-signature: t=<unix>,v1=<hex HMAC of "t.body">`, signed with `SEND_EVENTS_WEBHOOK_SECRET`.
 

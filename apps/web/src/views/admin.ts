@@ -2,6 +2,12 @@ import { api, list, query } from "../api.ts";
 import { degrade } from "../core/degrade.ts";
 import { act, field, formatDate, formatSize, h, section, show, table, text } from "../core/dom.ts";
 import { remember, state, withStepUp } from "../core/state.ts";
+import {
+  incomingMailCard,
+  incomingMailSection,
+  installationMail,
+  type MailDnsView,
+} from "./incoming-mail.ts";
 
 // Account, team and billing administration (O01, O02, A01, A02, A04). Consequential actions go
 // through `withStepUp`, so an expired step-up prompts a passkey confirmation and retries once.
@@ -13,7 +19,7 @@ export const renderAdmin = async (params: URLSearchParams, signal: AbortSignal):
   const orgId = orgOf(params);
   if (orgId) remember.set("org", orgId);
   const reload = () => void renderAdmin(params, signal);
-  const [org, members, seats, audit, domains, billing] = await Promise.all([
+  const [org, members, seats, audit, domains, billing, mail] = await Promise.all([
     orgId
       ? api<Record<string, unknown>>("GET", `/v1/orgs/${orgId}`, undefined, signal).catch(
           degrade(null),
@@ -42,6 +48,7 @@ export const renderAdmin = async (params: URLSearchParams, signal: AbortSignal):
     api<Record<string, unknown>>("GET", `/v1/billing${query({ orgId })}`, undefined, signal).catch(
       degrade(null),
     ),
+    installationMail(signal),
   ]);
   const orgPicker = h(
     "select",
@@ -101,6 +108,7 @@ export const renderAdmin = async (params: URLSearchParams, signal: AbortSignal):
     section(
       "admin-title",
       "Account, team and billing",
+      incomingMailCard(mail, { dismissible: false }),
       h(
         "div",
         { class: "bulk" },
@@ -417,7 +425,7 @@ export const renderAdmin = async (params: URLSearchParams, signal: AbortSignal):
   );
 };
 
-interface DnsView {
+interface DnsView extends MailDnsView {
   readonly plan?: ReadonlyArray<Record<string, unknown>>;
   readonly operations?: ReadonlyArray<Record<string, unknown>>;
   readonly diagnostics?: unknown;
@@ -426,7 +434,7 @@ interface DnsView {
 /** Domain onboarding (O01): state, diagnostics, DNS preview, settings, aliases, removal. */
 export const renderDomain = async (domainId: string, signal: AbortSignal): Promise<void> => {
   const reload = () => void renderDomain(domainId, signal);
-  const [domain, dns, aliases] = await Promise.all([
+  const [domain, dns, aliases, mail] = await Promise.all([
     api<Record<string, unknown>>(
       "GET",
       `/v1/domains/${encodeURIComponent(domainId)}`,
@@ -440,6 +448,7 @@ export const renderDomain = async (domainId: string, signal: AbortSignal): Promi
       `/v1/domains/${encodeURIComponent(domainId)}/aliases`,
       signal,
     ).catch(degrade([])),
+    installationMail(signal),
   ]);
   const localPart = h("input", { "aria-label": "Alias local part", placeholder: "sales" });
   const mailboxId = h("input", {
@@ -456,6 +465,7 @@ export const renderDomain = async (domainId: string, signal: AbortSignal): Promi
       "domain-title",
       text(domain.name),
       h("p", {}, `State: ${text(domain.state)}`),
+      incomingMailSection(domain, dns, mail, reload),
       domain.verificationToken
         ? h(
             "p",
@@ -494,35 +504,6 @@ export const renderDomain = async (domainId: string, signal: AbortSignal): Promi
       h(
         "div",
         { class: "bulk" },
-        h(
-          "button",
-          {
-            type: "button",
-            onclick: act(
-              "Zone authorized",
-              () =>
-                withStepUp(() =>
-                  api("POST", `/v1/domains/${encodeURIComponent(domainId)}/authorize-zone`, {
-                    method: "service-zone",
-                  }),
-                ),
-              reload,
-            ),
-          },
-          "Authorize DNS changes",
-        ),
-        h(
-          "button",
-          {
-            type: "button",
-            onclick: act(
-              "Retrying checks",
-              () => api("POST", `/v1/domains/${encodeURIComponent(domainId)}/retry`, {}),
-              reload,
-            ),
-          },
-          "Re-run checks",
-        ),
         h("label", {}, plus, " Plus-addressing"),
         h(
           "button",

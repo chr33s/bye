@@ -107,13 +107,27 @@ export interface FakeDnsRecord {
  * DNS record, Email Routing and cache-purge endpoints the scoped adapter uses; DoH answers come from
  * the same records (instant propagation) plus `external` records the test publishes by hand.
  */
+export interface FakeRoutingRule {
+  enabled: boolean;
+  name?: string;
+  matchers: Array<{ type: string; field?: string; value?: string }>;
+  actions: Array<{ type: string; value?: Array<string> }>;
+}
+
 export class FakeCloudflare {
   readonly zones = new Map<string, string>();
   readonly records: Array<FakeDnsRecord & { zoneId: string }> = [];
   readonly external: Array<FakeDnsRecord> = [];
+  /** `catchAll`: the Worker the catch-all delivers to (null when it is off or not a Worker). */
   readonly routing = new Map<string, { enabled: boolean; catchAll: string | null }>();
+  /** The full catch-all rule per zone, when one is set (any action). */
+  readonly catchAllRules = new Map<string, FakeRoutingRule>();
+  /** Address rules per zone (not the catch-all). */
+  readonly routingRules = new Map<string, Array<FakeRoutingRule>>();
   readonly purged: Array<ReadonlyArray<string>> = [];
   readonly calls: Array<string> = [];
+  /** API tokens and the zones each reaches ("all" = every zone). */
+  readonly tokens = new Map<string, ReadonlyArray<string> | "all">([["cf-test-token", "all"]]);
   private n = 0;
 
   addZone(name: string): string {
@@ -121,6 +135,13 @@ export class FakeCloudflare {
     this.zones.set(id, name);
     this.routing.set(id, { enabled: false, catchAll: null });
     return id;
+  }
+
+  /** Sets a zone's catch-all rule directly (the customer's existing configuration). */
+  setCatchAll(zoneId: string, rule: FakeRoutingRule): void {
+    this.catchAllRules.set(zoneId, structuredClone(rule));
+    const worker = rule.enabled ? rule.actions.find((a) => a.type === "worker") : undefined;
+    this.routing.get(zoneId)!.catchAll = worker?.value?.[0] ?? null;
   }
 
   private ok = (result: unknown) =>
@@ -153,19 +174,31 @@ export class FakeCloudflare {
         }));
       return new Response(JSON.stringify({ Status: 0, Answer: answers }));
     }
-    if (init.headers?.authorization !== "Bearer cf-test-token")
-      return new Response(JSON.stringify({ success: false, errors: [{ message: "auth" }] }), {
+    const denied = () =>
+      new Response(JSON.stringify({ success: false, errors: [{ message: "auth" }] }), {
         status: 403,
       });
+    const scope = this.tokens.get((init.headers?.authorization ?? "").replace(/^Bearer /, ""));
+    if (scope === undefined) return denied();
+    const reaches = (zoneId: string) => scope === "all" || scope.includes(zoneId);
     const body = init.body ? (JSON.parse(init.body) as Record<string, unknown>) : {};
     const path = url.pathname.replace(/^\/client\/v4/, "");
     let m: RegExpMatchArray | null;
+    const zoneOf = path.match(/^\/zones\/([^/]+)/);
+    if (zoneOf && !reaches(zoneOf[1]!)) return denied();
     if (path === "/zones")
       return this.ok(
         [...this.zones]
-          .filter(([, n]) => n === url.searchParams.get("name"))
+          .filter(
+            ([id, n]) =>
+              reaches(id) && (!url.searchParams.has("name") || n === url.searchParams.get("name")),
+          )
           .map(([id, name]) => ({ id, name })),
       );
+    if ((m = path.match(/^\/zones\/([^/]+)$/))) {
+      const name = this.zones.get(m[1]!);
+      return name === undefined ? denied() : this.ok({ id: m[1], name, status: "active" });
+    }
     if ((m = path.match(/^\/zones\/([^/]+)\/dns_records$/))) {
       const zoneId = m[1]!;
       if (method === "GET")
@@ -192,6 +225,10 @@ export class FakeCloudflare {
           JSON.stringify({ success: false, errors: [{ message: "not found" }] }),
           { status: 404 },
         );
+      if (method === "DELETE") {
+        this.records.splice(this.records.indexOf(rec), 1);
+        return this.ok({ id: rec.id });
+      }
       Object.assign(rec, {
         content: String(body.content),
         ...(body.priority !== undefined ? { priority: Number(body.priority) } : {}),
@@ -204,15 +241,21 @@ export class FakeCloudflare {
       this.routing.get(m[1]!)!.enabled = true;
       return this.ok({});
     }
-    if ((m = path.match(/^\/zones\/([^/]+)\/email\/routing\/rules\/catch_all$/))) {
-      const state = this.routing.get(m[1]!)!;
-      if (method === "PUT")
-        state.catchAll = (body.actions as Array<{ value: Array<string> }>)[0]!.value[0] ?? null;
-      return this.ok({
-        enabled: state.catchAll !== null,
-        actions: state.catchAll ? [{ type: "worker", value: [state.catchAll] }] : [],
-      });
+    if ((m = path.match(/^\/zones\/([^/]+)\/email\/routing\/disable$/))) {
+      this.routing.get(m[1]!)!.enabled = false;
+      return this.ok({});
     }
+    if ((m = path.match(/^\/zones\/([^/]+)\/email\/routing\/rules\/catch_all$/))) {
+      const zoneId = m[1]!;
+      if (method === "PUT")
+        this.catchAllRules.set(zoneId, structuredClone(body) as unknown as FakeRoutingRule);
+      const rule = this.catchAllRules.get(zoneId) ?? null;
+      const worker = rule?.enabled ? rule.actions.find((a) => a.type === "worker") : undefined;
+      this.routing.get(zoneId)!.catchAll = worker?.value?.[0] ?? null;
+      return this.ok(rule);
+    }
+    if ((m = path.match(/^\/zones\/([^/]+)\/email\/routing\/rules$/)))
+      return this.ok(this.routingRules.get(m[1]!) ?? []);
     if ((m = path.match(/^\/zones\/([^/]+)\/purge_cache$/))) {
       this.purged.push(body.files as Array<string>);
       return this.ok({ id: "purge" });

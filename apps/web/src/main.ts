@@ -15,6 +15,7 @@ import {
   renderReferral,
 } from "./views/admin.ts";
 import { continueAuthorization, signInScreen } from "./views/auth.ts";
+import { showIncomingMailBanner } from "./views/incoming-mail.ts";
 import {
   renderCalendar,
   renderCalendarManage,
@@ -42,6 +43,7 @@ import {
   renderRules,
   renderWorkflows,
 } from "./views/organize.ts";
+import { renderNewsletters } from "./views/newsletters.ts";
 import { renderSearch } from "./views/search.ts";
 import { applyTheme, renderDevices, renderSecurity, renderSettings } from "./views/settings.ts";
 import {
@@ -99,6 +101,7 @@ const HANDLERS: Readonly<Record<RouteName, RouteHandler>> = {
   share: (_p, q, signal) => renderShare(q, signal),
   "public-link": (_p, q, signal) => renderPublicLink(q, signal),
   world: (p, _q, signal) => renderWorld(p.postId, signal),
+  newsletters: (_p, _q, signal) => renderNewsletters(signal),
   calendar: (p, q, signal) => renderCalendar(q, signal, p.view, p.date),
   "calendar-event": (p, q, signal) => renderEventEditor(p.eventId, q, signal),
   "calendar-planning": (_p, _q, signal) => renderPlanning(signal),
@@ -129,6 +132,8 @@ const route = async (): Promise<void> => {
       state.calendarId = state.me.calendarIds[0] ?? null;
       live?.();
       live = state.mailboxId ? connectLive(state.mailboxId, () => void route()) : null;
+      // Optional "Set up incoming email" offer for the onboarding zone (never blocks the app).
+      void showIncomingMailBanner().catch(() => undefined);
     }
     await dispatch(signal);
     main().focus({ preventScroll: true });
@@ -192,6 +197,7 @@ const boot = (): void => {
     h("a", { href: "#/contacts" }, "Contacts"),
     h("a", { href: "#/spaces" }, "Shared"),
     h("a", { href: "#/world" }, "World"),
+    h("a", { href: "#/newsletters" }, "Newsletters"),
     h("a", { href: "#/settings" }, "Settings"),
     h("a", { href: "#/compose", "aria-keyshortcuts": "c", class: "primary" }, "Write"),
   );

@@ -88,7 +88,7 @@ const b64 = (bytes: Uint8Array): string => {
 export const bodyHash = async (body: string): Promise<string> =>
   b64(await sha256(binaryToBytes(relaxedBody(body))));
 
-const signData = async (signer: ArcSigner, data: string): Promise<string> => {
+export const signData = async (signer: ArcSigner, data: string): Promise<string> => {
   if (signer.algorithm === "ed25519-sha256") {
     // RFC 8463: PureEdDSA over the SHA-256 hash of the canonicalized data.
     return b64(
@@ -195,7 +195,7 @@ export const arcChainShape = (headers: ReadonlyArray<readonly [string, string]>)
 };
 
 /** DKIM signing input: listed headers (bottom-up for duplicates) + the signature header with empty b=. */
-const signingInput = (
+export const signingInput = (
   headers: ReadonlyArray<readonly [string, string]>,
   signed: ReadonlyArray<string>,
   sigName: string,

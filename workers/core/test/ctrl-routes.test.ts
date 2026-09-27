@@ -4,7 +4,13 @@ import { ControlAuth, ControlDirectory, SendingPolicy } from "@bye/platform-clou
 import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, makeHarness, inboundMessage, rfc822 } from "./harness.ts";
+import {
+  type Harness,
+  makeHarness,
+  inboundMessage,
+  rfc822,
+  enablePersonalMail,
+} from "./harness.ts";
 import { handleInbound } from "../src/inbound.ts";
 import { binaryToBytes, mboxEntryText } from "@bye/mail-codec";
 import { appendMboxPage, completeMbox, type MboxState } from "../src/workflows/export.ts";
@@ -1156,7 +1162,7 @@ describe("signup, publishing and webhooks", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.UTC(2026, 8, 25, 12));
     h = makeHarness();
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
   });
   afterEach(() => vi.useRealTimers());
 

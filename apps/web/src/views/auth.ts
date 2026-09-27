@@ -17,17 +17,34 @@ export const continueAuthorization = (): boolean => {
 };
 
 /**
- * Onboarding setup link (`/#bootstrap=<token>`, infra/onboarding): read once, then removed from
- * the address bar and history so the single-use token doesn't linger.
+ * Onboarding setup link (`/#bootstrap=<token>&domain=<zone>`, infra/onboarding): read once, then
+ * removed from the address bar and history so the single-use token doesn't linger. `domain` is
+ * the address domain chosen in onboarding, for display only; the server enforces it.
  */
-let bootstrapToken: string | null = null;
-const takeBootstrapToken = (): string | null => {
-  const m = /^#bootstrap=([A-Za-z0-9_-]{32,128})$/.exec(location.hash);
-  if (m) {
-    bootstrapToken = m[1]!;
+export interface BootstrapLink {
+  readonly token: string;
+  readonly domain: string | null;
+}
+
+const DOMAIN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+export const parseBootstrapFragment = (hash: string): BootstrapLink | null => {
+  if (!hash.startsWith("#bootstrap=")) return null;
+  const params = new URLSearchParams(hash.slice(1));
+  const token = params.get("bootstrap") ?? "";
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(token)) return null;
+  const domain = (params.get("domain") ?? "").toLowerCase();
+  return { token, domain: DOMAIN.test(domain) ? domain : null };
+};
+
+let bootstrapLink: BootstrapLink | null = null;
+const takeBootstrapLink = (): BootstrapLink | null => {
+  const parsed = parseBootstrapFragment(location.hash);
+  if (parsed) {
+    bootstrapLink = parsed;
     history.replaceState(null, "", `${location.pathname}${location.search}`);
   }
-  return bootstrapToken;
+  return bootstrapLink;
 };
 
 export const signInScreen = (onSignedIn: () => void): HTMLElement => {
@@ -57,8 +74,9 @@ export const signInScreen = (onSignedIn: () => void): HTMLElement => {
     "data-sitekey":
       document.querySelector<HTMLMetaElement>('meta[name="turnstile-sitekey"]')?.content ?? "",
   });
-  const bootstrap = takeBootstrapToken();
-  const domain = location.hostname.replace(/^app\./, "");
+  const link = takeBootstrapLink();
+  const bootstrap = link?.token ?? null;
+  const domain = link?.domain ?? location.hostname.replace(/^app\./, "");
   if (bootstrap) address.placeholder = `you@${domain}`;
   const recoveryAddress = h("input", { type: "email", name: "recoveryAddress", required: true });
   const recoveryCode = h("input", { name: "code", autocomplete: "one-time-code", required: true });
@@ -87,12 +105,12 @@ export const signInScreen = (onSignedIn: () => void): HTMLElement => {
           ),
         ),
       },
-      h("h2", {}, bootstrap ? "Set up this instance" : "New here?"),
+      h("h2", {}, bootstrap ? "Create your owner account" : "New here?"),
       bootstrap
         ? h(
             "p",
             {},
-            `Create the first account. It becomes this instance's operator. Use an address on ${domain}.`,
+            `Create the first account. It becomes this instance's operator and owner. Use an address on ${domain}. Incoming email for ${domain} is set up separately, after this step.`,
           )
         : null,
       h("label", {}, "Address", address),

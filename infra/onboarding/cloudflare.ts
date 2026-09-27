@@ -1,6 +1,7 @@
 // The few Cloudflare API reads onboarding makes itself with the operator's OAuth token: verify
-// the selected account, find its workers.dev subdomain, and detect Worker-name collisions. All
-// writes go through the existing Alchemy stack (executor.ts), never through this client.
+// the selected account, list its zones for the Bye address, find its workers.dev subdomain, and
+// detect Worker-name collisions. All writes go through the existing Alchemy stack (executor.ts),
+// never through this client.
 import type { Fetch } from "./oauth.ts";
 
 export const CLOUDFLARE_API = "https://api.cloudflare.com/client/v4";
@@ -8,6 +9,12 @@ export const CLOUDFLARE_API = "https://api.cloudflare.com/client/v4";
 export interface Account {
   readonly id: string;
   readonly name: string;
+}
+
+export interface Zone {
+  readonly id: string;
+  readonly name: string;
+  readonly status: string;
 }
 
 export class CloudflareApiError extends Error {
@@ -23,6 +30,8 @@ export interface CloudflareReader {
   /** The account's workers.dev subdomain, or null when none is registered. */
   workersSubdomain(token: string, accountId: string): Promise<string | null>;
   workerNames(token: string, accountId: string): Promise<ReadonlyArray<string>>;
+  /** Zones that belong to `accountId` (any status; callers show only active ones). */
+  zones(token: string, accountId: string): Promise<ReadonlyArray<Zone>>;
 }
 
 export const cloudflareReader = (fetcher: Fetch, base = CLOUDFLARE_API): CloudflareReader => {
@@ -85,6 +94,22 @@ export const cloudflareReader = (fetcher: Fetch, base = CLOUDFLARE_API): Cloudfl
       );
       if (r.status !== 200 || !r.result) throw fail(r.status, "the Worker list");
       return r.result.map((w) => w.id);
+    },
+    async zones(token, accountId) {
+      const out: Array<Zone> = [];
+      // Bounded: 10 pages of 50 zones. The account filter is applied again client-side, so a zone
+      // from another account is never offered even if the API ignored the filter.
+      for (let page = 1; page <= 10; page++) {
+        const r = await get<
+          Array<{ id: string; name: string; status: string; account?: { id?: string } }>
+        >(token, `/zones?account.id=${encodeURIComponent(accountId)}&per_page=50&page=${page}`);
+        if (r.status !== 200 || !r.result) throw fail(r.status, "the zone list");
+        for (const z of r.result)
+          if (z.account?.id === accountId)
+            out.push({ id: z.id, name: z.name.toLowerCase(), status: z.status });
+        if (r.result.length < 50) break;
+      }
+      return out;
     },
   };
 };

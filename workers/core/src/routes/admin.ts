@@ -1,6 +1,7 @@
 // Administration and lifecycle routes (O01, O02, A01, A02, A04, §10 operator tooling, device sessions).
 import { Effect } from "effect";
 import {
+  Authorization,
   closeOwnAccount,
   Forbidden,
   inviteTeamMember,
@@ -26,6 +27,8 @@ import {
   DomainAliasRequest,
   DomainRequest,
   DomainSettingsRequest,
+  InstallationDomainRequest,
+  InstallationZoneTokenRequest,
   InviteMemberRequest,
   MembershipSuspendRequest,
   SetRoleRequest,
@@ -55,7 +58,19 @@ import { kernelClock } from "../durable-host.ts";
 import type { CoreEnv } from "../env.ts";
 import { errorResponse, route, type Route } from "../http.ts";
 import { sendSystemEmail } from "../publishing.ts";
-import { onboardingDeps, type ZoneAuthorizationMethod } from "../workflows/domain.ts";
+import {
+  onboardingDeps,
+  onboardingDepsFor,
+  type ZoneAuthorizationMethod,
+} from "../workflows/domain.ts";
+import {
+  deleteZoneToken,
+  installationAutomation,
+  storeZoneToken,
+  zoneApiToken,
+  ZoneTokenRejected,
+  zoneTokenConfigured,
+} from "../zone-token.ts";
 import {
   authed,
   authedBody,
@@ -132,6 +147,102 @@ const setDomainWorkflow = (env: CoreEnv, domainId: string, instanceId: string) =
       .bind(instanceId, domainId)
       .run(),
   ).pipe(Effect.asVoid);
+
+/**
+ * Who may manage the installation's incoming-email automation: a platform operator who
+ * administers the organization holding the installation zone's domain (or, before it exists,
+ * their personal organization) — the same authority as binding the zone.
+ */
+const installationMailAdmin = (env: CoreEnv) =>
+  Effect.gen(function* () {
+    const operator = yield* requireOperatorAccess();
+    const zone = (env.INSTALL_ZONE_NAME ?? "").toLowerCase();
+    if (!zone || !env.INSTALL_ZONE_ID)
+      return yield* Effect.fail(
+        new ApiError({ code: "conflict", message: "this installation has no recorded zone" }),
+      );
+    const bound = yield* ctl(() =>
+      env.DIRECTORY.withSession("first-primary")
+        .prepare("SELECT org_id FROM domains WHERE name = ? AND state != 'removed'")
+        .bind(zone)
+        .first<{ org_id: string }>(),
+    );
+    const orgId =
+      bound?.org_id ?? ((yield* Effect.promise(() => personalOrgOf(env, operator.userId))) || "");
+    if (!orgId) return yield* badRequest("no organization for the installation zone");
+    return yield* requireOrgAdminAccess(orgId);
+  });
+
+/** Onboarding deps for a domain, with its zone token resolved (and decrypted) for this request. */
+const depsFor = (env: CoreEnv, domainName: string | null, method: ZoneAuthorizationMethod | null) =>
+  Effect.promise(() => onboardingDepsFor(env, domainName, method));
+
+/** Workflow instance statuses that can still make progress (or receive an event). */
+const LIVE_WORKFLOW = new Set(["queued", "running", "paused", "waiting", "waitingForPause"]);
+
+/** Status of a domain Workflow instance; null when it is missing or unreadable. */
+const domainWorkflowStatus = (env: CoreEnv, instanceId: string) =>
+  Effect.promise(() =>
+    env.PROVISION_DOMAIN.get(instanceId)
+      .then((i) => i.status())
+      .then(
+        (s) => (s as { status?: string }).status ?? null,
+        () => null,
+      ),
+  );
+
+/**
+ * A live onboarding Workflow for the domain: the recorded instance while it can still progress,
+ * otherwise a fresh one (after a rollback, a timed-out wait, an error or a stop). A fresh instance
+ * resumes from the state and authorization recorded in D1 (workflows/domain.ts).
+ */
+const ensureDomainWorkflow = (env: CoreEnv, domainId: string, actorId: string) =>
+  Effect.gen(function* () {
+    const current = yield* domainWorkflow(env, domainId);
+    const status = yield* domainWorkflowStatus(env, current);
+    if (status !== null && LIVE_WORKFLOW.has(status)) return { id: current, fresh: false };
+    const id =
+      status === null && current === `dom-${domainId}`
+        ? current
+        : `dom-${domainId}-${Date.now().toString(36)}`;
+    yield* ctl(() =>
+      env.PROVISION_DOMAIN.create({ id, params: { v: 1, domainId, actorId } }).then(() => true),
+    );
+    // Later status reads and zone-authorization events must reach THIS instance.
+    yield* setDomainWorkflow(env, domainId, id);
+    return { id, fresh: true };
+  });
+
+/**
+ * Stops the domain's Workflow if it is still live. True when nothing live remains, false when it
+ * could not be stopped (callers must not proceed as if it had been).
+ */
+const stopDomainWorkflow = (env: CoreEnv, domainId: string) =>
+  Effect.gen(function* () {
+    const current = yield* domainWorkflow(env, domainId);
+    const status = yield* domainWorkflowStatus(env, current);
+    if (status === null || !LIVE_WORKFLOW.has(status)) return true;
+    yield* Effect.promise(() =>
+      env.PROVISION_DOMAIN.get(current)
+        .then((i) => (i as { terminate?: () => Promise<void> }).terminate?.())
+        .catch(() => undefined),
+    );
+    const after = yield* domainWorkflowStatus(env, current);
+    return after === null || !LIVE_WORKFLOW.has(after);
+  });
+
+/** Restarts setup from the recorded state: stop the live instance (if any), then a fresh one. */
+const restartDomainWorkflow = (env: CoreEnv, domainId: string, actorId: string) =>
+  Effect.gen(function* () {
+    if (!(yield* stopDomainWorkflow(env, domainId)))
+      return yield* Effect.fail(
+        new ApiError({
+          code: "conflict",
+          message: "the running setup could not be stopped; try again",
+        }),
+      );
+    return yield* ensureDomainWorkflow(env, domainId, actorId);
+  });
 
 export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
   // ---- organizations and team administration (A01, O02) ----
@@ -390,6 +501,211 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
     ),
   ),
 
+  // ---- incoming email for the onboarding-selected zone (infra/onboarding/spec.md §10–§17) ----
+  // What the post-owner "Set up incoming email" card needs. Never claims mail is ready: only a
+  // domain in state `active` receives mail.
+  route(
+    "GET",
+    "/v1/installation/mail",
+    authed(({ env }) =>
+      Effect.gen(function* () {
+        const principal = yield* requireScope("read");
+        const zone = env.INSTALL_ZONE_NAME || null;
+        const row = zone
+          ? yield* ctl(() =>
+              env.DIRECTORY.withSession("first-primary")
+                .prepare(
+                  "SELECT id, org_id, state FROM domains WHERE name = ? AND state != 'removed'",
+                )
+                .bind(zone)
+                .first<{ id: string; org_id: string; state: string }>(),
+            )
+          : null;
+        const visible = row !== null && principal.organizationIds.includes(row.org_id);
+        return {
+          zone,
+          automation: yield* Effect.promise(() => installationAutomation(env)),
+          tokenConfigured: yield* Effect.promise(() => zoneTokenConfigured(env)),
+          canSetup: zone !== null && (yield* Authorization).isOperator(principal.userId),
+          domain: visible ? { id: row.id, orgId: row.org_id, state: row.state } : null,
+          incomingMail: visible && row.state === "active" ? "active" : "not-set-up",
+        };
+      }),
+    ),
+  ),
+  // "Let Bye make the changes": the owner enters a Cloudflare API token limited to the installation's
+  // zone. It is validated against Cloudflare, sealed, and used only for that zone's incoming-email
+  // work (zone-token.ts). Neither it nor any part of it is ever returned or logged.
+  route(
+    "POST",
+    "/v1/installation/mail/token",
+    authedBody(InstallationZoneTokenRequest, ({ body, env }) =>
+      Effect.gen(function* () {
+        const principal = yield* installationMailAdmin(env);
+        yield* requireStepUp("admin");
+        const token = body.token.trim();
+        const refused = yield* Effect.promise(() =>
+          storeZoneToken(env, token, principal.userId, Date.now()).then(
+            () => null,
+            (e: unknown) =>
+              e instanceof ZoneTokenRejected ? e.message : "the token could not be checked",
+          ),
+        );
+        if (refused !== null) return yield* badRequest(refused);
+        return { automation: "zone-api" as const, tokenConfigured: true };
+      }),
+    ),
+  ),
+  // Removing the token returns incoming email to manual records. Refused while setup is writing
+  // through the zone API, so a change is never left half made.
+  route(
+    "DELETE",
+    "/v1/installation/mail/token",
+    authed(({ env }) =>
+      Effect.gen(function* () {
+        yield* installationMailAdmin(env);
+        yield* requireStepUp("admin");
+        const zone = (env.INSTALL_ZONE_NAME ?? "").toLowerCase();
+        const row = zone
+          ? yield* ctl(() =>
+              env.DIRECTORY.withSession("first-primary")
+                .prepare(
+                  "SELECT id, state, zone_auth_method FROM domains WHERE name = ? AND state != 'removed'",
+                )
+                .bind(zone)
+                .first<{ id: string; state: string; zone_auth_method: string | null }>(),
+            )
+          : null;
+        const writing = ["zone-authorized", "dns-configured", "inbound-tested", "outbound-tested"];
+        if (
+          row !== null &&
+          row.zone_auth_method !== null &&
+          row.zone_auth_method !== "manual-records" &&
+          writing.includes(row.state) &&
+          !env.CF_DNS_API_TOKEN
+        ) {
+          const status = yield* domainWorkflowStatus(env, yield* domainWorkflow(env, row.id));
+          if (status !== null && LIVE_WORKFLOW.has(status))
+            return yield* Effect.fail(
+              new ApiError({
+                code: "conflict",
+                message:
+                  "incoming email setup is making changes with this token; wait for it to finish or restore the previous setup first",
+              }),
+            );
+        }
+        yield* Effect.promise(() => deleteZoneToken(env));
+        return {
+          automation: yield* Effect.promise(() => installationAutomation(env)),
+          tokenConfigured: false,
+        };
+      }),
+    ),
+  ),
+  // "Review mail setup": create or reuse the customer domain for the installation's zone without
+  // re-entering it. Ownership is the onboarding account/zone link, so the domain starts at
+  // `ownership-proven`; nothing is written to DNS or Email Routing here.
+  route(
+    "POST",
+    "/v1/domains/from-installation",
+    authedBody(
+      InstallationDomainRequest,
+      ({ body, env }) =>
+        Effect.gen(function* () {
+          const operator = yield* requireOperatorAccess();
+          // Default: the owner's personal organization, where their address on the zone lives.
+          const orgId =
+            body.orgId ??
+            ((yield* Effect.promise(() => personalOrgOf(env, operator.userId))) || "");
+          if (!orgId) return yield* badRequest("no organization to bind the domain to");
+          const principal = yield* requireOrgAdminAccess(orgId);
+          yield* requireStepUp("admin");
+          const zone = (env.INSTALL_ZONE_NAME ?? "").toLowerCase();
+          if (!zone || !env.INSTALL_ZONE_ID || !env.INSTALL_ACCOUNT_ID)
+            return yield* Effect.fail(
+              new ApiError({ code: "conflict", message: "this installation has no recorded zone" }),
+            );
+          if (body.name !== undefined && body.name.toLowerCase().replace(/\.$/, "") !== zone)
+            return yield* badRequest("name does not match the installation's zone");
+          const deps = yield* depsFor(env, zone, null);
+          const row = yield* ctl(() =>
+            new DomainOnboarding(env.DIRECTORY, kernelClock, deps).domains.requestFromInstallation(
+              orgId,
+              principal.userId,
+              {
+                name: zone,
+                accountId: env.INSTALL_ACCOUNT_ID!,
+                zoneId: env.INSTALL_ZONE_ID!,
+              },
+            ),
+          );
+          // Reuse the domain's live workflow; a missing or finished one is replaced.
+          yield* ensureDomainWorkflow(env, row.id, principal.userId);
+          return { domainId: row.id, name: row.name, state: row.state };
+        }),
+      { status: 202 },
+    ),
+  ),
+  // "Restore previous mail setup": puts the recorded MX/SPF/DKIM/DMARC/routing state back (or,
+  // for a manual-records setup, keeps it for the customer to restore by hand) and returns the
+  // domain to `ownership-proven`, from where setup can start again. The application deployment and
+  // mail already accepted are untouched.
+  route(
+    "POST",
+    "/v1/domains/:id/rollback",
+    authed(({ env, params }) =>
+      Effect.gen(function* () {
+        const { domain, principal } = yield* adminDomain(params.id!);
+        yield* requireStepUp("admin");
+        const link = yield* ctl(() =>
+          new DomainOnboarding(
+            env.DIRECTORY,
+            kernelClock,
+            onboardingDeps(env, null, null),
+          ).domains.mailLink(domain.id),
+        );
+        // Restore through the path the change was made: the zone API only if Bye wrote with it.
+        const method: ZoneAuthorizationMethod =
+          link.writeMode === "api" ? "delegated-token" : "manual-records";
+        const onboarding = new DomainOnboarding(
+          env.DIRECTORY,
+          kernelClock,
+          yield* depsFor(env, domain.name, method),
+        );
+        // Validate first: nothing is stopped when there is nothing (or no way) to restore.
+        yield* ctl(() => onboarding.rollbackPlan(domain.id));
+        // Stop the running workflow so it does not re-apply the change being rolled back.
+        if (!(yield* stopDomainWorkflow(env, domain.id)))
+          return yield* Effect.fail(
+            new ApiError({
+              code: "conflict",
+              message: "the running setup could not be stopped; nothing was restored, try again",
+            }),
+          );
+        return yield* ctl(() => onboarding.rollback(domain.id, principal.userId));
+      }),
+    ),
+  ),
+  // After a manual-records rollback: the customer confirms they put their previous records back.
+  route(
+    "POST",
+    "/v1/domains/:id/restore-acknowledged",
+    authed(({ env, params }) =>
+      Effect.gen(function* () {
+        const { domain, principal } = yield* adminDomain(params.id!);
+        yield* requireStepUp("admin");
+        yield* ctl(() =>
+          new DomainOnboarding(
+            env.DIRECTORY,
+            kernelClock,
+            onboardingDeps(env, null, null),
+          ).domains.acknowledgeRestore(domain.id, principal.userId),
+        );
+        return { domainId: domain.id, restorePending: null };
+      }),
+    ),
+  ),
+
   // ---- customer domains (O01) ----
   route(
     "POST",
@@ -478,10 +794,9 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(({ env, params }) =>
       Effect.gen(function* () {
         const { domain } = yield* adminDomain(params.id!);
+        const deps = yield* depsFor(env, domain.name, null);
         return yield* ctl(() =>
-          new DomainOnboarding(env.DIRECTORY, kernelClock, onboardingDeps(env, null)).preview(
-            domain.id,
-          ),
+          new DomainOnboarding(env.DIRECTORY, kernelClock, deps).preview(domain.id),
         );
       }),
     ),
@@ -510,20 +825,83 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
       ZoneAuthorizationRequest,
       ({ env, params, body }) =>
         Effect.gen(function* () {
-          const { domain } = yield* adminDomain(params.id!);
+          const { domain, principal } = yield* adminDomain(params.id!);
           yield* requireStepUp("admin");
           const method: ZoneAuthorizationMethod = body.method;
-          if (method !== "manual-records" && !env.CF_DNS_API_TOKEN)
+          if (
+            method !== "manual-records" &&
+            (yield* Effect.promise(() => zoneApiToken(env, domain.name))) === null
+          )
             return yield* badRequest("zone automation is not configured; use manual-records");
+          const onboarding = new DomainOnboarding(
+            env.DIRECTORY,
+            kernelClock,
+            yield* depsFor(env, domain.name, method),
+          );
+          // One read of the current setup (authoritative zone records and routing rules when the
+          // zone API is available) decides the cutover and becomes the recorded snapshot.
+          const inspection = yield* ctl(() => onboarding.inspect(domain.id));
+          const { requiresCutover, provider } = inspection.classification;
+          const needConfirmation = () =>
+            Effect.fail(
+              new ApiError({
+                code: "conflict",
+                message: `incoming mail for ${domain.name} currently goes to ${provider}; confirm the switch to continue`,
+                details: { cutoverRequired: true, provider },
+              }),
+            );
+          const authorizedStates = [
+            "zone-authorized",
+            "dns-configured",
+            "inbound-tested",
+            "outbound-tested",
+          ];
+          if (authorizedStates.includes(domain.state)) {
+            // Already authorized, but the current provider is still in place (it appeared after
+            // authorization, or public DNS was stale): confirm the switch now and restart setup
+            // so it continues immediately.
+            if (!requiresCutover || inspection.link.cutoverConfirmedAt !== null)
+              return yield* Effect.fail(
+                new ApiError({ code: "conflict", message: `domain is ${domain.state}` }),
+              );
+            if (body.confirmCutover !== true) return yield* needConfirmation();
+            yield* ctl(() =>
+              onboarding.domains.recordCutover(
+                domain.id,
+                principal.userId,
+                onboarding.snapshotOf(inspection),
+                true,
+              ),
+            );
+            yield* restartDomainWorkflow(env, domain.id, principal.userId);
+            return { domainId: domain.id, method, status: "switching" };
+          }
           if (domain.state !== "ownership-proven")
             return yield* Effect.fail(
               new ApiError({ code: "conflict", message: `domain is ${domain.state}` }),
             );
-          const workflowId = yield* domainWorkflow(env, domain.id);
-          const instance = yield* Effect.promise(() => env.PROVISION_DOMAIN.get(workflowId));
-          yield* Effect.promise(() =>
-            instance.sendEvent({ type: "zone-authorized", payload: { method } }),
+          // Replacing the current provider is a separate, explicit decision (infra/onboarding/spec.md
+          // §12 state 3); the current configuration is recorded before anything is written.
+          if (requiresCutover && body.confirmCutover !== true) return yield* needConfirmation();
+          yield* ctl(() =>
+            onboarding.domains.recordCutover(
+              domain.id,
+              principal.userId,
+              onboarding.snapshotOf(inspection),
+              requiresCutover,
+            ),
           );
+          // Recorded before the event, so a fresh instance resumes from it without waiting.
+          yield* ctl(() =>
+            onboarding.domains.recordAuthorization(domain.id, principal.userId, method),
+          );
+          const workflow = yield* ensureDomainWorkflow(env, domain.id, principal.userId);
+          if (!workflow.fresh) {
+            const instance = yield* Effect.promise(() => env.PROVISION_DOMAIN.get(workflow.id));
+            yield* Effect.promise(() =>
+              instance.sendEvent({ type: "zone-authorized", payload: { method } }),
+            );
+          }
           return { domainId: domain.id, method, status: "authorizing" };
         }),
       { status: 202 },
@@ -538,15 +916,9 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
         Effect.gen(function* () {
           const { domain, principal } = yield* adminDomain(params.id!);
           yield* requireStepUp("admin");
-          const id = `dom-${domain.id}-${Date.now().toString(36)}`;
-          yield* Effect.promise(() =>
-            env.PROVISION_DOMAIN.create({
-              id,
-              params: { v: 1, domainId: domain.id, actorId: principal.userId },
-            }),
-          );
-          // Later status reads and zone-authorization events must reach THIS instance, not the first one.
-          yield* setDomainWorkflow(env, domain.id, id);
+          // A fresh instance re-runs the checks from the recorded state and authorization; the
+          // live one (if any) is stopped first so two never run for one domain.
+          const { id } = yield* restartDomainWorkflow(env, domain.id, principal.userId);
           return { domainId: domain.id, workflowId: id };
         }),
       { status: 202 },

@@ -3,7 +3,7 @@ import { ControlAuth, ControlDirectory } from "@bye/platform-cloudflare";
 import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, makeHarness } from "./harness.ts";
+import { type Harness, makeHarness, enablePersonalMail } from "./harness.ts";
 import { signDayPhotoUrl } from "../src/routes/calendar.ts";
 import { mint } from "../src/capability.ts";
 import { hmacHex } from "@bye/domain";
@@ -662,7 +662,7 @@ describe("calendar API", () => {
 
   it("[C04] organizing an event sends an iTIP REQUEST through the mailbox; deleting it sends CANCEL", async () => {
     const ana = await signup(h, "ana@bye.test");
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
     vi.stubGlobal(
       "fetch",
       (async () => new Response(JSON.stringify({ id: "prov-1" }), { status: 202 })) as typeof fetch,

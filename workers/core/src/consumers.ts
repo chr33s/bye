@@ -53,7 +53,7 @@ import { mailboxErased } from "./erasure.ts";
 
 const decode = Schema.decodeUnknownSync(QueueMessage);
 
-export { personalMailEndpoint, sendEmailBinding } from "./transports.ts";
+export { sendEmailBinding } from "./transports.ts";
 
 /** Render a frozen send job to MIME at its deterministic content key (idempotent put). */
 const rendererLayer = (env: CoreEnv) =>

@@ -105,6 +105,14 @@ export const WorldDraftRequest = Schema.Struct({
   text: Text(512 * 1024),
   media: Schema.optional(Schema.Array(WorldMedia).pipe(Schema.check(Schema.isMaxLength(20)))),
 });
+/**
+ * Connect (or repair) the instance newsletter provider with one API key. The key is only
+ * type-checked here, so a decode error never echoes it; its format is checked by the handler.
+ */
+export const NewsletterConfigRequest = Schema.Struct({
+  provider: Schema.Literals(["resend"]),
+  apiKey: Schema.String,
+});
 /** Operator resolution of a held newsletter operation, with the evidence relied on. */
 export const NewsletterResolveRequest = Schema.Struct({
   opId: Text(256),

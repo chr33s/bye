@@ -11,7 +11,13 @@ import { kernelClock } from "../src/durable-host.ts";
 import { handleInbound } from "../src/inbound.ts";
 import { itipUid, type MailboxDO } from "../src/objects/mailbox.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, inboundMessage, makeHarness, rfc822 } from "./harness.ts";
+import {
+  type Harness,
+  inboundMessage,
+  makeHarness,
+  rfc822,
+  enablePersonalMail,
+} from "./harness.ts";
 import { blobKey } from "@bye/application";
 import { bodyKeyFor } from "../src/objects.ts";
 
@@ -803,7 +809,7 @@ describe("sending policy at dispatch", () => {
 
   it("[§10] suppressed recipients are removed from the envelope while the rest still receive the message", async () => {
     const h = makeHarness();
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
     const account = await new ControlDirectory(
       h.env.DIRECTORY,
       kernelClock,
@@ -859,28 +865,12 @@ describe("sending policy at dispatch", () => {
       commandId: cmdId(),
       revision: draft.body.revision,
     });
-    const submitted: Array<string> = [];
-    const real = globalThis.fetch;
-    globalThis.fetch = (async (_u: string, init: { body: string }) => (
-      submitted.push(init.body),
-      Response.json({ id: "prov-1" }, { status: 202 })
-    )) as typeof fetch;
-    try {
-      vi.setSystemTime(Date.now() + 60_000);
-      await h.namespaces.MAILBOXES.instance(account.mailboxId).alarm();
-      await h.drain();
-    } finally {
-      globalThis.fetch = real;
-    }
-    expect(submitted).toHaveLength(1);
-    expect(submitted[0]).toContain("alice@example.net");
-    const envelope = JSON.parse(submitted[0]!) as {
-      to?: Array<string>;
-      recipients?: Array<string>;
-    };
-    expect(JSON.stringify(envelope.to ?? envelope.recipients ?? [])).not.toContain(
-      "bob@example.net",
-    );
+    const before = h.sent.length;
+    vi.setSystemTime(Date.now() + 60_000);
+    await h.namespaces.MAILBOXES.instance(account.mailboxId).alarm();
+    await h.drain();
+    // One send per envelope recipient: only alice is on the envelope.
+    expect(h.sent.slice(before).map((m) => m.to)).toEqual(["alice@example.net"]);
     const job = await h.namespaces.MAILBOXES.instance(account.mailboxId).sendJob(
       sent.body.sendJobIds[0],
     );
@@ -1089,21 +1079,13 @@ describe("outbound mail and delivery rules", () => {
     });
 
   /** Run due mailbox jobs and queues with the provider transport mocked; returns submitted bodies. */
+  /** Runs the undo window out and returns the raw messages handed to the sending binding. */
   const dispatch = async (h: Harness, mailboxId: string): Promise<Array<string>> => {
-    const submitted: Array<string> = [];
-    const real = globalThis.fetch;
-    globalThis.fetch = (async (_u: string, init: { body: string }) => (
-      submitted.push(String(init.body)),
-      Response.json({ id: `prov-${submitted.length}` }, { status: 202 })
-    )) as typeof fetch;
-    try {
-      vi.setSystemTime(Date.now() + 60_000);
-      await h.namespaces.MAILBOXES.instance(mailboxId).alarm();
-      await h.drain();
-    } finally {
-      globalThis.fetch = real;
-    }
-    return submitted;
+    const before = h.sent.length;
+    vi.setSystemTime(Date.now() + 60_000);
+    await h.namespaces.MAILBOXES.instance(mailboxId).alarm();
+    await h.drain();
+    return h.sent.slice(before).map((m) => m.raw);
   };
 
   let h: Harness;
@@ -1111,7 +1093,7 @@ describe("outbound mail and delivery rules", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.UTC(2026, 8, 25, 12));
     h = makeHarness();
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
   });
   afterEach(() => vi.useRealTimers());
 

@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ControlAuth, ControlDirectory, SendingPolicy } from "@bye/platform-cloudflare";
+import { FakeCloudflare } from "@bye/testing";
 import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import { authConfig } from "../src/services.ts";
+import { onboardingDepsFor } from "../src/workflows/domain.ts";
+import { zoneApiToken } from "../src/zone-token.ts";
 import { type Harness, makeHarness } from "./harness.ts";
 
 // Administration routes (admin.ts): platform operator tooling, account closure, team member
@@ -701,6 +704,443 @@ describe("admin routes", () => {
       expect(
         JSON.stringify((await call(h, ana, "GET", `/v1/orgs/${ana.organizationId}/domains`)).body),
       ).not.toContain("ana-co.test");
+    });
+  });
+
+  describe("incoming email for the installation zone (infra/onboarding/spec.md Part B)", () => {
+    let cf: FakeCloudflare;
+    beforeEach(() => {
+      cf = new FakeCloudflare();
+      // DNS-over-HTTPS and the zone API go to the fake; nothing leaves the test.
+      vi.stubGlobal("fetch", cf.fetch);
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    const install = async () => {
+      const zoneId = cf.addZone("example.test");
+      Object.assign(h.env, {
+        INSTALL_ACCOUNT_ID: "acc_1",
+        INSTALL_ZONE_ID: zoneId,
+        INSTALL_ZONE_NAME: "example.test",
+        BOOTSTRAP_ADDRESS_DOMAIN: "example.test",
+      });
+      // The bootstrap owner's address already lives on the zone (Part A).
+      const owner = await signup(h, "chris@example.test");
+      (h.env as { OPERATOR_USER_IDS?: string }).OPERATOR_USER_IDS = owner.userId;
+      return { owner, zoneId };
+    };
+
+    it("skipping leaves mail not set up; binding reuses the zone without re-entry and never writes DNS", async () => {
+      const { owner } = await install();
+      const before = await call(h, owner, "GET", "/v1/installation/mail");
+      expect(before.body).toMatchObject({
+        zone: "example.test",
+        canSetup: true,
+        domain: null,
+        incomingMail: "not-set-up",
+      });
+      const bound = await call(h, owner, "POST", "/v1/domains/from-installation", {
+        orgId: owner.organizationId,
+      });
+      expect(bound.status).toBe(202);
+      expect(bound.body).toMatchObject({ name: "example.test", state: "ownership-proven" });
+      // Re-entrant: the same domain comes back.
+      const again = await call(h, owner, "POST", "/v1/domains/from-installation", {
+        orgId: owner.organizationId,
+      });
+      expect(again.body.domainId).toBe(bound.body.domainId);
+      expect(h.workflows.PROVISION_DOMAIN?.length).toBe(1);
+      // The owner's existing address on the zone keeps routing.
+      expect(
+        await count(
+          h,
+          "SELECT COUNT(*) AS n FROM address_routes WHERE address = 'chris@example.test' AND disabled_at IS NULL",
+        ),
+      ).toBe(1);
+      const after = await call(h, owner, "GET", "/v1/installation/mail");
+      expect(after.body).toMatchObject({
+        domain: { id: bound.body.domainId, state: "ownership-proven" },
+        incomingMail: "not-set-up",
+      });
+      expect(cf.calls.filter((c) => !c.startsWith("GET"))).toEqual([]);
+    });
+
+    it("binding needs an operator who administers the org, a step-up and the recorded zone", async () => {
+      const { owner } = await install();
+      const other = await signup(h, "ana@bye.test");
+      expect(
+        refusal(
+          await call(h, other, "POST", "/v1/domains/from-installation", {
+            orgId: other.organizationId,
+          }),
+        ),
+      ).toEqual([403, "forbidden", false]);
+      const plain = await plainSession(h, owner);
+      expect(
+        refusal(
+          await call(h, plain, "POST", "/v1/domains/from-installation", {
+            orgId: owner.organizationId,
+          }),
+        ),
+      ).toEqual([403, "forbidden", true]);
+      const mismatch = await call(h, owner, "POST", "/v1/domains/from-installation", {
+        orgId: owner.organizationId,
+        name: "other.test",
+      });
+      expect(mismatch.status).toBe(400);
+      (h.env as { INSTALL_ZONE_ID?: string }).INSTALL_ZONE_ID = "";
+      const unset = await call(h, owner, "POST", "/v1/domains/from-installation", {
+        orgId: owner.organizationId,
+      });
+      expect(refusal(unset)).toEqual([409, "conflict", false]);
+    });
+
+    describe("installation zone token (spec §13 fallback)", () => {
+      const GOOD = "zone-scoped-token-AAAAAAAAAAAAAAAAAAAAAAAA";
+      const withKey = () =>
+        Object.assign(h.env, { ZONE_TOKEN_SEAL_KEY: Buffer.alloc(32, 7).toString("base64url") });
+      const stored = () =>
+        h.d1
+          .prepare("SELECT * FROM installation_zone_token WHERE id = 'default'")
+          .first<Record<string, unknown>>();
+
+      it("validates the token against Cloudflare before storing it, and never echoes it", async () => {
+        const { owner, zoneId } = await install();
+        withKey();
+        const otherZone = cf.addZone("other.test");
+        const cases: Array<[string, ReadonlyArray<string> | "all" | null, RegExp]> = [
+          ["unknown-token-BBBBBBBBBBBBBBBBBBBBBBBBBBB", null, /cannot read the zone/],
+          ["other-zone-token-CCCCCCCCCCCCCCCCCCCCCCCC", [otherZone], /cannot read the zone/],
+          ["all-zones-token-DDDDDDDDDDDDDDDDDDDDDDDDD", "all", /limited to example\.test only/],
+          ["two-zones-token-EEEEEEEEEEEEEEEEEEEEEEEEE", [zoneId, otherZone], /limited to/],
+          ["x", null, /does not look like/],
+        ];
+        for (const [token, scope, message] of cases) {
+          if (scope !== null) cf.tokens.set(token, scope);
+          const r = await call(h, owner, "POST", "/v1/installation/mail/token", { token });
+          expect(r.status, token).toBe(400);
+          expect(r.body.error.message).toMatch(message);
+          expect(JSON.stringify(r.body)).not.toContain(token);
+          expect(await stored()).toBeNull();
+        }
+        // A token limited to the installation zone is accepted, sealed at rest, never returned.
+        cf.tokens.set(GOOD, [zoneId]);
+        const ok = await call(h, owner, "POST", "/v1/installation/mail/token", { token: GOOD });
+        expect([ok.status, ok.body]).toEqual([
+          200,
+          { automation: "zone-api", tokenConfigured: true },
+        ]);
+        const row = (await stored())!;
+        expect(row.zone_id).toBe(zoneId);
+        expect(JSON.stringify(row)).not.toContain(GOOD);
+        const status = await call(h, owner, "GET", "/v1/installation/mail");
+        expect(status.body).toMatchObject({ automation: "zone-api", tokenConfigured: true });
+        expect(JSON.stringify(status.body)).not.toContain(GOOD);
+      });
+
+      it("resolves the stored token only for the installation zone, after the deployment's own", async () => {
+        const { owner, zoneId } = await install();
+        withKey();
+        cf.tokens.set(GOOD, [zoneId]);
+        await call(h, owner, "POST", "/v1/installation/mail/token", { token: GOOD });
+        expect(await zoneApiToken(h.env, "example.test")).toBe(GOOD);
+        expect(await zoneApiToken(h.env, "Example.Test.")).toBe(GOOD);
+        expect(await zoneApiToken(h.env, "other.test")).toBeNull();
+        expect(await zoneApiToken(h.env, null)).toBeNull();
+        // The deployment's scoped token wins wherever it is set.
+        (h.env as { CF_DNS_API_TOKEN?: string }).CF_DNS_API_TOKEN = "cf-test-token";
+        expect(await zoneApiToken(h.env, "example.test")).toBe("cf-test-token");
+        (h.env as { CF_DNS_API_TOKEN?: string }).CF_DNS_API_TOKEN = "";
+        // A token sealed for another zone does not open for this one.
+        await h.d1.prepare("UPDATE installation_zone_token SET zone_id = 'zone999'").run();
+        expect(await zoneApiToken(h.env, "example.test")).toBeNull();
+      });
+
+      it("lets setup run through the zone API, and falls back to manual records when removed", async () => {
+        const { owner, zoneId } = await install();
+        withKey();
+        const bound = await call(h, owner, "POST", "/v1/domains/from-installation", {});
+        const id = bound.body.domainId as string;
+        // Without a token, zone automation is refused.
+        expect(
+          (
+            await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
+              method: "delegated-token",
+            })
+          ).status,
+        ).toBe(400);
+        cf.tokens.set(GOOD, [zoneId]);
+        await call(h, owner, "POST", "/v1/installation/mail/token", { token: GOOD });
+        expect(
+          (await onboardingDepsFor(h.env, "example.test", "delegated-token")).api,
+        ).not.toBeNull();
+        expect((await onboardingDepsFor(h.env, "example.test", "manual-records")).api).toBeNull();
+        const authorized = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
+          method: "delegated-token",
+        });
+        expect(authorized.status).toBe(202);
+        // While the workflow is writing through the token, removal is refused.
+        await h.d1
+          .prepare("UPDATE domains SET state = 'dns-configured' WHERE id = ?")
+          .bind(id)
+          .run();
+        const busy = await call(h, owner, "DELETE", "/v1/installation/mail/token");
+        expect(busy.status).toBe(409);
+        expect(await stored()).not.toBeNull();
+        // Once nothing is writing, removal returns to manual records.
+        const wf = (await h.d1
+          .prepare("SELECT workflow_instance FROM domains WHERE id = ?")
+          .bind(id)
+          .first<{ workflow_instance: string }>())!.workflow_instance;
+        h.workflowStatus.PROVISION_DOMAIN!.get(wf)!.status = "complete";
+        const removed = await call(h, owner, "DELETE", "/v1/installation/mail/token");
+        expect([removed.status, removed.body]).toEqual([
+          200,
+          { automation: "manual-records", tokenConfigured: false },
+        ]);
+        expect(await stored()).toBeNull();
+        expect(await zoneApiToken(h.env, "example.test")).toBeNull();
+        expect((await onboardingDepsFor(h.env, "example.test", "delegated-token")).api).toBeNull();
+      });
+
+      it("needs an operator who administers the org, with a recent step-up", async () => {
+        const { owner, zoneId } = await install();
+        withKey();
+        cf.tokens.set(GOOD, [zoneId]);
+        const other = await signup(h, "ana@bye.test");
+        const plain = await plainSession(h, owner);
+        for (const [method, json] of [
+          ["POST", { token: GOOD }],
+          ["DELETE", undefined],
+        ] as const) {
+          expect(
+            refusal(await call(h, other, method, "/v1/installation/mail/token", json)),
+          ).toEqual([403, "forbidden", false]);
+          expect(
+            refusal(await call(h, plain, method, "/v1/installation/mail/token", json)),
+          ).toEqual([403, "forbidden", true]);
+        }
+        expect(await stored()).toBeNull();
+      });
+    });
+
+    it("a foreign MX needs the explicit cutover confirmation before zone authorization", async () => {
+      const { owner, zoneId } = await install();
+      cf.records.push({
+        id: "gmx",
+        zoneId,
+        type: "MX",
+        name: "example.test",
+        content: "aspmx.l.google.com",
+        priority: 1,
+      });
+      const bound = await call(h, owner, "POST", "/v1/domains/from-installation", {
+        orgId: owner.organizationId,
+      });
+      const id = bound.body.domainId as string;
+      const preview = await call(h, owner, "GET", `/v1/domains/${id}/dns`);
+      expect(preview.body.classification).toMatchObject({
+        kind: "existing-provider",
+        provider: "Google Workspace",
+        requiresCutover: true,
+      });
+      const refused = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
+        method: "manual-records",
+      });
+      expect(refused.status).toBe(409);
+      expect(refused.body.error.details).toMatchObject({
+        cutoverRequired: true,
+        provider: "Google Workspace",
+      });
+      expect(h.workflowEvents.PROVISION_DOMAIN ?? []).toEqual([]);
+      const confirmed = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
+        method: "manual-records",
+        confirmCutover: true,
+      });
+      expect(confirmed.status).toBe(202);
+      expect(h.workflowEvents.PROVISION_DOMAIN).toHaveLength(1);
+      const row = await h.d1
+        .prepare("SELECT cutover_confirmed_at, cutover_snapshot FROM domains WHERE id = ?")
+        .bind(id)
+        .first<{ cutover_confirmed_at: number | null; cutover_snapshot: string }>();
+      expect(row!.cutover_confirmed_at).not.toBeNull();
+      expect(JSON.parse(row!.cutover_snapshot).mx[0].content).toBe("aspmx.l.google.com");
+      // The foreign MX is still in place: authorization alone writes nothing.
+      expect(cf.records.find((r) => r.id === "gmx")).toBeDefined();
+      // Rollback needs a step-up too.
+      expect(
+        refusal(await call(h, await plainSession(h, owner), "POST", `/v1/domains/${id}/rollback`)),
+      ).toEqual([403, "forbidden", true]);
+    });
+
+    const bind = async (owner: Account) => {
+      // No orgId: the owner's personal organization is the default.
+      const bound = await call(h, owner, "POST", "/v1/domains/from-installation", {});
+      expect(bound.status).toBe(202);
+      return bound.body.domainId as string;
+    };
+    const row = (id: string) =>
+      h.d1
+        .prepare(
+          "SELECT org_id, state, workflow_instance, zone_auth_method, restore_pending, cutover_snapshot, cutover_confirmed_at FROM domains WHERE id = ?",
+        )
+        .bind(id)
+        .first<{
+          org_id: string;
+          state: string;
+          workflow_instance: string | null;
+          zone_auth_method: string | null;
+          restore_pending: string | null;
+          cutover_snapshot: string | null;
+          cutover_confirmed_at: number | null;
+        }>();
+    const statusOf = (id: string) => h.workflowStatus.PROVISION_DOMAIN!.get(id)?.status;
+
+    it("binds to the personal org by default and replaces a finished workflow instead of failing", async () => {
+      const { owner } = await install();
+      const id = await bind(owner);
+      expect((await row(id))!.org_id).toBe(owner.organizationId);
+      const first = (await row(id))!.workflow_instance!;
+      h.workflowStatus.PROVISION_DOMAIN!.get(first)!.status = "errored";
+      await bind(owner);
+      const second = (await row(id))!.workflow_instance!;
+      expect(second).not.toBe(first);
+      expect(statusOf(second)).toBe("queued");
+    });
+
+    it("rollback makes setup restartable: a fresh workflow resumes from the recorded authorization", async () => {
+      const { owner, zoneId } = await install();
+      cf.records.push({
+        id: "gmx",
+        zoneId,
+        type: "MX",
+        name: "example.test",
+        content: "aspmx.l.google.com",
+        priority: 1,
+      });
+      const id = await bind(owner);
+      const authorize = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
+        method: "manual-records",
+        confirmCutover: true,
+      });
+      expect(authorize.status).toBe(202);
+      const wf = (await row(id))!.workflow_instance!;
+      expect((await row(id))!.zone_auth_method).toBe("manual-records");
+      // The workflow advanced; verification then failed and the owner restores.
+      await h.d1.prepare("UPDATE domains SET state = 'dns-configured' WHERE id = ?").bind(id).run();
+      h.workflowStatus.PROVISION_DOMAIN!.get(wf)!.status = "running";
+      const back = await call(h, owner, "POST", `/v1/domains/${id}/rollback`);
+      expect(back.status).toBe(200);
+      expect(back.body.manual.mx[0].content).toBe("aspmx.l.google.com");
+      expect(statusOf(wf)).toBe("terminated");
+      const after = (await row(id))!;
+      expect(after).toMatchObject({
+        state: "ownership-proven",
+        workflow_instance: null,
+        zone_auth_method: null,
+        cutover_snapshot: null,
+      });
+      // The records to restore by hand are kept and shown on the domain page.
+      expect(JSON.parse(after.restore_pending!).mx[0].content).toBe("aspmx.l.google.com");
+      const dns = await call(h, owner, "GET", `/v1/domains/${id}/dns`);
+      expect(dns.body.link.restorePending.mx[0].content).toBe("aspmx.l.google.com");
+      // Setup starts again: a fresh instance (no event needed; it reads the recorded method).
+      const events = (h.workflowEvents.PROVISION_DOMAIN ?? []).length;
+      const again = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
+        method: "manual-records",
+        confirmCutover: true,
+      });
+      expect(again.status).toBe(202);
+      const fresh = (await row(id))!.workflow_instance!;
+      expect(fresh).not.toBe(wf);
+      expect(statusOf(fresh)).toBe("queued");
+      expect((h.workflowEvents.PROVISION_DOMAIN ?? []).length).toBe(events);
+      // The pending original became the new snapshot.
+      expect(JSON.parse((await row(id))!.cutover_snapshot!).mx[0].content).toBe(
+        "aspmx.l.google.com",
+      );
+      expect((await row(id))!.restore_pending).toBeNull();
+      const ack = await call(h, owner, "POST", `/v1/domains/${id}/restore-acknowledged`);
+      expect(ack.status).toBe(200);
+    });
+
+    it("rollback checks before stopping, and refuses when the workflow can't be stopped", async () => {
+      const { owner } = await install();
+      const id = await bind(owner);
+      const wf = (await row(id))!.workflow_instance!;
+      h.workflowStatus.PROVISION_DOMAIN!.get(wf)!.status = "waiting";
+      // Nothing recorded to restore: refused, and the running setup is left alone.
+      expect(refusal(await call(h, owner, "POST", `/v1/domains/${id}/rollback`))).toEqual([
+        409,
+        "conflict",
+        false,
+      ]);
+      expect(statusOf(wf)).toBe("waiting");
+      await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
+        method: "manual-records",
+      });
+      await h.d1
+        .prepare("UPDATE domains SET state = 'zone-authorized' WHERE id = ?")
+        .bind(id)
+        .run();
+      h.workflowUnstoppable.add(wf);
+      expect(refusal(await call(h, owner, "POST", `/v1/domains/${id}/rollback`))).toEqual([
+        409,
+        "conflict",
+        false,
+      ]);
+      expect((await row(id))!.state).toBe("zone-authorized");
+      expect((await row(id))!.cutover_snapshot).not.toBeNull();
+    });
+
+    it("retry restarts checks with a fresh instance and stops the live one", async () => {
+      const { owner } = await install();
+      const id = await bind(owner);
+      const wf = (await row(id))!.workflow_instance!;
+      h.workflowStatus.PROVISION_DOMAIN!.get(wf)!.status = "running";
+      const retry = await call(h, owner, "POST", `/v1/domains/${id}/retry`);
+      expect(retry.status).toBe(202);
+      expect(statusOf(wf)).toBe("terminated");
+      expect(retry.body.workflowId).toBe((await row(id))!.workflow_instance);
+      expect(statusOf(retry.body.workflowId)).toBe("queued");
+    });
+
+    it("a provider that appears after authorization can be confirmed then, and setup restarts", async () => {
+      const { owner, zoneId } = await install();
+      const id = await bind(owner);
+      await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
+        method: "manual-records",
+      });
+      await h.d1
+        .prepare("UPDATE domains SET state = 'zone-authorized' WHERE id = ?")
+        .bind(id)
+        .run();
+      cf.records.push({
+        id: "gmx",
+        zoneId,
+        type: "MX",
+        name: "example.test",
+        content: "aspmx.l.google.com",
+        priority: 1,
+      });
+      const dns = await call(h, owner, "GET", `/v1/domains/${id}/dns`);
+      expect(dns.body.cutoverPending).toBe(true);
+      const refused = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
+        method: "manual-records",
+      });
+      expect(refused.body.error.details).toMatchObject({ cutoverRequired: true });
+      const before = (await row(id))!.workflow_instance!;
+      const ok = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
+        method: "manual-records",
+        confirmCutover: true,
+      });
+      expect(ok.status).toBe(202);
+      expect((await row(id))!.cutover_confirmed_at).not.toBeNull();
+      expect((await row(id))!.state).toBe("zone-authorized");
+      expect((await row(id))!.workflow_instance).not.toBe(before);
+      expect((await call(h, owner, "GET", `/v1/domains/${id}/dns`)).body.cutoverPending).toBe(
+        false,
+      );
     });
   });
 });

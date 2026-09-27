@@ -1,6 +1,7 @@
 // Cloudflare OAuth scope-to-operation matrix for onboarding (spec.md §15.11 "OAuth,
-// credentials, and disconnect"). Only what the first-release stack needs: never customer-zone DNS,
-// Email Routing, routes/custom domains, or zone settings. Each entry stays `verified: false`
+// credentials, and disconnect"; infra/onboarding/spec.md §4). Only what the stack needs: zone read (to
+// list and re-verify the chosen zone) and Workers Routes write (the one MailCore custom hostname),
+// never DNS writes, Email Routing, email sending or zone settings. Each entry stays `verified: false`
 // until an end-to-end nonproduction deployment with exactly this set has been recorded
 // (infra/onboarding/README.md "Release record"); unverified coverage blocks persistent stages.
 
@@ -85,6 +86,24 @@ export const ONBOARDING_SCOPES: ReadonlyArray<ScopeGrant> = [
     verified: false,
   },
   {
+    scope: "zone.read",
+    operations: [
+      "list the selected account's active zones for the Bye address",
+      "re-verify that the chosen zone still exists in the account before each deploy",
+    ],
+    // Discovery only: never authorizes a plan write.
+    resourceTypes: [],
+    verified: false,
+  },
+  {
+    scope: "workers-routes.write",
+    operations: [
+      "attach the chosen Bye hostname (APP_DOMAIN) to MailCore as a Worker custom domain",
+    ],
+    resourceTypes: ["Cloudflare.Workers.CustomDomain"],
+    verified: false,
+  },
+  {
     scope: "offline_access",
     operations: ["refresh the access token for retries and upgrades"],
     resourceTypes: [],
@@ -101,20 +120,31 @@ export const UNCOVERED_TYPES: ReadonlyArray<{ readonly type: string; readonly no
 /**
  * Never requested, and refused if a provider grants them anyway: DNS, zones, routes and custom
  * domains, Email Routing/Sending, security rules, API tokens, billing, and any write to members,
- * account settings or user details.
+ * account settings or user details — except the exact narrow grants in `PERMITTED_ZONE_SCOPES`.
  */
 export const FORBIDDEN_SCOPE =
   /dns|zone|email|route|ssl|firewall|waf|ruleset|token|billing|(memberships|account-settings|user-details)\.write/i;
 
+/**
+ * The only zone/route scopes onboarding holds, matched exactly: `zone.read` for discovery and
+ * `workers-routes.write` for the MailCore custom hostname. `dns-records.write`, `zone.write`,
+ * `zone-settings.write` and every Email Routing scope stay forbidden.
+ */
+export const PERMITTED_ZONE_SCOPES: ReadonlySet<string> = new Set([
+  "zone.read",
+  "workers-routes.write",
+]);
+
 export const requestedScopes = (): ReadonlyArray<string> => ONBOARDING_SCOPES.map((s) => s.scope);
 
 export const forbiddenScopes = (scopes: ReadonlyArray<string>): ReadonlyArray<string> =>
-  scopes.filter((s) => FORBIDDEN_SCOPE.test(s));
+  scopes.filter((s) => FORBIDDEN_SCOPE.test(s) && !PERMITTED_ZONE_SCOPES.has(s));
 
 /** Types in a plan that no granted scope covers, or whose covering scope is unverified. */
 export const coverageGaps = (
   types: ReadonlyArray<string>,
   granted: ReadonlyArray<string> = requestedScopes(),
+  matrix: ReadonlyArray<ScopeGrant> = ONBOARDING_SCOPES,
 ): ReadonlyArray<string> => {
   const gaps: Array<string> = [];
   for (const type of new Set(types)) {
@@ -123,7 +153,7 @@ export const coverageGaps = (
       gaps.push(`${type}: ${uncovered.note}`);
       continue;
     }
-    const grant = ONBOARDING_SCOPES.find((g) => g.resourceTypes.includes(type));
+    const grant = matrix.find((g) => g.resourceTypes.includes(type));
     if (!grant) gaps.push(`${type}: not in the scope matrix`);
     else if (!granted.includes(grant.scope)) gaps.push(`${type}: scope ${grant.scope} not granted`);
     else if (!grant.verified) gaps.push(`${type}: scope ${grant.scope} is unverified`);

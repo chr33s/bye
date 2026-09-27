@@ -1,4 +1,4 @@
-import type { DnsRecord, DnsRecordType } from "./domains.ts";
+import type { DnsRecord, DnsRecordType, EmailRoutingRule } from "./domains.ts";
 
 // Narrow Cloudflare API adapter for customer-domain onboarding (O01) and public cache purge (P01).
 // Uses a separately scoped, revocable token (Zone:DNS edit, Email Routing edit / Cache Purge) held
@@ -13,11 +13,23 @@ export interface CloudflareApi {
   listDns(zoneId: string, name: string): Promise<ReadonlyArray<CloudflareDnsRecord>>;
   createDns(zoneId: string, record: DnsRecord): Promise<void>;
   updateDns(zoneId: string, id: string, record: DnsRecord): Promise<void>;
+  /** Only for an explicitly confirmed MX cutover or a rollback to the recorded snapshot. */
+  deleteDns(zoneId: string, id: string): Promise<void>;
   emailRoutingEnabled(zoneId: string): Promise<boolean>;
   enableEmailRouting(zoneId: string): Promise<void>;
+  /** Rollback only: restores a zone whose Email Routing was off before the cutover. */
+  disableEmailRouting(zoneId: string): Promise<void>;
   /** Catch-all rule delivering every address to the MailCore Worker (aliases live in D1). */
   catchAllToWorker(zoneId: string, workerName: string): Promise<void>;
+  /** Rollback only: turns the catch-all rule off (no Worker receives unmatched mail). */
+  disableCatchAll(zoneId: string): Promise<void>;
   catchAllWorker(zoneId: string): Promise<string | null>;
+  /** The full catch-all rule (any action: worker, forward, drop), or null when none is set. */
+  catchAllRule(zoneId: string): Promise<EmailRoutingRule | null>;
+  /** Rollback only: puts a recorded catch-all rule back exactly as it was. */
+  putCatchAll(zoneId: string, rule: EmailRoutingRule): Promise<void>;
+  /** Address rules (not the catch-all), bounded to the first page. */
+  routingRules(zoneId: string): Promise<ReadonlyArray<EmailRoutingRule>>;
   purgeUrls(zoneId: string, urls: ReadonlyArray<string>): Promise<void>;
 }
 
@@ -37,6 +49,27 @@ export class CloudflareApiError extends Error {
 }
 
 const API = "https://api.cloudflare.com/client/v4";
+
+interface RawRule {
+  enabled?: boolean;
+  name?: string;
+  matchers?: Array<{ type: string; field?: string; value?: string }>;
+  actions?: Array<{ type: string; value?: Array<string> }>;
+}
+
+const toRule = (r: RawRule): EmailRoutingRule => ({
+  enabled: r.enabled === true,
+  ...(r.name !== undefined ? { name: r.name } : {}),
+  matchers: (r.matchers ?? []).map((m) => ({
+    type: m.type,
+    ...(m.field !== undefined ? { field: m.field } : {}),
+    ...(m.value !== undefined ? { value: m.value } : {}),
+  })),
+  actions: (r.actions ?? []).map((a) => ({
+    type: a.type,
+    ...(a.value !== undefined ? { value: [...a.value] } : {}),
+  })),
+});
 
 export const cloudflareApi = (token: string, fetchFn: CloudflareFetch): CloudflareApi => {
   const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
@@ -95,10 +128,21 @@ export const cloudflareApi = (token: string, fetchFn: CloudflareFetch): Cloudfla
       void (await call("POST", `/zones/${zoneId}/dns_records`, payload(record))),
     updateDns: async (zoneId, id, record) =>
       void (await call("PATCH", `/zones/${zoneId}/dns_records/${id}`, payload(record))),
+    deleteDns: async (zoneId, id) =>
+      void (await call("DELETE", `/zones/${zoneId}/dns_records/${id}`)),
     emailRoutingEnabled: async (zoneId) =>
       (await call<{ enabled?: boolean }>("GET", `/zones/${zoneId}/email/routing`)).enabled === true,
     enableEmailRouting: async (zoneId) =>
       void (await call("POST", `/zones/${zoneId}/email/routing/enable`, {})),
+    disableEmailRouting: async (zoneId) =>
+      void (await call("POST", `/zones/${zoneId}/email/routing/disable`, {})),
+    disableCatchAll: async (zoneId) =>
+      void (await call("PUT", `/zones/${zoneId}/email/routing/rules/catch_all`, {
+        enabled: false,
+        name: "bye catch-all",
+        matchers: [{ type: "all" }],
+        actions: [{ type: "drop" }],
+      })),
     catchAllToWorker: async (zoneId, workerName) =>
       void (await call("PUT", `/zones/${zoneId}/email/routing/rules/catch_all`, {
         enabled: true,
@@ -110,10 +154,34 @@ export const cloudflareApi = (token: string, fetchFn: CloudflareFetch): Cloudfla
       const rule = await call<{
         enabled?: boolean;
         actions?: Array<{ type: string; value?: Array<string> }>;
-      }>("GET", `/zones/${zoneId}/email/routing/rules/catch_all`);
-      const action = rule.enabled ? rule.actions?.find((a) => a.type === "worker") : undefined;
+      } | null>("GET", `/zones/${zoneId}/email/routing/rules/catch_all`);
+      const action = rule?.enabled ? rule.actions?.find((a) => a.type === "worker") : undefined;
       return action?.value?.[0] ?? null;
     },
+    catchAllRule: async (zoneId) => {
+      const rule = await call<RawRule | null>(
+        "GET",
+        `/zones/${zoneId}/email/routing/rules/catch_all`,
+      );
+      return rule && Array.isArray(rule.actions) ? toRule(rule) : null;
+    },
+    putCatchAll: async (zoneId, rule) =>
+      void (await call("PUT", `/zones/${zoneId}/email/routing/rules/catch_all`, {
+        enabled: rule.enabled,
+        name: rule.name ?? "catch-all",
+        matchers: rule.matchers.length > 0 ? rule.matchers : [{ type: "all" }],
+        actions: rule.actions,
+      })),
+    routingRules: async (zoneId) =>
+      (
+        (await call<Array<RawRule> | null>(
+          "GET",
+          `/zones/${zoneId}/email/routing/rules?per_page=50`,
+        )) ?? []
+      )
+        // The catch-all is read separately; the list may include it.
+        .filter((r) => !(r.matchers ?? []).some((m) => m.type === "all"))
+        .map(toRule),
     purgeUrls: async (zoneId, urls) => {
       // The purge API accepts at most 30 URLs per request.
       for (let i = 0; i < urls.length; i += 30)

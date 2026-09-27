@@ -4,8 +4,9 @@ import { QueuePublisher, type Submission } from "@bye/application";
 import {
   Kernel,
   KERNEL_MIGRATIONS,
+  makeCloudflarePersonalTransport,
   makeCloudflareTransactionalTransport,
-  makePersonalMailTransport,
+  makeHttpTransport,
   makeQueuePublisher,
   makeR2BlobStore,
   makeTransportRouter,
@@ -29,6 +30,25 @@ const submission = (over: Partial<Submission> = {}): Submission => ({
 });
 
 const content = { load: async () => "From: me\r\n\r\nhi" };
+/** An idempotent HTTP provider (exercises the generic HTTP adapter, as the old personal one did). */
+const HTTP_CAPABILITIES = {
+  name: "http-test",
+  trafficClasses: ["personal"],
+  maxMessageBytes: 25 * 1024 * 1024,
+  maxRecipients: 100,
+  maxAttachmentBytes: 25 * 1024 * 1024,
+  supportsCalendarMime: true,
+  supportsRawMime: true,
+  idempotentSubmission: true,
+  reconciliation: true,
+  exposesWireMessageId: true,
+  deliveryEvents: true,
+} as const;
+const httpTransport = (
+  c: { endpoint: string; apiKey: string },
+  src: Parameters<typeof makeHttpTransport>[1],
+  f: Parameters<typeof makeHttpTransport>[2],
+) => makeHttpTransport({ ...c, capabilities: HTTP_CAPABILITIES }, src, f);
 const failureKind = async (e: Effect.Effect<unknown, { kind: string }>) => {
   const r = await Effect.runPromise(Effect.result(e));
   return Result.isFailure(r) ? r.failure.kind : "accepted";
@@ -83,10 +103,10 @@ describe("transport adapters (§5.3)", () => {
     expect(await failureKind(missing.submit(submission()))).toBe("RetryableBeforeAcceptance");
   });
 
-  it("[E18] HTTP personal transport: idempotency key, status mapping, wire Message-ID kept separate", async () => {
+  it("[E18] HTTP transport: idempotency key, status mapping, wire Message-ID kept separate", async () => {
     const seen: Array<Record<string, string>> = [];
     let status = 200;
-    const t = makePersonalMailTransport(
+    const t = httpTransport(
       { endpoint: "https://mail.example/send", apiKey: "k" },
       content,
       async (_u, init) => {
@@ -129,6 +149,78 @@ describe("transport adapters (§5.3)", () => {
     }
   });
 
+  it("[E18] Cloudflare personal: one send per envelope recipient; partial acceptance is Unknown", async () => {
+    const sends: Array<{ to: string; raw: string }> = [];
+    let failAt = -1;
+    const binding = {
+      send: async (m: { from: string; to: string | ReadonlyArray<string>; raw: unknown }) => {
+        if (sends.length === failAt) throw new Error("connection reset");
+        sends.push({ to: String(m.to), raw: await new Response(m.raw as ReadableStream).text() });
+        return { messageId: `cf-${sends.length}` };
+      },
+    };
+    const t = makeCloudflarePersonalTransport(binding, content, null);
+    expect(t.capabilities.trafficClasses).toEqual(["personal"]);
+    const two = submission({
+      trafficClass: "personal",
+      envelopeRecipients: ["a@x.test", "b@x.test"],
+    });
+    expect(await Effect.runPromise(t.submit(two))).toEqual({ providerId: "cf-1,cf-2" });
+    expect(sends.map((s) => s.to)).toEqual(["a@x.test", "b@x.test"]);
+    expect(sends[0]!.raw).toBe("From: me\r\n\r\nhi");
+    // First recipient fails: nothing accepted, classified as usual (in-flight reset = Unknown).
+    sends.length = 0;
+    failAt = 0;
+    expect(await failureKind(t.submit(two))).toBe("Unknown");
+    // Second fails after the first was accepted: Unknown, never a blind retry.
+    sends.length = 0;
+    failAt = 1;
+    const partial = await Effect.runPromise(Effect.result(t.submit(two)));
+    expect(Result.isFailure(partial) && partial.failure.detail).toMatch(/1 of 2/);
+    // A router only reaches it when the class is enabled.
+    const router = makeTransportRouter([t], new Set(["transactional"]));
+    expect(await failureKind(router.submit(two))).toBe("Rejected");
+  });
+
+  it("Cloudflare personal: DKIM-signs with the installation key; a bad key is retryable", async () => {
+    const pair = (await crypto.subtle.generateKey(
+      {
+        name: "RSASSA-PKCS1-v1_5",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["sign", "verify"],
+    )) as unknown as { privateKey: Awaited<ReturnType<typeof crypto.subtle.importKey>> };
+    const raws: Array<string> = [];
+    const binding = {
+      send: async (m: { raw: unknown }) => {
+        raws.push(await new Response(m.raw as ReadableStream).text());
+        return {};
+      },
+    };
+    const mime = {
+      load: async () =>
+        "From: Ana <ana@example.org>\r\nTo: b@x.test\r\nSubject: Hi\r\n\r\nhello\r\n",
+    };
+    const t = makeCloudflarePersonalTransport(binding, mime, async () => ({
+      algorithm: "rsa-sha256",
+      selector: "bye1",
+      key: pair.privateKey,
+    }));
+    await Effect.runPromise(t.submit(submission({ trafficClass: "personal" })));
+    expect(raws[0]).toMatch(
+      /^DKIM-Signature: v=1; a=rsa-sha256; c=relaxed\/relaxed; d=example\.org; s=bye1;/,
+    );
+    const broken = makeCloudflarePersonalTransport(binding, mime, async () => {
+      throw new Error("bad pem");
+    });
+    expect(await failureKind(broken.submit(submission({ trafficClass: "personal" })))).toBe(
+      "RetryableBeforeAcceptance",
+    );
+  });
+
   it("HTTP transport sends raw MIME bytes base64-encoded, never through a text decoder", async () => {
     // 8-bit latin1 body: 0xE9 is not valid UTF-8 on its own and would become U+FFFD if decoded.
     const bytes = new Uint8Array([
@@ -138,7 +230,7 @@ describe("transport adapters (§5.3)", () => {
       0x0a,
     ]);
     const bodies: Array<{ raw: string; rawEncoding: string }> = [];
-    const t = makePersonalMailTransport(
+    const t = httpTransport(
       { endpoint: "https://mail.example/send", apiKey: "k" },
       { load: async () => new Response(bytes).body! },
       async (_u, init) => {

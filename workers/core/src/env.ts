@@ -54,10 +54,7 @@ export interface CoreEnv {
   /** Stack-wired service binding to the private signature mirror (CORE_STACK_BINDINGS). */
   readonly SIGMIRROR?: Fetcher;
   readonly AUTH_RATE_LIMIT: RateLimit;
-  readonly PERSONAL_MAIL_API_KEY: string;
-  /** Approved personal-mail provider submission URL; empty or `.invalid` = personal mail unavailable. */
-  readonly PERSONAL_MAIL_ENDPOINT: string;
-  /** HMAC secret for the personal-mail provider's send-event webhook (never the provider API key). */
+  /** HMAC secret for the send-event webhook (never a provider API key). */
   readonly SEND_EVENTS_WEBHOOK_SECRET?: string;
   readonly SESSION_KEY: string;
   readonly PROXY_SIGNING_KEY: string;
@@ -101,12 +98,24 @@ export interface CoreEnv {
   /** Worker script receiving customer-zone mail via the Email Routing catch-all rule. */
   readonly MAIL_WORKER_NAME?: string;
   readonly MAIL_DKIM_PUBLIC_KEY?: string;
+  /** PKCS#8 PEM key for MAIL_DKIM_PUBLIC_KEY (selector `bye1`); signs personal mail. Empty = unsigned. */
+  readonly MAIL_DKIM_PRIVATE_KEY?: string;
   readonly BILLING_CHECKOUT_URL?: string;
   readonly BILLING_API_KEY?: string;
   /** Comma-separated platform operator user IDs (abuse review, support sessions, credits). */
   readonly OPERATOR_USER_IDS?: string;
   /** Single-use first-account token for onboarding installations (bootstrap.ts); empty = off. */
   readonly BOOTSTRAP_TOKEN?: string;
+  /** Address domain the bootstrap account must use (onboarding's selected zone); empty = unrestricted. */
+  readonly BOOTSTRAP_ADDRESS_DOMAIN?: string;
+  /** Onboarding-selected Cloudflare account/zone (non-secret); empty on CI-managed stages. */
+  readonly INSTALL_ACCOUNT_ID?: string;
+  readonly INSTALL_ZONE_ID?: string;
+  readonly INSTALL_ZONE_NAME?: string;
+  /** Seals runtime newsletter provider credentials (newsletter-config.ts); empty = unavailable. */
+  readonly NEWSLETTER_CONFIG_SEAL_KEY?: string;
+  /** Seals the owner-entered installation zone token (zone-token.ts); empty = manual records only. */
+  readonly ZONE_TOKEN_SEAL_KEY?: string;
 }
 
 /** Bindings added by the stack itself (they reference other stack resources), not by `coreEnv`. */
@@ -147,8 +156,6 @@ export const CORE_BINDING_NAMES = [
   "BYE_FAULT_INGRESS",
   "MIME_PARSER",
   "AUTH_RATE_LIMIT",
-  "PERSONAL_MAIL_API_KEY",
-  "PERSONAL_MAIL_ENDPOINT",
   "SEND_EVENTS_WEBHOOK_SECRET",
   "SESSION_KEY",
   "PROXY_SIGNING_KEY",
@@ -182,10 +189,17 @@ export const CORE_BINDING_NAMES = [
   "CF_PUBLIC_ZONE_ID",
   "MAIL_WORKER_NAME",
   "MAIL_DKIM_PUBLIC_KEY",
+  "MAIL_DKIM_PRIVATE_KEY",
   "BILLING_CHECKOUT_URL",
   "BILLING_API_KEY",
   "OPERATOR_USER_IDS",
   "BOOTSTRAP_TOKEN",
+  "BOOTSTRAP_ADDRESS_DOMAIN",
+  "INSTALL_ACCOUNT_ID",
+  "INSTALL_ZONE_ID",
+  "INSTALL_ZONE_NAME",
+  "NEWSLETTER_CONFIG_SEAL_KEY",
+  "ZONE_TOKEN_SEAL_KEY",
 ] as const satisfies ReadonlyArray<keyof CoreEnv>;
 
 /** Ingress journals are partitioned so one hot object never serializes all inbound mail. */

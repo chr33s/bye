@@ -2,6 +2,8 @@ import { blobKey } from "@bye/application";
 import { encodeId, INBOUND_MAX_BYTES } from "@bye/domain";
 import { Effect } from "effect";
 import { Directory } from "@bye/application";
+import { ControlDomains, INBOUND_PROBE_PREFIX } from "@bye/platform-cloudflare";
+import { kernelClock } from "./durable-host.ts";
 import { policyLayers } from "./services.ts";
 import { type CoreEnv, journalPartition } from "./env.ts";
 
@@ -52,7 +54,9 @@ export const ingressFault = (
 export type InboundOutcome =
   | { readonly _tag: "Accepted"; readonly ingestionId: string; readonly enqueued: boolean }
   | { readonly _tag: "Rejected"; readonly reason: string }
-  | { readonly _tag: "Forwarded" };
+  | { readonly _tag: "Forwarded" }
+  /** Incoming-email verification message (`bye-verify-<token>@<domain>`): recorded, not stored. */
+  | { readonly _tag: "Probe" };
 
 export const handleInbound = async (
   message: InboundMessage,
@@ -62,6 +66,15 @@ export const handleInbound = async (
     message.setReject("552 message exceeds maximum size");
     return { _tag: "Rejected", reason: "too-large" };
   }
+
+  // Incoming-email activation check: a message to the domain's verification address proves the
+  // zone's MX and Email Routing deliver to MailCore. It is recorded and dropped (never stored or
+  // bounced); an address that matches no current token falls through to normal resolution.
+  if (
+    message.to.toLowerCase().startsWith(INBOUND_PROBE_PREFIX) &&
+    (await new ControlDomains(env.DIRECTORY, kernelClock).recordInboundProbe(message.to))
+  )
+    return { _tag: "Probe" };
 
   // 1. Resolve the envelope recipient against the primary-consistent directory (Directory service, §7.1).
   const route = await Effect.runPromise(

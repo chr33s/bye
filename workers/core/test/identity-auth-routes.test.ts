@@ -19,7 +19,7 @@ import {
 import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, makeHarness } from "./harness.ts";
+import { type Harness, makeHarness, enablePersonalMail } from "./harness.ts";
 
 // HTTP wiring for identity/security settings (TOTP, passkeys, support access, referrals), the signed
 // provider webhooks, and the unauthenticated /auth/* routes (recovery, logout, passkey sign-in,
@@ -363,7 +363,7 @@ describe("signed provider webhooks", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.UTC(2026, 8, 25, 12));
     h = makeHarness();
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
   });
   afterEach(() => vi.useRealTimers());
 

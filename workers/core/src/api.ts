@@ -18,6 +18,7 @@ import { sharedRoutes } from "./routes/shared.ts";
 import { adminRoutes } from "./routes/admin.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { webhookRoutes } from "./routes/webhooks.ts";
+import { newsletterConfigRoutes } from "./routes/newsletter-config.ts";
 import { opsRoutes } from "./routes/ops.ts";
 import { probeRoutes } from "./routes/probe.ts";
 import { discoveryRoutes } from "./routes/discovery.ts";
@@ -35,6 +36,7 @@ const ALL_ROUTES = [
   ...adminRoutes,
   ...authRoutes,
   ...webhookRoutes,
+  ...newsletterConfigRoutes,
   ...opsRoutes,
   ...probeRoutes,
   ...discoveryRoutes,

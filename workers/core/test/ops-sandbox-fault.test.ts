@@ -4,7 +4,7 @@ import { ControlDirectory } from "@bye/platform-cloudflare";
 import { kernelClock } from "../src/durable-host.ts";
 import type { CoreEnv } from "../src/env.ts";
 import { handleInbound, ingressFault } from "../src/inbound.ts";
-import { buildTransportAdapters, personalMailEndpoint } from "../src/transports.ts";
+import { buildTransportAdapters } from "../src/transports.ts";
 import { inboundMessage, makeHarness, rfc822 } from "./harness.ts";
 
 (globalThis as { FixedLengthStream?: unknown }).FixedLengthStream ??= class extends (
@@ -36,8 +36,7 @@ describe("preview mail sandbox wiring (§15.8)", () => {
         send: async (m: { to: string }) => (sent.push(m.to), { messageId: "cf-1" }),
       },
       ORIGINALS: { get: async () => ({ body: new Response("raw").body }) },
-      PERSONAL_MAIL_API_KEY: "pm-key",
-      PERSONAL_MAIL_ENDPOINT: "https://mail-provider.example/v1/messages",
+      MAIL_TRAFFIC_CLASSES: "transactional,personal,forwarding",
       FORWARDING_API_KEY: "fwd-key",
       FORWARDING_ENDPOINT: "https://forward.example.net/send",
       SRS_SECRET: "srs-secret",
@@ -55,7 +54,7 @@ describe("preview mail sandbox wiring (§15.8)", () => {
   it("[E18] every adapter is wrapped and refuses recipients outside the preview's domains", async () => {
     const { env, sent, fetched, fetchFn } = envWith("preview-7.bye.test");
     const adapters = await buildTransportAdapters(env, "mbx_1", fetchFn);
-    // Transactional, personal-mail and sealed-forwarding transports are all configured.
+    // Transactional, personal (Cloudflare) and sealed-forwarding transports are all configured.
     expect(adapters.map((a) => a.capabilities.name)).toHaveLength(3);
     for (const a of adapters) {
       expect(a.capabilities.name).toMatch(/^sandbox\(/);
@@ -75,7 +74,8 @@ describe("preview mail sandbox wiring (§15.8)", () => {
       expect(JSON.stringify(inside)).not.toMatch(/sandbox:/);
       expect(sent.length + fetched.length, a.capabilities.name).toBeGreaterThan(before);
     }
-    expect(sent).toEqual(["qa@preview-7.bye.test"]);
+    // Transactional and personal both reach the Cloudflare binding.
+    expect(sent).toEqual(["qa@preview-7.bye.test", "qa@preview-7.bye.test"]);
   });
 
   it("[E18] outside previews (empty setting) adapters are not wrapped", async () => {
@@ -85,30 +85,15 @@ describe("preview mail sandbox wiring (§15.8)", () => {
     for (const a of adapters) expect(a.capabilities.name).not.toMatch(/^sandbox\(/);
   });
 
-  it("personal mail is unavailable without a real endpoint (missing, empty or .invalid)", async () => {
-    for (const endpoint of [
-      undefined,
-      "",
-      "https://mail-provider.invalid/v1/messages",
-      "https://invalid/",
-      "http://mail-provider.example/v1/messages",
-      "not a url",
-    ]) {
-      const { env, fetchFn } = envWith("");
-      (env as { PERSONAL_MAIL_ENDPOINT?: string }).PERSONAL_MAIL_ENDPOINT = endpoint;
-      expect(personalMailEndpoint(env), String(endpoint)).toBeNull();
-      const names = (await buildTransportAdapters(env, "mbx_1", fetchFn)).map(
-        (a) => a.capabilities.name,
-      );
-      expect(names).not.toContain("personal-mail");
+  it("personal mail uses the Cloudflare binding only when the stage enables the class", async () => {
+    const { env, fetchFn } = envWith("");
+    const names = async () =>
+      (await buildTransportAdapters(env, "mbx_1", fetchFn)).map((a) => a.capabilities.name);
+    expect(await names()).toContain("cloudflare-personal");
+    for (const classes of ["", "transactional", "transactional,forwarding"]) {
+      (env as { MAIL_TRAFFIC_CLASSES: string }).MAIL_TRAFFIC_CLASSES = classes;
+      expect(await names(), classes).not.toContain("cloudflare-personal");
     }
-    const { env, fetchFn, fetched } = envWith("");
-    (env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "";
-    expect(personalMailEndpoint(env)).toBeNull();
-    const ok = envWith("");
-    expect(personalMailEndpoint(ok.env)).toBe("https://mail-provider.example/v1/messages");
-    void fetchFn;
-    void fetched;
   });
 });
 

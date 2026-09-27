@@ -38,6 +38,17 @@ export const CLOUDFLARE_TRANSACTIONAL_CAPABILITIES: TransportCapabilities = {
   deliveryEvents: true,
 };
 
+/**
+ * Personal correspondence over the same Cloudflare Email Sending binding (arbitrary recipients
+ * after sending-domain onboarding, [C1]). One `send_email` call per envelope recipient, so a
+ * failure after some recipients were accepted is Unknown, never retried blindly.
+ */
+export const CLOUDFLARE_PERSONAL_CAPABILITIES: TransportCapabilities = {
+  ...CLOUDFLARE_TRANSACTIONAL_CAPABILITIES,
+  name: "cloudflare-personal",
+  trafficClasses: ["personal"],
+};
+
 export const INBOUND_MAX_BYTES = 25 * 1024 * 1024;
 
 export type SubmissionCheck =

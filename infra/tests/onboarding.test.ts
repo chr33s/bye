@@ -1,7 +1,7 @@
 // Cloudflare onboarding acceptance (spec.md §15.11 OB01–OB10) against fakes for Cloudflare's
 // OAuth/API, the Alchemy executor and the deployed instance. Real-Cloudflare validation is the
 // separate release record in infra/onboarding/README.md.
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,7 +9,12 @@ import { parseInstanceHandoff } from "../../packages/native-shared/src/instance/
 import { INVENTORY } from "../resources/inventory.ts";
 import type { ExportedPlan, ExportedPlanRow } from "../policies/plan-normalize.ts";
 import { guard } from "../policies/guard-stage.ts";
-import { type Account, type CloudflareReader, cloudflareReader } from "../onboarding/cloudflare.ts";
+import {
+  type Account,
+  type CloudflareReader,
+  cloudflareReader,
+  type Zone,
+} from "../onboarding/cloudflare.ts";
 import {
   childEnv,
   type DeployExecutor,
@@ -18,20 +23,51 @@ import {
 } from "../onboarding/executor.ts";
 import { checkCallback, cloudflareOAuthConfig, type Fetch } from "../onboarding/oauth.ts";
 import { encodeQr } from "../onboarding/qr.ts";
-import { approvalCovers, buildReview, isProhibited } from "../onboarding/review.ts";
-import { coverageGaps, forbiddenScopes, requestedScopes } from "../onboarding/scopes.ts";
+import {
+  approvalCovers,
+  buildReview,
+  domainProblems,
+  isPermittedCustomDomain,
+  isProhibited,
+  STANDARD_FIRST_INSTALL_TYPES,
+} from "../onboarding/review.ts";
+import {
+  coverageGaps,
+  forbiddenScopes,
+  ONBOARDING_SCOPES,
+  requestedScopes,
+} from "../onboarding/scopes.ts";
 import { open, parseKeyRing, seal } from "../onboarding/seal.ts";
 import {
+  DEFAULT_HOSTNAME_LABEL,
+  dkimPublicKey,
   handoffFor,
   OnboardingError,
   OnboardingService,
   type ReleaseSource,
 } from "../onboarding/service.ts";
+import { ONBOARDING_PAGE } from "../onboarding/ui.ts";
+import { QUALIFICATION_FILE, releaseQualification } from "../onboarding/release.ts";
 import { FileStore, MemoryStore, type OnboardingStore } from "../onboarding/store.ts";
 
 const KEYS = parseKeyRing(`v1:${"ab".repeat(32)}`);
 const ACCOUNT: Account = { id: "acc0000000000000000000000000001", name: "Operator Co" };
 const OTHER: Account = { id: "acc0000000000000000000000000002", name: "Someone Else" };
+const ZONE: Zone = {
+  id: "zone00000000000000000000000000001",
+  name: "example.com",
+  status: "active",
+};
+const PENDING_ZONE: Zone = {
+  id: "zone00000000000000000000000000002",
+  name: "pending.test",
+  status: "pending",
+};
+const OTHER_ZONE: Zone = {
+  id: "zone00000000000000000000000000003",
+  name: "other.test",
+  status: "active",
+};
 /** The repository itself stands in for the pinned release checkout. */
 const REPO = join(import.meta.dirname, "../..");
 const RELEASE = { version: "v1.0.0", commit: "c".repeat(40), lockfileDigest: "d".repeat(64) };
@@ -111,12 +147,18 @@ const fakeCloudflare = (
 ): CloudflareReader & {
   workers: Array<string>;
   accountsFor: (token: string) => ReadonlyArray<Account>;
+  zonesFor: (accountId: string) => ReadonlyArray<Zone>;
 } => {
   const cf = {
     workers: [] as Array<string>,
     accountsFor: (_token: string) => accounts,
+    zonesFor: (accountId: string) =>
+      accountId === ACCOUNT.id ? [ZONE, PENDING_ZONE] : accountId === OTHER.id ? [OTHER_ZONE] : [],
     async accounts(token: string) {
       return cf.accountsFor(token);
+    },
+    async zones(_token: string, accountId: string) {
+      return cf.zonesFor(accountId);
     },
     async workersSubdomain() {
       return "operator";
@@ -173,8 +215,15 @@ const healthyInstance = (app: string) => {
   };
 };
 
+/** The scope matrix once the release record has verified every scope. */
+const VERIFIED = ONBOARDING_SCOPES.map((g) => ({ ...g, verified: true }));
+
 const world = (
-  options: { store?: OnboardingStore; accounts?: ReadonlyArray<Account> } = {},
+  options: {
+    store?: OnboardingStore;
+    accounts?: ReadonlyArray<Account>;
+    verifiedScopes?: boolean;
+  } = {},
 ): World => {
   const calls: Array<string> = [];
   const revoked: Array<string> = [];
@@ -247,6 +296,7 @@ const world = (
     dataDir: mkdtempSync(join(tmpdir(), "bye-onboarding-")),
     now: () => w.now,
     healthTimeouts: { request: 200, async: 300 },
+    ...(options.verifiedScopes ? { scopeMatrix: VERIFIED } : {}),
   });
   (w as { service: OnboardingService }).service = service;
   return w;
@@ -275,18 +325,29 @@ const ready = async (w: World, stage = "dev-trial01", operator = "op@example.com
 };
 
 describe("onboarding OAuth and credentials", () => {
-  it("requests only the scope matrix: no DNS, zone, routes or Email Routing access", () => {
+  it("requests only the scope matrix: zone read and Workers Routes, never DNS writes or Email Routing", () => {
     expect(forbiddenScopes(requestedScopes())).toEqual([]);
+    expect(requestedScopes()).toContain("zone.read");
+    expect(requestedScopes()).toContain("workers-routes.write");
     const refused = [
       "dns-records.write",
-      "zone.read",
-      "workers-routes.write",
+      "dns.write",
+      "zone.write",
+      "zone-settings.write",
+      "zone-dns-settings.write",
+      "workers-routes.read.extra",
       "email-routing-rule.write",
+      "email-routing.write",
       "email-sending.write",
       "memberships.write",
       "account-settings.write",
     ];
     expect(forbiddenScopes(refused)).toEqual(refused);
+    // Zone read covers discovery only; the custom hostname is the only zone-level write.
+    const zoneRead = ONBOARDING_SCOPES.find((g) => g.scope === "zone.read")!;
+    expect(zoneRead.resourceTypes).toEqual([]);
+    const routes = ONBOARDING_SCOPES.find((g) => g.scope === "workers-routes.write")!;
+    expect(routes.resourceTypes).toEqual(["Cloudflare.Workers.CustomDomain"]);
     expect(requestedScopes()).toContain("workers-r2.write");
     expect(requestedScopes()).toContain("memberships.read");
     const cfg = cloudflareOAuthConfig("id", "https://o.test/cb");
@@ -469,7 +530,7 @@ describe("spec.md §15.11 acceptance", () => {
       ok: false,
       reason: "consent was withheld",
     });
-    await expect(w.service.review("op")).rejects.toThrow(/account and stage/);
+    await expect(w.service.review("op")).rejects.toThrow(/where Bye should live/);
     await expect(w.service.bind("op", ACCOUNT.id, "dev-trial01")).rejects.toMatchObject({
       code: "unauthorized",
     });
@@ -747,7 +808,7 @@ describe("spec.md §15.11 acceptance", () => {
       ]),
     );
     const review = await w.service.review("op@example.com");
-    expect(review.blockers.filter((b) => b.includes("outside v1 onboarding"))).toHaveLength(3);
+    expect(review.blockers.filter((b) => b.includes("outside onboarding"))).toHaveLength(3);
     for (const t of [
       "Cloudflare.Email.Routing",
       "Cloudflare.Email.CatchAll",
@@ -784,6 +845,23 @@ describe("spec.md §15.11 acceptance", () => {
       "CF_DNS_API_TOKEN",
     ])
       expect(env[k]).toBe("");
+    // The installation's own chosen hostname is the one domain input that reaches the stack.
+    const withHost = childEnv(
+      {
+        installationId: "i",
+        releaseDir: "/r",
+        homeDir: "/h",
+        stage: "prod",
+        accountId: "a",
+        apiToken: "t",
+        config: { APP_DOMAIN: "bye.example.com", MAIL_ZONE: "example.com" },
+        signal: new AbortController().signal,
+      },
+      { PUBLIC_DOMAIN: "example.com" },
+    );
+    expect(withHost.APP_DOMAIN).toBe("bye.example.com");
+    expect(withHost.MAIL_ZONE).toBe("");
+    expect(withHost.PUBLIC_DOMAIN).toBe("");
     expect(env.PATH).toBe("/bin");
     expect(env.ALCHEMY_TELEMETRY_DISABLED).toBe("1");
 
@@ -890,7 +968,7 @@ describe("recovery kit and first account", () => {
       CLOUDFLARE_ACCOUNT_ID: ACCOUNT.id,
       APP_ORIGIN: inst.urls!.app,
       BYE_WORKERS_DEV_NAME: inst.workerName,
-      PERSONAL_MAIL_API_KEY: "",
+      TURNSTILE_SECRET: "",
     });
     expect(JSON.stringify(kit)).not.toContain(ACCESS);
     expect(JSON.stringify(kit)).not.toContain(REFRESH);
@@ -967,5 +1045,402 @@ describe("onboarding binding and stage policy", () => {
         BYE_RELEASE_MANIFEST_VERIFIED: "1",
       }),
     ).toEqual([]);
+  });
+});
+
+/** Connect, then "Create Bye" at bye.example.com (the normal three-step path). */
+const createBye = async (w: World, label = "bye", zoneId = ZONE.id, accountId = ACCOUNT.id) => {
+  await connect(w);
+  w.health = healthyInstance(`https://${label}.${ZONE.name}`);
+  const result = await w.service.install("op@example.com", { accountId, zoneId, label });
+  if (result.status === "deploying") await w.service.settled(result.operationId);
+  return result;
+};
+
+describe("standard install: Cloudflare account → Bye hostname → Create Bye", () => {
+  it("lists only the selected account's active zones, and never another account's", async () => {
+    const w = world({ accounts: [ACCOUNT, OTHER] });
+    await connect(w);
+    expect(await w.service.zones("op@example.com", ACCOUNT.id)).toEqual([
+      { id: ZONE.id, name: "example.com" },
+    ]);
+    await expect(w.service.zones("op@example.com", "acc-not-reachable")).rejects.toMatchObject({
+      code: "invalid",
+    });
+    // The HTTP reader filters by account again, even if the API ignored the filter.
+    const reader = cloudflareReader(async (url) => {
+      expect(url).toContain(`account.id=${ACCOUNT.id}`);
+      return json({
+        result: [
+          { ...ZONE, account: { id: ACCOUNT.id } },
+          { ...OTHER_ZONE, account: { id: OTHER.id } },
+        ],
+      });
+    });
+    expect(await reader.zones("t", ACCOUNT.id)).toEqual([ZONE]);
+  });
+
+  it("defaults the Bye address label to bye, and validates labels server-side", async () => {
+    expect(DEFAULT_HOSTNAME_LABEL).toBe("bye");
+    expect(ONBOARDING_PAGE).toContain('id="label" type="text" value="bye"');
+    // The normal page never asks for a stage.
+    expect(ONBOARDING_PAGE).not.toMatch(/id="stage"/);
+    const w = world({ verifiedScopes: true });
+    await connect(w);
+    for (const label of ["", "-bye", "bye-", "b_y", "a".repeat(64), "bye.mail", "by e"])
+      await expect(
+        w.service.install("op@example.com", { accountId: ACCOUNT.id, zoneId: ZONE.id, label }),
+      ).rejects.toMatchObject({ code: "invalid" });
+    expect(w.executor.applies).toHaveLength(0);
+    expect((await w.service.installation("op@example.com")).boundAt).toBeNull();
+  });
+
+  it("refuses a zone from another account or an inactive zone", async () => {
+    const w = world({ accounts: [ACCOUNT, OTHER], verifiedScopes: true });
+    await connect(w);
+    for (const zoneId of [OTHER_ZONE.id, PENDING_ZONE.id, "zone-unknown"])
+      await expect(
+        w.service.install("op@example.com", { accountId: ACCOUNT.id, zoneId, label: "bye" }),
+      ).rejects.toMatchObject({ code: "invalid" });
+    expect((await w.service.installation("op@example.com")).boundAt).toBeNull();
+  });
+
+  it("binds prod with the custom hostname, auto-approves a standard first install, and deploys it", async () => {
+    const w = world({ verifiedScopes: true });
+    const result = await createBye(w);
+    expect(result).toMatchObject({ status: "deploying", appUrl: "https://bye.example.com" });
+    const inst = (await w.service.installation("op@example.com"))!;
+    expect(inst).toMatchObject({
+      stage: "prod",
+      zoneId: ZONE.id,
+      zoneName: "example.com",
+      appHostname: "bye.example.com",
+      ownerAddressDomain: "example.com",
+      ready: true,
+    });
+    expect(inst.stateRef).toMatchObject({ stage: "prod" });
+    expect(inst.installIntent).toMatchObject({
+      accountId: ACCOUNT.id,
+      zoneId: ZONE.id,
+      zoneName: "example.com",
+      appHostname: "bye.example.com",
+      stage: "prod",
+      release: RELEASE,
+      operatorId: "op@example.com",
+    });
+    // URLs: the app on the custom hostname, the render origin and site on workers.dev.
+    expect(inst.urls).toEqual({
+      app: "https://bye.example.com",
+      site: `https://${inst.workerName}-site.operator.workers.dev`,
+      render: `https://${inst.workerName}-render.operator.workers.dev`,
+    });
+    // APP_DOMAIN reaches the Alchemy run; mail/DNS inputs don't exist in its config.
+    const config = w.executor.applies[0]!.config;
+    expect(config).toMatchObject({
+      APP_ORIGIN: "https://bye.example.com",
+      APP_DOMAIN: "bye.example.com",
+      MAIL_RENDER_ORIGIN: inst.urls!.render,
+      BOOTSTRAP_ADDRESS_DOMAIN: "example.com",
+      INSTALL_ACCOUNT_ID: ACCOUNT.id,
+      INSTALL_ZONE_ID: ZONE.id,
+      INSTALL_ZONE_NAME: "example.com",
+      MAIL_WORKER_NAME: inst.workerName,
+    });
+    expect(config.NEWSLETTER_CONFIG_SEAL_KEY).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    // Outbound personal mail: DKIM key pair generated once, public half is the `p=` value.
+    expect(config.MAIL_TRAFFIC_CLASSES).toBe("transactional,personal");
+    expect(config.MAIL_DKIM_PRIVATE_KEY).toMatch(/^-----BEGIN PRIVATE KEY-----/);
+    expect(config.MAIL_DKIM_PUBLIC_KEY).toMatch(/^[A-Za-z0-9+/]+=*$/);
+    expect(config.MAIL_DKIM_PUBLIC_KEY).toBe(dkimPublicKey(config.MAIL_DKIM_PRIVATE_KEY!));
+    expect(config).not.toHaveProperty("PERSONAL_MAIL_API_KEY");
+    for (const k of ["PUBLIC_DOMAIN", "MAIL_ZONE", "BYE_MX_CUTOVER", "CF_DNS_API_TOKEN"])
+      expect(config[k] ?? "").toBe("");
+    // The approval was recorded by policy against the install intent.
+    const op = (await w.store.operations(inst.id))[0]!;
+    expect(op.status).toBe("succeeded");
+    const approval = (await w.store.getApproval(op.approvalId))!;
+    expect(approval).toMatchObject({
+      policy: "standard-first-install",
+      installIntentId: inst.installIntent!.id,
+    });
+    // Health checks ran against the custom origin.
+    expect(w.calls).toContain("https://bye.example.com/.well-known/bye-instance");
+    const status = await w.service.status("op@example.com");
+    expect(status.state).toBe("ready");
+    expect(status.installation.appHostname).toBe("bye.example.com");
+  });
+
+  it("sends any unexpected resource type, replacement or deletion to review", async () => {
+    for (const extra of [
+      [row("Surprise", "Cloudflare.Hyperdrive.Config", "create")],
+      [row("Waf", "Cloudflare.Ruleset", "create")],
+      [row("MX", "Cloudflare.DNS.Record", "create")],
+      [row("OtherDomain", "Cloudflare.Workers.CustomDomain", "create")],
+    ]) {
+      const w = world({ verifiedScopes: true });
+      w.executor.defaultPlan = (ctx) => planOf(ctx.stage, {}, extra);
+      const result = await createBye(w);
+      expect(result.status).toBe("needs-review");
+      expect(w.executor.applies).toHaveLength(0);
+      const status = await w.service.status("op@example.com");
+      expect(status.state).toBe("needs-review");
+      expect(status.installation.pendingReviewId).toBe(
+        result.status === "needs-review" ? result.reviewId : null,
+      );
+    }
+    const replaced = world({ verifiedScopes: true });
+    replaced.executor.defaultPlan = (ctx) => planOf(ctx.stage, { PublicSite: "replace" });
+    expect((await createBye(replaced)).status).toBe("needs-review");
+    const deleted = world({ verifiedScopes: true });
+    deleted.executor.defaultPlan = (ctx) => planOf(ctx.stage, { Originals: "delete" });
+    const r = await createBye(deleted);
+    expect(r).toMatchObject({ status: "needs-review" });
+    expect(deleted.executor.applies).toHaveLength(0);
+  });
+
+  it("waits for review while the scope matrix is unverified (release gate)", async () => {
+    const w = world();
+    const result = await createBye(w);
+    expect(result.status).toBe("needs-review");
+    if (result.status !== "needs-review") return;
+    expect(result.reasons.join(" ")).toMatch(/review blockers/);
+    expect(w.executor.applies).toHaveLength(0);
+    // The existing review can still be shown; with blockers it can't be approved.
+    const review = (await w.store.getReview(result.reviewId))!;
+    expect(review.blockers.some((b) => b.includes("unverified"))).toBe(true);
+  });
+
+  it("permits only MailCore's own custom-domain row, and only with a chosen hostname", () => {
+    const host = { appHostname: "bye.example.com" };
+    const cd = { type: "Cloudflare.Workers.CustomDomain", action: "create" as const };
+    expect(isPermittedCustomDomain({ ...cd, logicalId: "MailCore" }, host)).toBe(true);
+    expect(isPermittedCustomDomain({ ...cd, logicalId: "PublicSite" }, host)).toBe(false);
+    expect(isPermittedCustomDomain({ ...cd, logicalId: "MailCore" }, { appHostname: null })).toBe(
+      false,
+    );
+    expect(isPermittedCustomDomain({ ...cd, action: "delete", logicalId: "MailCore" }, host)).toBe(
+      false,
+    );
+    expect(
+      isPermittedCustomDomain(
+        { type: "Cloudflare.Workers.Route", action: "create", logicalId: "MailCore" },
+        host,
+      ),
+    ).toBe(false);
+    const w = world({ verifiedScopes: true });
+    w.executor.defaultPlan = (ctx) =>
+      planOf(ctx.stage, {}, [row("MailCore.domain", "Cloudflare.Workers.CustomDomain", "create")]);
+    return createBye(w).then((r) => expect(r.status).toBe("deploying"));
+  });
+
+  it("keeps the recorded account, zone and hostname on retry", async () => {
+    const w = world({ accounts: [ACCOUNT, OTHER], verifiedScopes: true });
+    w.executor.applyBehavior = async () => ({
+      ok: false,
+      detail: "deploy exited with 1",
+      aborted: false,
+    });
+    const first = await createBye(w);
+    expect(first.status).toBe("deploying");
+    for (const change of [
+      { accountId: ACCOUNT.id, zoneId: ZONE.id, label: "mail" },
+      { accountId: OTHER.id, zoneId: OTHER_ZONE.id, label: "bye" },
+    ])
+      await expect(w.service.install("op@example.com", change)).rejects.toMatchObject({
+        code: "conflict",
+      });
+    await expect(w.service.bind("op@example.com", ACCOUNT.id, "staging")).rejects.toMatchObject({
+      code: "conflict",
+    });
+    // Retrying the failed deployment resumes the same approval and target.
+    w.executor.applyBehavior = async () => ({ ok: true, detail: "applied", aborted: false });
+    const failed = (
+      await w.store.operations((await w.service.installation("op@example.com")).id)
+    )[0]!;
+    const retry = await w.service.deploy("op@example.com", failed.approvalId);
+    await w.service.settled(retry.id);
+    expect((await w.store.getOperation(retry.id))!.status).toBe("succeeded");
+    expect(w.executor.applies.every((c) => c.config.APP_DOMAIN === "bye.example.com")).toBe(true);
+    // A zone that disappears from the account blocks later deployments.
+    w.cf.zonesFor = () => [];
+    const review = await w.service.review("op@example.com");
+    expect(review.blockers.some((b) => b.includes("no longer an active zone"))).toBe(true);
+  });
+
+  it("hands the first owner a fragment-only link with the selected zone", async () => {
+    const w = world({ verifiedScopes: true });
+    await createBye(w);
+    const inst = await w.service.installation("op@example.com");
+    const token = open<Record<string, string>>(
+      KEYS,
+      inst.runtimeSecrets!,
+      inst.id,
+    ).BOOTSTRAP_TOKEN!;
+    const { link } = await w.service.firstAccountLink("op@example.com");
+    expect(link).toBe(`https://bye.example.com/#bootstrap=${token}&domain=example.com`);
+    expect(new URL(link).search).toBe("");
+  });
+
+  it("issues a recovery kit with the zone and hostname but no Cloudflare credentials", async () => {
+    const w = world({ verifiedScopes: true });
+    await createBye(w);
+    const kit = await w.service.recoveryKit("op@example.com");
+    expect(kit).toMatchObject({
+      account: { id: ACCOUNT.id, name: ACCOUNT.name },
+      zone: { id: ZONE.id, name: "example.com" },
+      appHostname: "bye.example.com",
+      ownerAddressDomain: "example.com",
+      stage: "prod",
+    });
+    expect(kit.env.APP_DOMAIN).toBe("bye.example.com");
+    expect(JSON.stringify(kit)).not.toContain(ACCESS);
+    expect(JSON.stringify(kit)).not.toContain(REFRESH);
+  });
+
+  it("keeps the standard first-install graph in step with the stack inventory", () => {
+    // Every type the stack creates must be reviewed into (or deliberately kept out of) the graph.
+    const KEPT_OUT = new Set([
+      "Cloudflare.Email.Routing",
+      "Cloudflare.Email.CatchAll",
+      "Cloudflare.Turnstile.Widget",
+      "Cloudflare.Ruleset",
+    ]);
+    const inventoryTypes = new Set(INVENTORY.map((e) => e.type));
+    for (const t of inventoryTypes)
+      expect(STANDARD_FIRST_INSTALL_TYPES.has(t) || KEPT_OUT.has(t), t).toBe(true);
+    for (const t of KEPT_OUT) expect(STANDARD_FIRST_INSTALL_TYPES.has(t)).toBe(false);
+  });
+
+  it("refuses a Bye address that already has DNS records, but not a wildcard match", async () => {
+    const doh = (answered: (name: string) => boolean) => (url: string) => {
+      if (!url.startsWith("https://cloudflare-dns.com/dns-query")) return null;
+      const name = new URL(url).searchParams.get("name")!;
+      return json({ Status: 0, Answer: answered(name) ? [{ data: "192.0.2.1" }] : [] });
+    };
+    const taken = world({ verifiedScopes: true });
+    await connect(taken);
+    taken.health = doh((n) => n === "bye.example.com");
+    await expect(
+      taken.service.install("op@example.com", {
+        accountId: ACCOUNT.id,
+        zoneId: ZONE.id,
+        label: "bye",
+      }),
+    ).rejects.toMatchObject({
+      code: "conflict",
+      message: "bye.example.com already has DNS records",
+    });
+    expect((await taken.service.installation("op@example.com")).boundAt).toBeNull();
+
+    // A wildcard answers for every name; the custom domain can still take the name over.
+    const wildcard = world({ verifiedScopes: true });
+    await connect(wildcard);
+    const healthy = healthyInstance("https://bye.example.com");
+    const answers = doh(() => true);
+    wildcard.health = (url, init) => answers(url) ?? healthy(url, init);
+    const r = await wildcard.service.install("op@example.com", {
+      accountId: ACCOUNT.id,
+      zoneId: ZONE.id,
+      label: "bye",
+    });
+    expect(r.status).toBe("deploying");
+  });
+
+  it("lets a standard install move to another hostname only before the first write", async () => {
+    const w = world(); // unverified scopes: the first attempt waits in review, nothing written
+    const first = await createBye(w);
+    expect(first.status).toBe("needs-review");
+    const before = await w.service.installation("op@example.com");
+    const moved = await w.service.install("op@example.com", {
+      accountId: ACCOUNT.id,
+      zoneId: ZONE.id,
+      label: "mail",
+    });
+    expect(moved.status).toBe("needs-review");
+    const after = await w.service.installation("op@example.com");
+    expect(after.appHostname).toBe("mail.example.com");
+    expect(after.urls!.app).toBe("https://mail.example.com");
+    expect(after.runtimeSecrets).toEqual(before.runtimeSecrets); // same generated secrets
+    expect(after.installIntent!.appHostname).toBe("mail.example.com");
+    // Once the recovery kit names the target, it no longer moves.
+    await w.service.recoveryKit("op@example.com");
+    await expect(
+      w.service.install("op@example.com", { accountId: ACCOUNT.id, zoneId: ZONE.id, label: "bye" }),
+    ).rejects.toMatchObject({ code: "conflict" });
+  });
+
+  it("blocks any planned hostname other than the chosen one on MailCore", async () => {
+    const inst = { appHostname: "bye.example.com" };
+    const plan = (rows: ReadonlyArray<ExportedPlanRow>) => ({ ...planOf("prod"), rows });
+    expect(
+      domainProblems(
+        plan([{ ...row("MailCore", "Cloudflare.Worker", "create"), domains: ["bye.example.com"] }]),
+        inst,
+      ),
+    ).toEqual([]);
+    expect(
+      domainProblems(
+        plan([
+          { ...row("MailCore", "Cloudflare.Worker", "create"), domains: ["evil.example.com"] },
+        ]),
+        inst,
+      ),
+    ).toHaveLength(1);
+    expect(
+      domainProblems(
+        plan([
+          { ...row("PublicSite", "Cloudflare.Worker", "create"), domains: ["bye.example.com"] },
+        ]),
+        inst,
+      ),
+    ).toHaveLength(1);
+    expect(
+      domainProblems(
+        plan([{ ...row("MailCore", "Cloudflare.Worker", "create"), domains: ["bye.example.com"] }]),
+        { appHostname: null },
+      ),
+    ).toHaveLength(1);
+    // End to end: such a plan is never auto-approved.
+    const w = world({ verifiedScopes: true });
+    w.executor.defaultPlan = (ctx) => ({
+      ...planOf(ctx.stage),
+      rows: planOf(ctx.stage).rows.map((r) =>
+        r.logicalId === "MailCore" ? { ...r, domains: ["other.example.com"] } : r,
+      ),
+    });
+    expect((await createBye(w)).status).toBe("needs-review");
+  });
+
+  it("passes newsletter qualification only from the pinned release's evidence file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bye-release-"));
+    expect(releaseQualification(dir)).toEqual({ newsletter: null });
+    mkdirSync(join(dir, "infra/release"), { recursive: true });
+    writeFileSync(
+      join(dir, QUALIFICATION_FILE),
+      JSON.stringify({ newsletter: "EVIDENCE.md#1 run-42" }),
+    );
+    expect(releaseQualification(dir)).toEqual({ newsletter: "EVIDENCE.md#1 run-42" });
+    writeFileSync(join(dir, QUALIFICATION_FILE), JSON.stringify({ newsletter: "x\ny" }));
+    expect(releaseQualification(dir)).toEqual({ newsletter: null });
+    writeFileSync(join(dir, QUALIFICATION_FILE), "{not json");
+    expect(releaseQualification(dir)).toEqual({ newsletter: null });
+
+    // Unqualified release: nothing set, newsletters stay unavailable.
+    const plain = world({ verifiedScopes: true });
+    await createBye(plain);
+    expect(plain.executor.applies[0]!.config.NEWSLETTER_QUALIFIED).toBeUndefined();
+    // Qualified release: the evidence reaches the instance, and is covered by the approval digest.
+    const w = world({ verifiedScopes: true });
+    w.release = {
+      ...w.release,
+      resolve: () => ({
+        ok: true,
+        release: { ref: RELEASE, dir: REPO, qualification: { newsletter: "EVIDENCE.md#1 run-42" } },
+      }),
+    };
+    await createBye(w);
+    const config = w.executor.applies[0]!.config;
+    expect(config.NEWSLETTER_QUALIFIED).toBe("EVIDENCE.md#1 run-42");
+    expect(config.ZONE_TOKEN_SEAL_KEY).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 });

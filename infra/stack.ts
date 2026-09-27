@@ -136,7 +136,10 @@ export default Alchemy.Stack(
     }
 
     let turnstileSitekey: Alchemy.Output<string> | undefined;
-    if (appDomain !== undefined) {
+    // Onboarding installations (BYE_WORKERS_DEV_NAME) create their first account with the
+    // single-use BOOTSTRAP_TOKEN instead, so their custom hostname adds no Turnstile widget: the
+    // only zone-level change onboarding makes is MailCore's custom domain.
+    if (appDomain !== undefined && install === undefined) {
       // Two-phase first deploy (RUNBOOK "First deploy: Turnstile"): this widget's secret feeds
       // TURNSTILE_SECRET, so the widget is retained with the stage and never silently recreated.
       const widget = yield* Cloudflare.Turnstile.Widget("SignupChallenge", {

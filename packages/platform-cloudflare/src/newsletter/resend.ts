@@ -145,6 +145,20 @@ export const verifySvix = async (
   return match ? { ok: true, id } : { ok: false, detail: "bad signature" };
 };
 
+/**
+ * The Resend webhook event types Bye subscribes to: exactly those `mapResendEvent` turns into
+ * consent, restriction or delivery facts. Runtime setup (newsletter-config.ts) creates the webhook
+ * with this set; informational types are not requested.
+ */
+export const RESEND_WEBHOOK_EVENTS = [
+  "email.delivered",
+  "email.bounced",
+  "email.complained",
+  "email.suppressed",
+  "contact.created",
+  "contact.updated",
+] as const;
+
 /** Map one verified Resend event to Bye terms. Unknown types are kept as `unmapped`. */
 export const mapResendEvent = (eventId: string, payload: unknown): ProviderEvent => {
   const p = (payload ?? {}) as {

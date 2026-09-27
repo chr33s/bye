@@ -5,5 +5,6 @@ export * from "./push/index.ts";
 export * from "./sandbox.ts";
 export * from "./srs.ts";
 export * from "./arc.ts";
+export * from "./dkim.ts";
 export * from "./forwarding.ts";
 export * from "./external.ts";

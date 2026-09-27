@@ -16,7 +16,13 @@ import { FORWARD_MAX_HOPS, forwardHops, handleInbound } from "../src/inbound.ts"
 import { MIME_INLINE_MAX_BYTES } from "../src/mime.ts";
 import { quarantineUnprocessable } from "../src/scheduled.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, inboundMessage, makeHarness, rfc822 } from "./harness.ts";
+import {
+  type Harness,
+  inboundMessage,
+  makeHarness,
+  rfc822,
+  enablePersonalMail,
+} from "./harness.ts";
 import { blobKey } from "@bye/application";
 import { safetyVerdict, trustedAuthenticationResults } from "../src/safety.ts";
 
@@ -155,11 +161,14 @@ describe("exceptional ingestion and send evidence", () => {
   });
 
   it("[§5.2] an Unknown submission is resolved when a provider event echoes its idempotency key", async () => {
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
     const realFetch = globalThis.fetch;
-    // 2xx with an unreadable body: the provider may have accepted it — the outcome is Unknown.
-    globalThis.fetch = (async () =>
-      new Response("<html>accepted</html>", { status: 202 })) as typeof fetch;
+    // The connection drops after the request left: the provider may have accepted it — Unknown.
+    (h.env as { TRANSACTIONAL_EMAIL: unknown }).TRANSACTIONAL_EMAIL = {
+      send: async () => {
+        throw new Error("connection reset");
+      },
+    };
     try {
       const ana = await signup(h, "ana@bye.test");
       await call(h, ana.cookie, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
@@ -344,7 +353,7 @@ describe("authentication evidence", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.UTC(2026, 8, 25, 12));
     h = makeHarness();
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
   });
   afterEach(() => vi.useRealTimers());
 

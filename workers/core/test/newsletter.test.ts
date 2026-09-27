@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import { approveNewsletter, ledgerOf, runNewsletter } from "../src/newsletter.ts";
+import { newsletterSealKeys, sealField } from "../src/newsletter-config.ts";
 import { authConfig } from "../src/services.ts";
 import { type Harness, makeHarness } from "./harness.ts";
 
@@ -151,6 +152,27 @@ const configure = (h: Harness, qualified = "evidence://staging/resend-2026-09") 
     NEWSLETTER_QUALIFIED: qualified,
     MAIL_SANDBOX_DOMAINS: "",
   });
+};
+
+/** Runtime (operator-entered) configuration, sealed as POST /v1/newsletter/config stores it. */
+const configureRuntime = async (h: Harness, qualified = "evidence://staging/resend-2026-09") => {
+  Object.assign(h.env as object, {
+    NEWSLETTER_CONFIG_SEAL_KEY: btoa(String.fromCharCode(...new Uint8Array(32).fill(3)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, ""),
+    NEWSLETTER_QUALIFIED: qualified,
+    MAIL_SANDBOX_DOMAINS: "",
+  });
+  const keys = newsletterSealKeys(h.env)!;
+  const k = await sealField(keys, "api_key", "re_runtime_key_0001");
+  const s = await sealField(keys, "webhook_secret", WEBHOOK_SECRET);
+  await h.d1
+    .prepare(
+      "INSERT INTO newsletter_provider_config (id, provider, account_ref, provider_webhook_id, key_version, api_key_iv, api_key_ciphertext, webhook_secret_iv, webhook_secret_ciphertext, status, configured_by, created_at, updated_at) VALUES ('default', 'resend', 'resend_runtime', 'wh_1', 1, ?, ?, ?, ?, 'ready', 'u', 1, 1)",
+    )
+    .bind(k.iv, k.ciphertext, s.iv, s.ciphertext)
+    .run();
 };
 
 describe("[P02] newsletters (§5.5)", () => {
@@ -378,5 +400,30 @@ describe("[P02] newsletters (§5.5)", () => {
     const r = await pass();
     expect(r.publication?.state).toBe("sent");
     expect([...resend.contacts.get("b@example.net")!.topics.values()]).toEqual(["opt_out"]);
+  });
+  it("a runtime-configured provider keeps the same ledger, hold and reconciliation semantics", async () => {
+    await configureRuntime(h);
+    const p = await approveNewsletter(h.env, "ana", postId, 1);
+    expect(p).toMatchObject({ state: "approved", account: "resend_runtime" });
+    await pass();
+    resend.setFault((method, path) =>
+      method === "POST" && path.endsWith("/send") ? new Response("", { status: 502 }) : undefined,
+    );
+    expect((await pass()).publication?.state).toBe("submit-pending");
+    resend.setFault(undefined);
+    expect((await pass()).publication).toMatchObject({ state: "held" });
+    expect(resend.calls.filter((c) => c.endsWith("/send"))).toHaveLength(1);
+    // Events verify with the runtime secret and bind to the runtime account.
+    const ev = JSON.stringify({
+      type: "email.delivered",
+      created_at: new Date().toISOString(),
+      data: {},
+    });
+    expect((await postWebhook(h, await signWebhook("rt_1", ev), ev)).status).toBe(200);
+    expect(
+      await h.d1
+        .prepare("SELECT account FROM newsletter_events WHERE event_id = 'rt_1'")
+        .first<{ account: string }>(),
+    ).toEqual({ account: "resend_runtime" });
   });
 });

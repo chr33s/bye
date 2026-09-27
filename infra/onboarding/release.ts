@@ -9,10 +9,39 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ReleaseRef } from "./store.ts";
 
+/**
+ * Release-controlled qualification evidence shipped in the pinned checkout
+ * (`infra/release/qualification.json`), e.g. `{ "newsletter": "EVIDENCE.md#1 2026-10 staging" }`.
+ * Only the release owner sets it (it is part of the tagged commit); users never can.
+ */
+export interface ReleaseQualification {
+  /** Evidence reference for newsletter dispatch (becomes NEWSLETTER_QUALIFIED); null = not qualified. */
+  readonly newsletter: string | null;
+}
+
+export const QUALIFICATION_FILE = "infra/release/qualification.json";
+
+const EVIDENCE_REF = /^[A-Za-z0-9 ._:#/()-]{1,200}$/;
+
+/** Reads the release's qualification evidence; anything missing or malformed means "not qualified". */
+export const releaseQualification = (dir: string): ReleaseQualification => {
+  const file = join(dir, QUALIFICATION_FILE);
+  if (!existsSync(file)) return { newsletter: null };
+  try {
+    const v = JSON.parse(readFileSync(file, "utf8")) as { newsletter?: unknown };
+    const ref = typeof v.newsletter === "string" ? v.newsletter.trim() : "";
+    return { newsletter: EVIDENCE_REF.test(ref) ? ref : null };
+  } catch {
+    return { newsletter: null };
+  }
+};
+
 export interface ResolvedRelease {
   readonly ref: ReleaseRef;
   /** Checkout the executor runs in. */
   readonly dir: string;
+  /** Qualification evidence of this exact release; absent = none. */
+  readonly qualification?: ReleaseQualification;
 }
 
 const git = (dir: string, args: ReadonlyArray<string>) =>
@@ -41,7 +70,14 @@ export const resolveRelease = (dir: string, version: string): ReleaseResolution 
     const lockfileDigest = createHash("sha256")
       .update(readFileSync(join(dir, "pnpm-lock.yaml")))
       .digest("hex");
-    return { ok: true, release: { ref: { version, commit: head, lockfileDigest }, dir } };
+    return {
+      ok: true,
+      release: {
+        ref: { version, commit: head, lockfileDigest },
+        dir,
+        qualification: releaseQualification(dir),
+      },
+    };
   } catch {
     return { ok: false, reason: `release ${version} is not available in the release checkout` };
   }

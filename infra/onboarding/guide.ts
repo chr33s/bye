@@ -1,6 +1,7 @@
-// Manual domain and mail guide (spec.md §15.11 step 6). Guide-only in v1: onboarding executes
-// none of these steps, whatever the operator confirms, and skipping the guide never affects
-// deployment success. App/public domains are kept apart from the mail cutover, which is a
+// Manual domain and mail guide (spec.md §15.11 step 6). Off the normal path: standard installs
+// already serve on the chosen Bye hostname, and incoming email is activated from inside Bye after
+// the first owner exists (infra/onboarding/spec.md Part B). Onboarding executes none of these steps,
+// and skipping the guide never affects deployment success. App/public domains are kept apart from the mail cutover, which is a
 // deliberate operator action with its own checks and rollback (spec.md §15.4, RUNBOOK "MX cutover").
 
 export interface GuideSection {
@@ -23,11 +24,11 @@ export const manualGuide = (install: {
   readonly appUrl: string | null;
 }): ManualGuide => ({
   notice:
-    "Bye onboarding does not change DNS, MX, Email Routing or catch-all routing, even if you confirm. Every step below is yours to perform in your own Cloudflare account, when you choose.",
+    "Bye onboarding does not change DNS, MX, Email Routing or catch-all routing, even if you confirm. Incoming email is set up from inside Bye (the “Set up incoming email” card on the admin page) after you create your owner account; the steps below are the manual alternative, yours to perform in your own Cloudflare account, when you choose.",
   sections: [
     {
       id: "domains",
-      title: "Custom app and public domains (optional)",
+      title: "Custom public domain, or another app domain (optional)",
       summary: `Your instance works now at ${install.appUrl ?? "its workers.dev address"}. A custom domain changes the address people and apps use; it does not affect mail.`,
       before: [
         "The zone for the domain is active in the same Cloudflare account.",

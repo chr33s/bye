@@ -69,9 +69,7 @@ describe("MailCore in workerd", () => {
           bindings: {
             APP_ORIGIN: APP,
             MAIL_ORIGIN: "https://mail.bye-render.test",
-            PERSONAL_MAIL_API_KEY: "",
-            PERSONAL_MAIL_ENDPOINT: "",
-            MAIL_TRAFFIC_CLASSES: "transactional,personal",
+            MAIL_TRAFFIC_CLASSES: "transactional",
             SESSION_KEY: "workerd-session-key-0123456789abcdef",
             PROXY_SIGNING_KEY: "workerd-proxy-key-0123456789abcdef",
             BILLING_WEBHOOK_SECRET: "workerd-billing-secret-0123456789abcdef",
@@ -326,7 +324,7 @@ describe("MailCore in workerd", () => {
       sendAt: Date.now() + 500,
     });
     expect(send.status, JSON.stringify(send.body)).toBe(202);
-    // Without an approved personal transport the job is rejected explicitly (no silent fallback).
+    // With the personal class off for the stage, the job is rejected explicitly (no silent fallback).
     const mailbox = (await mf.getDurableObjectNamespace("MAILBOXES", "core")).getByName(
       mailboxId,
     ) as unknown as {
@@ -338,7 +336,7 @@ describe("MailCore in workerd", () => {
       20_000,
     );
     expect(job?.state).toBe("rejected");
-    expect(job?.failure?.detail).toContain("no approved transport");
+    expect(job?.failure?.detail).toContain("personal is not enabled in this stage");
     const r2 = await mf.getR2Bucket("ORIGINALS", "core");
     const outbound = (await r2.list({ prefix: `t/${mailboxId}/out/` })).objects;
     expect(outbound).toHaveLength(1);

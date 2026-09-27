@@ -3,7 +3,7 @@
 // applying is the repository's own `pnpm run deploy` (web build, guard-stage, alchemy deploy), in
 // the pinned release checkout. Each run gets an isolated environment: its own HOME (Alchemy's
 // local profile and caches), only allowlisted variables, the installation's account and token,
-// and the domain/mail switches forced empty.
+// the chosen Bye hostname (APP_DOMAIN) and every other domain/mail switch forced empty.
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -37,9 +37,11 @@ export interface DeployExecutor {
   apply(ctx: ExecutionContext, onLine: (line: string) => void): Promise<ApplyResult>;
 }
 
-/** Stack inputs that would configure domains or mail routing. Always empty for v1 onboarding. */
+/**
+ * Stack inputs that would configure public domains, DNS or mail routing. Always empty for
+ * onboarding: MX/Email Routing is the separate, post-owner incoming-email activation.
+ */
 export const FORCED_EMPTY = [
-  "APP_DOMAIN",
   "PUBLIC_DOMAIN",
   "MAIL_ZONE",
   "BYE_MX_CUTOVER",
@@ -69,6 +71,8 @@ export const childEnv = (
     STATE_BACKEND: "cloudflare",
   });
   for (const k of FORCED_EMPTY) env[k] = "";
+  // Only the installation's own chosen hostname, never a value inherited from elsewhere.
+  env.APP_DOMAIN = ctx.config.APP_DOMAIN ?? "";
   return env;
 };
 

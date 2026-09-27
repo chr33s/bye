@@ -68,7 +68,6 @@ const start = async (
         bindings: {
           APP_ORIGIN: APP,
           MAIL_ORIGIN: "https://mail.bye-render.test",
-          PERSONAL_MAIL_API_KEY: "",
           SESSION_KEY: "drill-session-key-0123456789abcdef",
           PROXY_SIGNING_KEY: "drill-proxy-key-0123456789abcdef",
           BILLING_WEBHOOK_SECRET: "drill-billing-webhook-0123456789abcdef",

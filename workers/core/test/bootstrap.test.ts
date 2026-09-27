@@ -124,4 +124,39 @@ describe("first-account bootstrap", () => {
       201,
     );
   });
+
+  it("enforces the onboarding-selected address domain for the bootstrap account only", async () => {
+    const { env } = harness();
+    // App at bye.example.com, owner addresses on example.com (the zone chosen in onboarding).
+    Object.assign(env as object, {
+      APP_ORIGIN: "https://bye.example.com",
+      BOOTSTRAP_ADDRESS_DOMAIN: "example.com",
+    });
+    const req = (body: Record<string, unknown>) =>
+      handleFetch(
+        new Request("https://bye.example.com/auth/signup", {
+          method: "POST",
+          headers: { origin: "https://bye.example.com", "content-type": "application/json" },
+          body: JSON.stringify({ displayName: "Owner", ...body }),
+        }),
+        env,
+        ctx,
+      );
+    // Another domain (including the app hostname) is refused before the claim is taken.
+    expect((await req({ address: "chris@other.test", bootstrap: TOKEN })).status).toBe(400);
+    expect((await req({ address: "chris@bye.example.com", bootstrap: TOKEN })).status).toBe(400);
+    const ok = await req({ address: "Chris@Example.com", bootstrap: TOKEN });
+    expect(ok.status).toBe(201);
+    const { userId } = (await ok.json()) as { userId: string };
+    expect((await controlAdapters(env)).operators).toContain(userId);
+    // The personal organization's membership is `owner`.
+    const role = await env.DIRECTORY.prepare(
+      "SELECT m.role AS role FROM memberships m WHERE m.user_id = ?",
+    )
+      .bind(userId)
+      .first<{ role: string }>();
+    expect(role?.role).toBe("owner");
+    // Reused token: refused.
+    expect((await req({ address: "other@example.com", bootstrap: TOKEN })).status).toBe(403);
+  });
 });

@@ -90,8 +90,11 @@ export const webhookRoutes: ReadonlyArray<Route<CoreEnv>> = [
     if (body === null) return tooLarge();
     const intake = await intakeNewsletterEvents(env, body, request.headers);
     switch (intake._tag) {
+      // No usable provider config means no secret to verify against: refused as unauthenticated,
+      // never accepted unsigned. The secret comes from the same resolved configuration (runtime
+      // or legacy env, never both) that newsletter dispatch uses.
       case "Unavailable":
-        return errorResponse("not_found", "no newsletter provider");
+        return errorResponse("unauthenticated", "no newsletter provider");
       case "Unauthenticated":
         return errorResponse("unauthenticated", "bad signature");
       case "Persisted":

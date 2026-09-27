@@ -247,7 +247,21 @@ export const DomainSettingsRequest = Schema.Struct({
 });
 export const ZoneAuthorizationRequest = Schema.Struct({
   method: Schema.Literals(["service-zone", "delegated-token", "manual-records"]),
+  /** Explicit "Switch incoming email to Bye": required when the domain's MX points elsewhere. */
+  confirmCutover: Schema.optional(Schema.Boolean),
 });
+/** Bind the onboarding-selected zone as a customer domain (infra/onboarding/spec.md §17). */
+export const InstallationDomainRequest = Schema.Struct({
+  /** Defaults to the caller's personal organization (where the owner's address lives). */
+  orgId: Schema.optional(Bounded(64)),
+  /** Optional echo of the zone name; refused when it differs from the installation's. */
+  name: Schema.optional(Bounded(253)),
+});
+/**
+ * A Cloudflare API token the owner created for exactly the installation's zone
+ * (infra/onboarding/spec.md §13). Only type-checked here, so a decode error never echoes it.
+ */
+export const InstallationZoneTokenRequest = Schema.Struct({ token: Schema.String });
 export const DomainAliasRequest = Schema.Struct({ localPart: Bounded(64), mailboxId: Bounded(64) });
 
 // ---- billing and lifecycle (A02, A04) ----

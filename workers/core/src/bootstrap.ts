@@ -1,10 +1,11 @@
-// First-account bootstrap for self-hosted installations (infra/onboarding). A workers.dev
-// installation has no custom domain, so no Turnstile widget; instead the onboarding service
+// First-account bootstrap for self-hosted installations (infra/onboarding). An onboarding
+// installation has no Turnstile widget; instead the onboarding service
 // generates BOOTSTRAP_TOKEN and hands the operator a setup link. The token stands in for
 // Turnstile exactly once, only while the instance has no users, and the account it creates
 // becomes a platform operator. Empty token = disabled (every CI-managed stage).
 import { timingSafeEqual } from "@bye/domain";
 import type { CoreEnv } from "./env.ts";
+import { serviceDomain } from "./origins.ts";
 
 /** An unfinished claim (signup failed after claiming, or the Worker died) can be retaken after this. */
 export const BOOTSTRAP_CLAIM_LEASE_MS = 5 * 60_000;
@@ -13,6 +14,17 @@ type BootstrapEnv = Pick<CoreEnv, "DIRECTORY" | "BOOTSTRAP_TOKEN">;
 
 export const bootstrapEnabled = (env: Pick<CoreEnv, "BOOTSTRAP_TOKEN">): boolean =>
   (env.BOOTSTRAP_TOKEN ?? "").length >= 32;
+
+/**
+ * The address domain the bootstrap account must use: the Cloudflare zone chosen in onboarding
+ * (BOOTSTRAP_ADDRESS_DOMAIN, e.g. `example.com` for an app at `bye.example.com`), else the service
+ * domain. Choosing it never activates MX or Email Routing; incoming mail is a separate step.
+ */
+export const bootstrapAddressDomain = (
+  env: Pick<CoreEnv, "APP_ORIGIN" | "BOOTSTRAP_ADDRESS_DOMAIN">,
+): string =>
+  (env.BOOTSTRAP_ADDRESS_DOMAIN ?? "").trim().toLowerCase().replace(/\.$/, "") ||
+  serviceDomain(env);
 
 /**
  * Claims the single bootstrap slot. True only for the correct token, on an instance without

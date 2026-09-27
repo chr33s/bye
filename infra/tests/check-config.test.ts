@@ -7,7 +7,6 @@ import {
   forbiddenConfig,
   missingConfig,
   missingPreviewAttestation,
-  personalMailProblems,
   previewSecretOverreach,
   PROVIDER_PREVIEW_ATTESTATION,
   requiredConfig,
@@ -69,8 +68,8 @@ describe("deploy config gate (§15.5, §15.8)", () => {
   });
 
   it("ephemeral stages with a mail credential must have a mail sandbox", () => {
-    const creds = { PERSONAL_MAIL_API_KEY: "k" };
-    expect(unsandboxedMail({ ...creds, STAGE: "preview-4" })).toEqual(["PERSONAL_MAIL_API_KEY"]);
+    const creds = { MAIL_DKIM_PRIVATE_KEY: "k" };
+    expect(unsandboxedMail({ ...creds, STAGE: "preview-4" })).toEqual(["MAIL_DKIM_PRIVATE_KEY"]);
     expect(
       unsandboxedMail({
         ...creds,
@@ -78,7 +77,21 @@ describe("deploy config gate (§15.5, §15.8)", () => {
         STAGE: "dev-abc123",
         MAIL_SANDBOX_DOMAINS: " ",
       }),
-    ).toEqual(["PERSONAL_MAIL_API_KEY", "NEWSLETTER_API_KEY"]);
+    ).toEqual(["MAIL_DKIM_PRIVATE_KEY", "NEWSLETTER_API_KEY"]);
+    // Personal mail needs no credential any more: enabling the class alone requires the sandbox.
+    expect(
+      unsandboxedMail({ STAGE: "preview-4", MAIL_TRAFFIC_CLASSES: "transactional, personal" }),
+    ).toEqual(["MAIL_TRAFFIC_CLASSES=personal"]);
+    expect(
+      unsandboxedMail({
+        STAGE: "preview-4",
+        MAIL_TRAFFIC_CLASSES: "personal",
+        MAIL_SANDBOX_DOMAINS: "sandbox.test",
+      }),
+    ).toEqual([]);
+    expect(unsandboxedMail({ STAGE: "preview-4", MAIL_TRAFFIC_CLASSES: "transactional" })).toEqual(
+      [],
+    );
     expect(
       unsandboxedMail({ ...creds, STAGE: "preview-4", MAIL_SANDBOX_DOMAINS: "sandbox.test" }),
     ).toEqual([]);
@@ -96,8 +109,11 @@ describe("deploy config gate (§15.5, §15.8)", () => {
       name: "PROVIDER_SENT_PREVIEWS",
       value: "disabled",
     });
-    const creds = { PERSONAL_MAIL_API_KEY: "k" };
+    const creds = { MAIL_DKIM_PRIVATE_KEY: "k" };
     expect(missingPreviewAttestation({ ...creds, STAGE: "prod" })).toBe(true);
+    expect(missingPreviewAttestation({ STAGE: "prod", MAIL_TRAFFIC_CLASSES: "personal" })).toBe(
+      true,
+    );
     expect(
       missingPreviewAttestation({ ...creds, STAGE: "staging", PROVIDER_SENT_PREVIEWS: "enabled" }),
     ).toBe(true);
@@ -144,44 +160,20 @@ describe("deploy config gate (§15.5, §15.8)", () => {
     ]);
   });
 
-  it("personal mail: key and endpoint are set together, and the endpoint is a real https host", () => {
-    expect(personalMailProblems({})).toEqual([]);
-    expect(
-      personalMailProblems({
-        PERSONAL_MAIL_API_KEY: "k",
-        PERSONAL_MAIL_ENDPOINT: "https://api.mailprovider.net/v1/messages",
-      }),
-    ).toEqual([]);
-    expect(personalMailProblems({ PERSONAL_MAIL_API_KEY: "k" })).toEqual([
-      "PERSONAL_MAIL_API_KEY is set but PERSONAL_MAIL_ENDPOINT is empty",
-    ]);
-    expect(
-      personalMailProblems({ PERSONAL_MAIL_API_KEY: "k", PERSONAL_MAIL_ENDPOINT: " " }),
-    ).toEqual(["PERSONAL_MAIL_API_KEY is set but PERSONAL_MAIL_ENDPOINT is empty"]);
-    expect(personalMailProblems({ PERSONAL_MAIL_ENDPOINT: "https://api.provider.net/v1" })).toEqual(
-      ["PERSONAL_MAIL_ENDPOINT is set but PERSONAL_MAIL_API_KEY is empty"],
-    );
-    for (const endpoint of [
-      "https://mail-provider.invalid/v1/messages",
-      "https://mail.example.com/v1",
-      "https://relay.test/v1",
-      "https://localhost/v1",
-    ])
-      expect(
-        personalMailProblems({ PERSONAL_MAIL_API_KEY: "k", PERSONAL_MAIL_ENDPOINT: endpoint }),
-        endpoint,
-      ).toEqual(["PERSONAL_MAIL_ENDPOINT names a placeholder host"]);
-    expect(
-      personalMailProblems({ PERSONAL_MAIL_API_KEY: "k", PERSONAL_MAIL_ENDPOINT: "http://a.net/" }),
-    ).toEqual(["PERSONAL_MAIL_ENDPOINT must be an https URL"]);
-    // Both are optional stack names, and CI maps both.
-    const declared = declaredConfig();
-    expect(declared.find((c) => c.name === "PERSONAL_MAIL_API_KEY")).toMatchObject({
+  it("personal mail has no external provider: no key or endpoint is declared or mapped", () => {
+    const names = declaredConfig().map((c) => c.name);
+    for (const gone of ["PERSONAL_MAIL_API_KEY", "PERSONAL_MAIL_ENDPOINT"]) {
+      expect(names).not.toContain(gone);
+      expect(CI).not.toMatch(new RegExp(`^\\s+${gone}:`, "m"));
+      expect(DRIFT).not.toMatch(new RegExp(`^\\s+${gone}:`, "m"));
+    }
+    // The DKIM key is a secret; previews pin it empty.
+    expect(declaredConfig().find((c) => c.name === "MAIL_DKIM_PRIVATE_KEY")).toMatchObject({
       secret: true,
       optional: true,
     });
-    expect(declared.map((c) => c.name)).toContain("PERSONAL_MAIL_ENDPOINT");
-    expect(CI).toMatch(/^\s+PERSONAL_MAIL_ENDPOINT: \$\{\{ vars\.PERSONAL_MAIL_ENDPOINT \}\}/m);
+    expect(CI).toMatch(/^\s+MAIL_DKIM_PRIVATE_KEY: ""$/m);
+    expect(CI).toMatch(/^\s+MAIL_DKIM_PRIVATE_KEY: \$\{\{ secrets\.MAIL_DKIM_PRIVATE_KEY \}\}/m);
   });
 
   it("scanner signature source is validated before a plan and mapped into CI", () => {

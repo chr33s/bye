@@ -8,7 +8,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
  * Buffer#toString with an encoding. infra's tsconfig also loads @cloudflare/workers-types, whose
  * Uint8Array#toString() signature shadows Node's overload.
  */
-export const encode = (b: Uint8Array, encoding: "base64url" | "hex" | "utf8"): string =>
+export const encode = (b: Uint8Array, encoding: "base64" | "base64url" | "hex" | "utf8"): string =>
   (Buffer.prototype.toString as (this: Uint8Array, e: string) => string).call(b, encoding);
 
 export interface KeyRing {

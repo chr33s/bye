@@ -45,7 +45,12 @@ import {
   verifySignupToken,
   verifyTurnstile,
 } from "./common.ts";
-import { claimBootstrap, completeBootstrap, releaseBootstrap } from "../bootstrap.ts";
+import {
+  bootstrapAddressDomain,
+  claimBootstrap,
+  completeBootstrap,
+  releaseBootstrap,
+} from "../bootstrap.ts";
 
 /** RFC 8628 §3.4 grant type. */
 const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
@@ -117,14 +122,22 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     const body = decodeAs(SignupRequest, await readJson(request));
     if (!body) return errorResponse("bad_request", "invalid request body");
     const address = body.address.trim().toLowerCase();
-    // Personal signup only allocates addresses on the service domain; customer-domain addresses are
-    // provisioned by that organization (O01).
-    if (address.split("@")[1] !== serviceDomain(env))
-      return errorResponse("bad_request", "choose an address on the service domain");
-    if (body.timeZone !== undefined && !validTimeZone(body.timeZone))
-      return errorResponse("bad_request", "invalid time zone");
     // The first account of an onboarding installation proves itself with the bootstrap token.
     const bootstrap = body.bootstrap !== undefined;
+    // Personal signup only allocates addresses on the service domain; customer-domain addresses are
+    // provisioned by that organization (O01). The bootstrap account instead uses the domain chosen
+    // in onboarding (BOOTSTRAP_ADDRESS_DOMAIN), enforced here; the setup link's fragment is display
+    // input only.
+    const addressDomain = bootstrap ? bootstrapAddressDomain(env) : serviceDomain(env);
+    if (address.split("@")[1] !== addressDomain)
+      return errorResponse(
+        "bad_request",
+        bootstrap
+          ? `choose an address on ${addressDomain}`
+          : "choose an address on the service domain",
+      );
+    if (body.timeZone !== undefined && !validTimeZone(body.timeZone))
+      return errorResponse("bad_request", "invalid time zone");
     if (bootstrap) {
       if (!(await claimBootstrap(env, body.bootstrap!, Date.now())))
         return errorResponse("forbidden", "this setup link is invalid or was already used");

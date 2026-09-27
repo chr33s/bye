@@ -57,7 +57,7 @@ The core decomposition is:
 - **Queues + Durable Object alarms + Workflows:** background execution, deferred actions, and recoverable multi-step operations.
 - **Email Routing:** inbound mail. **Pluggable delivery adapters:** outbound personal mail, transactional notifications, forwarding, and external send-as through `MailTransport`; newsletters through a separate `NewsletterProvider` (§5.3, §5.5).
 
-**The main constraint is transport, not application hosting.** Cloudflare now offers Email Sending in beta, including arbitrary recipients after sending-domain onboarding. It is not accurate to describe its current outbound capability as verified-recipient-only. However, its documentation limits the intended use to transactional email. Ordinary outbound messages are limited to 5 MiB and 50 combined recipients; inbound messages are limited to 25 MiB. [C1][C2][C3]
+**The main constraint is transport, not application hosting.** Cloudflare now offers Email Sending in beta, including arbitrary recipients after sending-domain onboarding. It is not accurate to describe its current outbound capability as verified-recipient-only. Cloudflare's own reference application, Agentic Inbox, uses exactly this pairing for a personal mailbox: Email Routing for inbound mail and the Email Service `send_email` binding for composing and replying to arbitrary recipients. Bye therefore uses Email Service sending for personal correspondence as well as transactional mail. Ordinary outbound messages are limited to 5 MiB and 50 combined recipients; inbound messages are limited to 25 MiB. [C1][C2][C3][C22]
 
 Therefore define two deployment profiles:
 
@@ -68,7 +68,7 @@ Therefore define two deployment profiles:
 
 A transactional service supporting a `List-Unsubscribe` header does **not** establish permission to operate a newsletter service. Keep World-style subscription delivery behind a separate, qualified `NewsletterProvider` (§5.5). [C3][C4]
 
-Intended provider roles: Cloudflare Email Routing for inbound Worker routing; Cloudflare Email Service sending for eligible transactional mail; Resend under evaluation for programmatic broadcasts; Loops or others only after qualification. These are intended roles, not validated compatibility claims. Personal correspondence and forwarding need their own qualified routes: transactional support alone does not qualify them.
+Intended provider roles: Cloudflare Email Routing for inbound Worker routing; Cloudflare Email Service sending for transactional mail and personal correspondence (as in Cloudflare's Agentic Inbox [C22]), DKIM-signed by Bye; Resend under evaluation for programmatic broadcasts; Loops or others only after qualification. These are intended roles, not validated compatibility claims. Forwarding still needs its own qualified route, and bulk or subscription mail never goes through Email Service sending.
 
 ### Scope boundaries
 
@@ -315,8 +315,8 @@ Required adapters are:
 
 | Adapter                            | Purpose                                                                                                                  |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `CloudflareTransactionalTransport` | Product notifications and other documented transactional uses; personal-mail use only after explicit approval            |
-| `PersonalMailTransport`            | General user correspondence under an approved hosting/delivery agreement                                                 |
+| `CloudflareTransactionalTransport` | Product notifications and other transactional mail over the Email Service `send_email` binding                           |
+| `CloudflarePersonalTransport`      | User correspondence over the same binding, one envelope recipient per send, DKIM-signed with the installation key [C22]  |
 | `NewsletterProvider`               | World subscriber sync, consent changes, broadcasts, cancellation, and event reconciliation (§5.5); not a `MailTransport` |
 | `ExternalIdentityTransport`        | User-authorized Gmail/Outlook APIs or authenticated SMTP for externally hosted addresses                                 |
 | `ForwardingTransport`              | Forwarding preserving appropriate envelope/authentication behavior; not ordinary resend with a forged From               |
@@ -1312,3 +1312,4 @@ The HEY/Cloudflare product and transport baseline is retained from revision 0.1.
 
 [R1]: https://www.rfc-editor.org/info/rfc5545/ "iCalendar data format"
 [R2]: https://www.rfc-editor.org/info/rfc5546/ "iTIP scheduling interoperability"
+[C22]: https://github.com/cloudflare/agentic-inbox "Cloudflare Agentic Inbox: Email Routing inbound, Email Service send_email outbound for a self-hosted mailbox"

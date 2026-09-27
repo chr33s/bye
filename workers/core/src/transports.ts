@@ -1,13 +1,17 @@
 import {
+  DEFAULT_MAIL_DNS,
+  type DkimKey,
   type ExternalCredential,
   type ExternalCredentialStore,
   importArcSigner,
+  importDkimKey,
+  makeCloudflarePersonalTransport,
   makeCloudflareTransactionalTransport,
   makeExternalIdentityApiTransport,
-  makePersonalMailTransport,
   makeSealedForwardingTransport,
   openWithKey,
   parseSandboxDomains,
+  parseTrafficClasses,
   sandboxTransport,
   type RawContentSource,
   sealWithKey,
@@ -26,23 +30,23 @@ import type { CoreEnv } from "./env.ts";
 // `NewsletterProvider` (newsletter.ts), never an individual-message adapter.
 
 /**
- * The approved personal-mail provider endpoint, or null when personal mail is unavailable here:
- * no key, no endpoint, a non-https URL, or a placeholder `.invalid` host (RFC 2606). Personal mail
- * is then rejected by the router instead of posting to a host that can never accept it.
+ * The installation's DKIM key (MAIL_DKIM_PRIVATE_KEY, selector `bye1`), imported on first use per
+ * isolate. Empty = personal mail goes out unsigned by Bye. An unusable key fails the submission
+ * (retryable) rather than silently sending unsigned mail.
  */
-export const personalMailEndpoint = (
-  env: Pick<CoreEnv, "PERSONAL_MAIL_API_KEY" | "PERSONAL_MAIL_ENDPOINT">,
-): string | null => {
-  const raw = env.PERSONAL_MAIL_ENDPOINT?.trim();
-  if (!env.PERSONAL_MAIL_API_KEY || !raw) return null;
-  try {
-    const url = new URL(raw);
-    const host = url.hostname.toLowerCase().replace(/\.$/, "");
-    if (url.protocol !== "https:" || host === "invalid" || host.endsWith(".invalid")) return null;
-    return url.toString();
-  } catch {
-    return null;
-  }
+const dkimKeys = new Map<string, Promise<DkimKey>>();
+export const dkimKeyFor = (env: Pick<CoreEnv, "MAIL_DKIM_PRIVATE_KEY">) => {
+  const pem = env.MAIL_DKIM_PRIVATE_KEY ?? "";
+  if (pem.trim() === "") return null;
+  return async (): Promise<DkimKey> => {
+    let key = dkimKeys.get(pem);
+    if (!key) {
+      key = importDkimKey(pem, DEFAULT_MAIL_DNS.dkimSelector);
+      key.catch(() => dkimKeys.delete(pem));
+      dkimKeys.set(pem, key);
+    }
+    return key;
+  };
 };
 
 /** Workers `send_email` accepts one envelope recipient per raw message. */
@@ -152,13 +156,14 @@ export const buildTransportAdapters = async (
   const adapters: Array<TransportAdapter> = [
     makeCloudflareTransactionalTransport(sendEmailBinding(env.TRANSACTIONAL_EMAIL), content),
   ];
-  const personalEndpoint = personalMailEndpoint(env);
-  if (personalEndpoint)
+  // Personal correspondence goes through the same Cloudflare Email Sending binding, only where
+  // the stage enables the class (the router rejects it everywhere else).
+  if (parseTrafficClasses(env.MAIL_TRAFFIC_CLASSES).has("personal"))
     adapters.push(
-      makePersonalMailTransport(
-        { endpoint: personalEndpoint, apiKey: env.PERSONAL_MAIL_API_KEY },
+      makeCloudflarePersonalTransport(
+        sendEmailBinding(env.TRANSACTIONAL_EMAIL),
         content,
-        f,
+        dkimKeyFor(env),
       ),
     );
   if (

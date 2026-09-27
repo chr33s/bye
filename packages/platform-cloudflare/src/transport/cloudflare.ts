@@ -1,6 +1,11 @@
 import { type Acceptance, type Submission, TransportFailure } from "@bye/application";
-import { CLOUDFLARE_TRANSACTIONAL_CAPABILITIES, type TransportCapabilities } from "@bye/domain";
+import {
+  CLOUDFLARE_PERSONAL_CAPABILITIES,
+  CLOUDFLARE_TRANSACTIONAL_CAPABILITIES,
+  type TransportCapabilities,
+} from "@bye/domain";
 import { Effect } from "effect";
+import { dkimSign, type DkimKey } from "./dkim.ts";
 import type { TransportAdapter } from "./router.ts";
 
 /** Narrow shape of the Workers `send_email` binding used with raw MIME (§5.3, [C12]). */
@@ -91,4 +96,65 @@ export const makeCloudflareTransactionalTransport = (
       };
       return acceptance;
     }).pipe(Effect.withSpan("transport.cloudflare.submit")),
+});
+
+/**
+ * Personal correspondence over the Cloudflare `send_email` binding (MAIL_TRAFFIC_CLASSES must
+ * enable `personal`). The rendered MIME is DKIM-signed with the installation key when one is
+ * configured, then sent once per envelope recipient (the binding takes one recipient per message;
+ * Bcc recipients never appear in headers). A failure before any recipient was accepted is
+ * classified as usual; after a partial acceptance it is Unknown, so dispatch never re-sends to
+ * recipients who already have the message.
+ */
+export const makeCloudflarePersonalTransport = (
+  binding: SendEmailBindingLike,
+  content: RawContentSource,
+  dkimKey: (() => Promise<DkimKey | null>) | null,
+  capabilities: TransportCapabilities = CLOUDFLARE_PERSONAL_CAPABILITIES,
+): TransportAdapter => ({
+  capabilities,
+  submit: (submission: Submission) =>
+    Effect.gen(function* () {
+      const raw = yield* Effect.tryPromise({
+        try: () => loadRawBytes(content, submission.contentKey),
+        catch: (e) => classifyCloudflareSendError(e, "before-request"),
+      });
+      if (raw === null)
+        return yield* new TransportFailure({
+          kind: "RetryableBeforeAcceptance",
+          detail: "rendered content missing",
+        });
+      const bytes = yield* Effect.tryPromise({
+        try: async () => {
+          const key = dkimKey ? await dkimKey() : null;
+          if (!key) return raw;
+          const signed = await dkimSign(raw, key);
+          return signed._tag === "Signed" ? signed.raw : raw;
+        },
+        catch: () =>
+          new TransportFailure({
+            kind: "RetryableBeforeAcceptance",
+            detail: "DKIM signing key could not be used",
+          }),
+      });
+      const accepted: Array<string> = [];
+      for (const recipient of submission.envelopeRecipients) {
+        const result = yield* Effect.tryPromise({
+          try: () =>
+            binding.send({ from: submission.from, to: recipient, raw: new Response(bytes).body! }),
+          catch: (e) =>
+            accepted.length === 0
+              ? classifyCloudflareSendError(e, "in-flight")
+              : new TransportFailure({
+                  kind: "Unknown",
+                  detail: `accepted for ${accepted.length} of ${submission.envelopeRecipients.length} recipients before a failure`,
+                }),
+        });
+        accepted.push(
+          (result && result.messageId) || `cf:${submission.sendJobId}:${accepted.length}`,
+        );
+      }
+      const acceptance: Acceptance = { providerId: accepted.join(",") };
+      return acceptance;
+    }).pipe(Effect.withSpan("transport.cloudflare.personal.submit")),
 });

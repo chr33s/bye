@@ -21,6 +21,7 @@ import {
   installWebSocketPair,
   makeHarness,
   rfc822,
+  enablePersonalMail,
 } from "./harness.ts";
 import { signProxyUrl } from "@bye/mail-codec";
 import { forbiddenResolution, readCapped } from "../src/dns.ts";
@@ -282,16 +283,16 @@ describe("MailCore wiring", () => {
     const mailbox = h.namespaces.MAILBOXES.instance(ana.mailboxId);
     await mailbox.alarm();
     await h.drain();
-    // Personal correspondence needs an approved PersonalMailTransport (§1, §5.4); without one the
-    // job is rejected explicitly instead of silently using the transactional-only service.
+    // Personal correspondence needs the `personal` class enabled for the stage (§1, §5.4);
+    // without it the job is rejected explicitly instead of silently using the transactional path.
     const job = await mailbox.sendJob(send.body.sendJobIds[0]);
     expect(job?.state).toBe("rejected");
-    expect(job?.failure?.detail).toContain("no approved transport for personal");
+    expect(job?.failure?.detail).toContain("personal is not enabled in this stage");
     expect(h.sent).toHaveLength(0);
   });
 
   it("[E18] with an approved personal transport the job is accepted; Bcc stays envelope-only", async () => {
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
     const submitted: Array<{ url: string; body: string; headers: Record<string, string> }> = [];
     const realFetch = globalThis.fetch;
     globalThis.fetch = (async (
@@ -346,13 +347,11 @@ describe("MailCore wiring", () => {
         send.body.sendJobIds[0],
       );
       expect(job?.state).toBe("accepted");
-      expect(submitted).toHaveLength(1);
-      const payload = JSON.parse(submitted[0]!.body) as {
-        raw?: string;
-        to?: Array<string>;
-        recipients?: Array<string>;
-      };
-      expect(JSON.stringify(payload)).toContain("secret@example.net");
+      // One Cloudflare send per envelope recipient; the Bcc address is envelope-only.
+      const personal = h.sent.filter((m) => m.from === "ana@bye.test");
+      expect(personal.map((m) => m.to).sort()).toEqual(["bob@example.net", "secret@example.net"]);
+      for (const m of personal) expect(m.raw).not.toMatch(/secret@example.net/);
+      expect(submitted).toEqual([]);
       const mime = h.buckets.ORIGINALS.objects.get(job!.contentKey)!;
       const text = new TextDecoder().decode(mime.bytes);
       expect(text).toMatch(/^To: bob@example.net/im);
@@ -363,15 +362,16 @@ describe("MailCore wiring", () => {
   });
 
   it("[E18] a send that fails before provider acceptance hands its budget reservation back", async () => {
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
     let status = 429;
     const realFetch = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      status === 202
-        ? new Response(JSON.stringify({ id: "prov-1", messageId: "wire-1@provider" }), {
-            status,
-          })
-        : new Response("slow down", { status })) as unknown as typeof fetch;
+    const binding = h.env.TRANSACTIONAL_EMAIL;
+    (h.env as { TRANSACTIONAL_EMAIL: unknown }).TRANSACTIONAL_EMAIL = {
+      send: async (m: never) => {
+        if (status !== 202) throw new Error("rate limit exceeded");
+        return binding.send(m);
+      },
+    };
     const counted = async () =>
       Number(
         (
@@ -687,7 +687,7 @@ describe("MailCore wiring", () => {
     expect(JSON.stringify(events.body)).toContain("Planning");
 
     // [C04] Accepting produces an iTIP REPLY sent through the mailbox as a calendar part.
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
     await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "AddIdentity",
       commandId: cmdId(),
@@ -717,7 +717,8 @@ describe("MailCore wiring", () => {
       expect(mime).toMatch(/Content-Type: text\/calendar;[^\r\n]*method=REPLY/i);
       expect(mime).toMatch(/^To: org@example.net/im);
       expect(mime).not.toMatch(/x-bye-itip-method/i);
-      expect(submitted).toHaveLength(1);
+      expect(h.sent.filter((m) => m.to === "org@example.net")).toHaveLength(1);
+      expect(submitted).toEqual([]);
     } finally {
       globalThis.fetch = realFetch;
     }
@@ -1197,7 +1198,7 @@ describe("MailCore review regressions", () => {
 
   it("[E18] a directory outage at dispatch leaves the job ready for retry instead of stranding it", async () => {
     const ana = await signup(h, "ana@bye.test");
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
     await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "AddIdentity",
       commandId: cmdId(),
@@ -2497,7 +2498,7 @@ describe("live sockets and credentials", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.UTC(2026, 8, 25, 12));
     h = makeHarness();
-    (h.env as { PERSONAL_MAIL_API_KEY: string }).PERSONAL_MAIL_API_KEY = "pm-key";
+    enablePersonalMail(h);
   });
   afterEach(() => vi.useRealTimers());
 
