@@ -43,7 +43,7 @@ export const Search = ({
       <FlatList
         data={result?.results ?? []}
         keyExtractor={(r) => `${r.kind}:${r.id}`}
-        ListEmptyComponent={result ? <Text style={[s.muted, s.pad]}>No results.</Text> : null}
+        ListEmptyComponent={result ? <Text style={[s.muted, s.pad]}>No results.</Text> : undefined}
         renderItem={({ item }) => (
           <Pressable
             style={s.row}

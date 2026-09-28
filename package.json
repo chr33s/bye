@@ -46,12 +46,12 @@
     "@bye/mail-codec": "workspace:*",
     "@bye/platform-cloudflare": "workspace:*",
     "@bye/testing": "workspace:*",
-    "@cloudflare/workers-types": "5.20260925.1",
+    "@cloudflare/workers-types": "5.20260928.1",
     "@effect/platform-bun": "4.0.0-rc.117",
     "@effect/platform-node": "4.0.0-rc.117",
     "@effect/vitest": "4.0.0-rc.117",
     "@oxlint/plugins": "1.85.0",
-    "@types/node": "24.13.6",
+    "@types/node": "24.19.0",
     "alchemy": "2.0.0-beta.79",
     "miniflare": "4.20260730.0",
     "oxfmt": "0.70.0",
@@ -59,7 +59,7 @@
     "oxlint-tsgolint": "7.0.2003",
     "rolldown": "1.2.11",
     "typescript": "7.0.2",
-    "vitest": "5.0.1"
+    "vitest": "5.0.2"
   },
   "engines": {
     "node": "24.18.1"

@@ -9,7 +9,7 @@ packages:
 allowBuilds:
   workerd: true
 minimumReleaseAgeExclude:
-  - "@cloudflare/workers-types@5.20260925.1"
+  - "@cloudflare/workers-types@5.20260928.1"
 overrides:
   "@effect/sql-d1": 4.0.0-rc.117
   "@effect/sql-sqlite-do": 4.0.0-rc.117

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ScrollView, Switch, Text, View } from "react-native";
 import type { ByeClient } from "../client.ts";
+import type { JsonObject } from "../json.ts";
 import { calendarPanelEnabled } from "../mail-calendar.ts";
 import type { DeviceSessionWire } from "../wire.ts";
 import { Button } from "./Button.tsx";
@@ -28,7 +29,7 @@ export const Settings = ({
   /** Opens the server's own deletion page for this account; absent when the server has none. */
   onDeleteAccount?: () => void;
 }) => {
-  const [prefs, setPrefs] = useState<Record<string, unknown>>({});
+  const [prefs, setPrefs] = useState<JsonObject>({});
   const [devices, setDevices] = useState<ReadonlyArray<DeviceSessionWire>>([]);
   const [status, setStatus] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);

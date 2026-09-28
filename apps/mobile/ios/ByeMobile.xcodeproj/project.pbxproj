@@ -12,13 +12,15 @@
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		1918D3D5FC8470B0B5614EBB /* ByeWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 19E916EC8DE8979676C4FC65 /* ByeWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		212FCA91E88783DF010DB9D8 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B984B300713DC67C658011CD /* Foundation.framework */; };
+		37DEA9B2A2F39E5BF6F7B803 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 85BD064BFBF54C923578CA60 /* PrivacyInfo.xcprivacy */; };
 		68E287BFB9A064B512B75177 /* ByeWidgetBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFDA905E45D8512120079A15 /* ByeWidgetBridge.swift */; };
+		7255F8A76EF38B67E65F5A8A /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 29367ADE0DB5695444FE7E43 /* PrivacyInfo.xcprivacy */; };
 		74D324F74E5CC4587DB36661 /* ByeSecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB7BE4A5A5D9FF3490F01EB5 /* ByeSecureStore.swift */; };
-		A1B2C3D40000000000000002 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000001 /* SceneDelegate.swift */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 		9B9DEBE05EB3F6BA24E328BB /* ByeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33FCF1AE644E1E8577D048C8 /* ByeWidget.swift */; };
 		9BD6A9946B288E24D3B938D5 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D68DDDCA7568693687089AD /* SwiftUI.framework */; };
+		A1B2C3D40000000000000002 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000001 /* SceneDelegate.swift */; };
 		A8F60FA782E3253888861489 /* ByeShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1CED6C0A0439D5B853E31ACF /* ByeShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AAD32A164B1E54B0C64E02C5 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C51AF4FB1A2D81FE94B124BD /* ShareViewController.swift */; };
 		C0C962DC8FE627C9F2FB93C1 /* ByeWidgetBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 5BFB31DBDCDD7D1D6D58A94A /* ByeWidgetBridge.m */; };
@@ -26,8 +28,6 @@
 		DBE0369BBDB494A9BB292E5B /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0631239F62240D58030494E /* WidgetKit.framework */; };
 		EA263358C5BCDD0AC1731726 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1D29ED657D8B2685F2C07DD2 /* UniformTypeIdentifiers.framework */; };
 		F5E4ED0739A4612E16AD8F06 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
-		7255F8A76EF38B67E65F5A8A /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 29367ADE0DB5695444FE7E43 /* PrivacyInfo.xcprivacy */; };
-		37DEA9B2A2F39E5BF6F7B803 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 85BD064BFBF54C923578CA60 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,29 +70,29 @@
 		19E916EC8DE8979676C4FC65 /* ByeWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ByeWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1CED6C0A0439D5B853E31ACF /* ByeShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ByeShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1D29ED657D8B2685F2C07DD2 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = DEVELOPER_DIR; };
+		29367ADE0DB5695444FE7E43 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		308F4A8096CE96AF5304E12C /* ByeMobile.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ByeMobile/ByeMobile.entitlements; sourceTree = "<group>"; };
+		32882F1939FBA5D0A9F65DBF /* ByeSecureStore.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = ByeMobile/ByeSecureStore.m; sourceTree = "<group>"; };
 		33FCF1AE644E1E8577D048C8 /* ByeWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeWidget.swift; sourceTree = "<group>"; };
 		3B4392A12AC88292D35C810B /* Pods-ByeMobile.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ByeMobile.debug.xcconfig"; path = "Target Support Files/Pods-ByeMobile/Pods-ByeMobile.debug.xcconfig"; sourceTree = "<group>"; };
 		3BCF18BE56F4AB5B29FDF05C /* ByeWidget.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ByeWidget.entitlements; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-ByeMobile.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ByeMobile.release.xcconfig"; path = "Target Support Files/Pods-ByeMobile/Pods-ByeMobile.release.xcconfig"; sourceTree = "<group>"; };
 		5BFB31DBDCDD7D1D6D58A94A /* ByeWidgetBridge.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = ByeMobile/ByeWidgetBridge.m; sourceTree = "<group>"; };
-		32882F1939FBA5D0A9F65DBF /* ByeSecureStore.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = ByeMobile/ByeSecureStore.m; sourceTree = "<group>"; };
 		5D68DDDCA7568693687089AD /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/SwiftUI.framework; sourceTree = DEVELOPER_DIR; };
 		5DCACB8F33CDC322A6C60F78 /* libPods-ByeMobile.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-ByeMobile.a"; sourceTree = BUILT_PRODUCTS_DIR; };
-		A1B2C3D40000000000000001 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SceneDelegate.swift; path = ByeMobile/SceneDelegate.swift; sourceTree = "<group>"; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = ByeMobile/AppDelegate.swift; sourceTree = "<group>"; };
 		7AAC33FE0767C2E743D458C0 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = ByeMobile/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		85BD064BFBF54C923578CA60 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		875D16FACF412A2FE9D575E4 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		8A34535627E413CB2471B548 /* ByeShare.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ByeShare.entitlements; sourceTree = "<group>"; };
 		A0631239F62240D58030494E /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/WidgetKit.framework; sourceTree = DEVELOPER_DIR; };
+		A1B2C3D40000000000000001 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SceneDelegate.swift; path = ByeMobile/SceneDelegate.swift; sourceTree = "<group>"; };
 		B984B300713DC67C658011CD /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		C51AF4FB1A2D81FE94B124BD /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
-		DFDA905E45D8512120079A15 /* ByeWidgetBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeMobile/ByeWidgetBridge.swift; sourceTree = "<group>"; };
 		DB7BE4A5A5D9FF3490F01EB5 /* ByeSecureStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeMobile/ByeSecureStore.swift; sourceTree = "<group>"; };
+		DFDA905E45D8512120079A15 /* ByeWidgetBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeMobile/ByeWidgetBridge.swift; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
-		29367ADE0DB5695444FE7E43 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		85BD064BFBF54C923578CA60 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -621,6 +621,10 @@
 				);
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-DRCT_REMOVE_LEGACY_ARCH=1",
+				);
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(OTHER_CFLAGS)",
 					"-DFOLLY_NO_CONFIG",
@@ -628,7 +632,9 @@
 					"-DFOLLY_USE_LIBCPP=1",
 					"-DFOLLY_CFG_NO_COROUTINES=1",
 					"-DFOLLY_HAVE_CLOCK_GETTIME=1",
+					"-DRCT_REMOVE_LEGACY_ARCH=1",
 				);
+				PODFILE_DIR = "$(SRCROOT)";
 				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
@@ -689,6 +695,10 @@
 					"\"$(inherited)\"",
 				);
 				MTL_ENABLE_DEBUG_INFO = NO;
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-DRCT_REMOVE_LEGACY_ARCH=1",
+				);
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(OTHER_CFLAGS)",
 					"-DFOLLY_NO_CONFIG",
@@ -696,7 +706,9 @@
 					"-DFOLLY_USE_LIBCPP=1",
 					"-DFOLLY_CFG_NO_COROUTINES=1",
 					"-DFOLLY_HAVE_CLOCK_GETTIME=1",
+					"-DRCT_REMOVE_LEGACY_ARCH=1",
 				);
+				PODFILE_DIR = "$(SRCROOT)";
 				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
 				SDKROOT = iphoneos;
 				USE_HERMES = true;

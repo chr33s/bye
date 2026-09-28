@@ -201,7 +201,7 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
 
   // Three distinct kinds of link: an instance handoff (validate + confirm, never auto-save), an
   // OAuth callback (only the current session's attempt, never navigation), or navigation.
-  const onUrl = useRef<(url: string | null) => Promise<void>>(async () => undefined);
+  const onUrl = useRef<(url: string | null | undefined) => Promise<void>>(async () => undefined);
   onUrl.current = async (url) => {
     if (!url) return;
     const handoff = parseInstanceHandoff(url);
@@ -217,7 +217,7 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
 
   useEffect(() => {
     if (!booted) return;
-    const handle = (url: string | null) => void onUrl.current(url);
+    const handle = (url: string | null | undefined) => void onUrl.current(url);
     void Linking.getInitialURL().then(handle);
     const sub = Linking.addEventListener("url", ({ url }) => handle(url));
     void platform.urls?.initial().then(handle);
@@ -531,11 +531,11 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
 /** The app root every shell renders: global error hook plus a boundary around the whole tree. */
 export const ByeApp = ({ platform }: { platform: Platform }) => {
   useEffect(installNativeErrorHandler, []);
-  // Dark status bar text on Paper (mobile only; desktop has no status bar).
+  // Dark status bar text on Paper (mobile only; desktop has no status bar). Android draws
+  // edge-to-edge, so the status bar is transparent over the Paper background.
   useEffect(() => {
     if (RNPlatform.OS === "ios" || RNPlatform.OS === "android")
       StatusBar.setBarStyle("dark-content");
-    if (RNPlatform.OS === "android") StatusBar.setBackgroundColor(colors.bg);
   }, []);
   return (
     <ErrorBoundary>

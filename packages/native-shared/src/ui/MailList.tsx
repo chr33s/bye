@@ -170,7 +170,7 @@ export const MailList = ({
         data={data}
         keyExtractor={(item, i) => (item.kind === "thread" ? item.thread.threadId : `h${i}`)}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
-        ListHeaderComponent={header ?? null}
+        ListHeaderComponent={header ?? undefined}
         onEndReachedThreshold={0.5}
         onEndReached={() => void loadMore()}
         ListFooterComponent={
@@ -180,7 +180,7 @@ export const MailList = ({
             <View style={s.pad}>
               <Button label="Load more" onPress={() => void loadMore()} />
             </View>
-          ) : null
+          ) : undefined
         }
         ListEmptyComponent={
           loading ? (
