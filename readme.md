@@ -11,6 +11,10 @@
 - **Client apps:** a PWA, CLI/TUI, and React Native apps for mobile and desktop.
 - **Open source:** the code is available here for you to inspect and run.
 
+https://github.com/user-attachments/assets/ba2b19e1-0675-4500-9c8d-58ff4973fe1c
+
+Source for the demo reel: [`demo-reel/`](./demo-reel)
+
 ---
 
 The product and architecture are specified in [`spec.md`](./spec.md); this repository implements that design on Cloudflare primitives. Alchemy v2 beta defines the deployment, which has not yet been run against Cloudflare.
