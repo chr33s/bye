@@ -375,6 +375,40 @@ describe("admin routes", () => {
       // The closed account's session no longer works.
       expect((await call(h, ana, "GET", "/v1/me")).status).toBe(401);
     });
+
+    it("[§12] closing an account queues erasure, which then tombstones and starts the workflow", async () => {
+      const ana = await signup(h, "ana@bye.test");
+      const bob = await signup(h, "bob@bye.test");
+      // Refused closures (address mismatch) start nothing.
+      await call(h, ana, "POST", "/v1/account/close", { confirmAddress: "x@bye.test" });
+      expect(h.queues.PROPAGATE.messages).toEqual([]);
+
+      const closed = await call(h, ana, "POST", "/v1/account/close", {
+        confirmAddress: "ana@bye.test",
+      });
+      expect(closed.status).toBe(200);
+      expect(h.queues.PROPAGATE.messages).toHaveLength(1);
+      expect(h.queues.PROPAGATE.messages[0]).toMatchObject({
+        topic: "account.erase",
+        payload: { userId: ana.userId, reason: "account closed" },
+      });
+      await h.drain();
+      expect(h.workflows.ERASE_ACCOUNT?.map((w) => w.id)).toEqual([`erase-${ana.userId}`]);
+      expect(
+        await count(
+          h,
+          "SELECT COUNT(*) AS n FROM erasure_tombstones WHERE resource_kind = 'mailbox' AND resource_id = ?",
+          ana.mailboxId,
+        ),
+      ).toBe(1);
+      expect(
+        await count(
+          h,
+          "SELECT COUNT(*) AS n FROM erasure_tombstones WHERE resource_id = ?",
+          bob.mailboxId,
+        ),
+      ).toBe(0);
+    });
   });
 
   describe("team member administration", () => {

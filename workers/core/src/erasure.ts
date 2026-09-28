@@ -101,9 +101,10 @@ export const planErasure = async (
     .bind(userId)
     .all<{ id: string }>()
     .catch(() => ({ results: [] as Array<{ id: string }> }));
-  const handle = user?.primary_address
-    ? await ownedWorldHandle(env, userId, user.primary_address)
-    : null;
+  // Closure rewrites the address to `released:<userId>:<address>`; recover the original so the
+  // World handle is still found when erasure is started by closure.
+  const address = user?.primary_address.replace(`released:${userId}:`, "");
+  const handle = address ? await ownedWorldHandle(env, userId, address) : null;
   return {
     v: 1,
     userId,
@@ -113,6 +114,29 @@ export const planErasure = async (
     worldHandle: handle,
     reason,
   };
+};
+
+/**
+ * Queue erasure for a closed account (`account.erase`, handled in topics/ops.ts). The durable queue
+ * retries `startErasure`, so a transient failure cannot leave a closed account unerased.
+ */
+export const requestErasure = async (
+  env: CoreEnv,
+  userId: string,
+  reason: string,
+): Promise<void> => {
+  await env.PROPAGATE.send(
+    {
+      schemaVersion: 1,
+      type: "propagate",
+      eventId: `account-erase:${userId}`,
+      topic: "account.erase",
+      source: `account:${userId}`,
+      target: userId,
+      payload: { topic: "account.erase", userId, reason },
+    },
+    { contentType: "json" },
+  );
 };
 
 /** Start erasure (callable by account closure and the operator route). Idempotent per user. */

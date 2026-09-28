@@ -2,6 +2,7 @@ import { MAX_MESSAGE_RECIPIENTS } from "@bye/contracts";
 import {
   type CancelResult,
   canTransition,
+  CLOUDFLARE_PERSONAL_CAPABILITIES,
   DEFAULT_UNDO_WINDOW_MS,
   domainOf,
   isCancellable,
@@ -163,6 +164,21 @@ export class MailboxSends {
           limit: options.limits.maxRecipients,
         });
     }
+    // Hosted senders go out over the Cloudflare adapter, which caps a message below the wire ceiling
+    // (`MAX_MESSAGE_RECIPIENTS`): refuse here, while the user can still edit, rather than have
+    // dispatch reject the job after the undo window.
+    const jobClass =
+      options.trafficClass ?? (identity.kind === "external" ? "external-identity" : "personal");
+    if (
+      !options.limits &&
+      !options.individually &&
+      jobClass === "personal" &&
+      envelope.length > CLOUDFLARE_PERSONAL_CAPABILITIES.maxRecipients
+    )
+      reject("bad_request", "too many recipients for transport", {
+        count: envelope.length,
+        limit: CLOUDFLARE_PERSONAL_CAPABILITIES.maxRecipients,
+      });
     this.drafts.freeze(draftId, d.revision, c);
     // Publishing honours the same undo window / Send Later time as the mail.
     const dueAt =

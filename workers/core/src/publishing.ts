@@ -74,14 +74,6 @@ export const worldFallbackHandle = async (address: string, base: string): Promis
 const page = (title: string, body: string) =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title></head><body>${body}</body></html>`;
 
-/** Newsletter-mail HTML (mail clients apply their own remote-image policy). */
-export const publicHtml = (html: string): string =>
-  sanitizeHtml(html, {
-    proxyImage: (url) => (url.startsWith("https://") ? url : null),
-    cid: () => null,
-    blockRemoteImages: false,
-  }).html;
-
 /** Remote images per published post routed through the proxy (beyond this they are dropped). */
 const MAX_PUBLIC_REMOTE_IMAGES = 200;
 

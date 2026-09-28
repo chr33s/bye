@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { handleQueueMessage } from "../src/consumers.ts";
-import { SCAN_MAX_ATTEMPTS } from "../src/scan.ts";
+import { SCAN_MAX_ATTEMPTS, ScannerContainer, SIGMIRROR_HOST } from "../src/scan.ts";
 import { makeHarness } from "./harness.ts";
 
 // Upload scanning through the (fake) isolated scanner container: pre-filter, verdicts, retries, fail closed.
@@ -91,5 +91,49 @@ describe("upload scanning via the scanner container", () => {
     h2.scanner.mode = "clean";
     await handleQueueMessage(h2.env, m2, 2);
     expect(u2.status()).toBe("clean");
+  });
+});
+
+describe("scanner container egress", () => {
+  const start = async (env: Record<string, unknown>) => {
+    const started: Array<{ enableInternet?: boolean; env?: Record<string, string> }> = [];
+    const intercepted: Array<string> = [];
+    let running = false;
+    const container = {
+      get running() {
+        return running;
+      },
+      start: (options: { enableInternet?: boolean; env?: Record<string, string> }) => {
+        started.push(options);
+        running = true;
+      },
+      interceptOutboundHttp: async (host: string) => void intercepted.push(host),
+      setInactivityTimeout: async () => undefined,
+      getTcpPort: () => ({ fetch: async () => new Response("{}") }),
+    };
+    const scanner = new ScannerContainer({ container } as never, env as never);
+    await scanner.fetch(new Request("http://scanner/scan", { method: "POST", body: "x" }));
+    return { started, intercepted };
+  };
+
+  it("[E20] the scanner starts with internet disabled, with or without the signature mirror", async () => {
+    const mirror = { fetch: async () => new Response("ok") };
+    for (const env of [{}, { SIGMIRROR: mirror }]) {
+      const { started } = await start(env);
+      expect(started).toHaveLength(1);
+      // Strictly false: an omitted flag would fall back to the platform default (egress allowed).
+      expect(started[0]!.enableInternet).toBe(false);
+    }
+  });
+
+  it("[E20] signatures come only through the intercepted mirror host, never a real one", async () => {
+    const mirror = { fetch: async () => new Response("ok") };
+    const withMirror = await start({ SIGMIRROR: mirror });
+    expect(withMirror.intercepted).toEqual([SIGMIRROR_HOST]);
+    expect(withMirror.started[0]!.env).toEqual({
+      SIGNATURE_MIRROR_URL: `http://${SIGMIRROR_HOST}`,
+    });
+    expect(SIGMIRROR_HOST).toMatch(/\.internal$/);
+    expect((await start({})).intercepted).toEqual([]);
   });
 });

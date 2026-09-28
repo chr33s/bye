@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import { approveNewsletter, ledgerOf, runNewsletter } from "../src/newsletter.ts";
+import { FanoutWorkflow } from "../src/workflows/fanout.ts";
 import { newsletterSealKeys, sealField } from "../src/newsletter-config.ts";
 import { authConfig } from "../src/services.ts";
 import { type Harness, makeHarness } from "./harness.ts";
@@ -235,6 +236,57 @@ describe("[P02] newsletters (§5.5)", () => {
     expect((await pass()).blocked).toBe("newsletter provider not qualified for this stage");
     expect(resend.calls).toEqual([]);
     expect(h.sent).toEqual([]);
+  });
+
+  describe("FanoutWorkflow transport gate", () => {
+    const runFanout = async () => {
+      const instance = h.workflows.FANOUT?.find((w) => w.id.startsWith(`fan-ana-${postId}-r`));
+      expect(instance).toBeDefined();
+      const executed: Array<string> = [];
+      const step = {
+        do: async (name: string, ...args: ReadonlyArray<unknown>) => (
+          executed.push(name),
+          (args.at(-1) as () => Promise<unknown>)()
+        ),
+        sleep: async () => undefined,
+      };
+      const result = await new FanoutWorkflow({} as never, h.env).run(
+        { payload: instance!.params, instanceId: instance!.id, timestamp: new Date() } as never,
+        step as never,
+      );
+      return { result, executed };
+    };
+
+    it("sends nothing until a qualified provider approves it, and never through individual mail", async () => {
+      vi.stubGlobal("fetch", resend.fetchFn);
+      try {
+        let r = await runFanout();
+        expect(r.result).toEqual({ blocked: "no newsletter provider configured" });
+        expect(r.executed.some((n) => n.startsWith("v2:pass"))).toBe(false);
+        configure(h, "");
+        r = await runFanout();
+        expect(r.result).toEqual({ blocked: "newsletter provider not qualified for this stage" });
+        expect(resend.calls).toEqual([]);
+        expect(h.sent).toEqual([]);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("when qualified, approves one publication and submits it through the provider only", async () => {
+      vi.stubGlobal("fetch", resend.fetchFn);
+      try {
+        configure(h);
+        const r = await runFanout();
+        expect(r.executed).toContain("v2:approve");
+        expect(r.executed).toContain("v2:pass:0");
+        expect(r.result).toMatchObject({ blocked: null });
+        expect([...resend.broadcasts.values()]).toHaveLength(1);
+        expect(h.sent).toEqual([]);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 
   it("syncs creator-scoped topic consent, then creates, verifies and sends one broadcast", async () => {

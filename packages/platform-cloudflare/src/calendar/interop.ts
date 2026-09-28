@@ -1,11 +1,11 @@
 import {
-  calDurationBetween,
   calEndFor,
   type CalException,
   type CalIcsEvent,
   calNormAddress,
   calParseCalendar,
   calRecurrenceKey,
+  calSeriesDuration,
   calSerializeCalendar,
 } from "@bye/calendar-engine";
 import { bool, json } from "../durable/sql.ts";
@@ -46,7 +46,7 @@ export abstract class CalendarInterop extends CalendarPlanner {
           alarms: r.alarms,
         };
         out.push(base);
-        const duration = calDurationBetween(r.series.dtstart, r.series.dtend);
+        const duration = calSeriesDuration(r.series);
         for (const e of r.exceptions.filter((x) => !x.cancelled)) {
           const recurrenceId = this.timeFromKey(r.series, e.recurrenceKey);
           const start = e.start ?? recurrenceId;

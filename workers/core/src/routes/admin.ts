@@ -57,6 +57,7 @@ import {
 import { kernelClock } from "../durable-host.ts";
 import type { CoreEnv } from "../env.ts";
 import { errorResponse, route, type Route } from "../http.ts";
+import { requestErasure } from "../erasure.ts";
 import { sendSystemEmail } from "../publishing.ts";
 import {
   onboardingDeps,
@@ -1279,6 +1280,8 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
           reserveAddressDays: terms.reserveAddressDays,
           forwardingDays: terms.forwardingDays,
         });
+        // Closure starts erasure (§12); it runs from the durable queue so it is retried on failure.
+        yield* Effect.promise(() => requestErasure(env, principal.userId, "account closed"));
         const forwarding: Array<{ address: string; pending: boolean }> = [];
         if (forwardTo && terms.forwardingDays > 0) {
           for (const address of closed.reserved) {

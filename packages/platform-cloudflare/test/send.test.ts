@@ -296,6 +296,51 @@ describe("send intents", () => {
   });
 });
 
+describe("recipient caps", () => {
+  const many = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ name: undefined, address: `r${i}@example.com` }));
+
+  it("[E18] a send over the Cloudflare adapter's 50 combined recipients is refused up front with a clear error", () => {
+    const m = setup();
+    // The contract allows up to 100 across to/cc/bcc, so these drafts are valid.
+    const { draftId } = m.draft("first@example.com", {
+      to: many(20),
+      cc: many(20).map((a) => ({ ...a, address: `c${a.address}` })),
+      bcc: many(11).map((a) => ({ ...a, address: `b${a.address}` })),
+    });
+    const err = (() => {
+      try {
+        m.store.sends.send(draftId, { expectedRevision: 1 });
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(err).toMatchObject({
+      code: "bad_request",
+      message: /too many recipients for transport/,
+    });
+    expect(err).toMatchObject({ details: { count: 51, limit: 50 } });
+    // The draft is untouched, still editable and sendable once trimmed.
+    const content = m.store.drafts.draft(draftId)!.content;
+    expect(
+      m.store.drafts.saveDraft(draftId, 1, { ...content, to: many(20), cc: [], bcc: [] }),
+    ).toEqual({ _tag: "Saved", revision: 2 });
+    expect(m.store.sends.send(draftId, { expectedRevision: 2 })._tag).toBe("Queued");
+  });
+
+  it("[E18] exactly 50 is accepted; 100 hits the same refusal; individually splits past the cap", () => {
+    const m = setup();
+    const at = (n: number, extra: Record<string, unknown> = {}) =>
+      m.draft("x@example.com", { to: many(n), ...extra });
+    expect(m.store.sends.send(at(50).draftId, { expectedRevision: 1 })._tag).toBe("Queued");
+    expect(() => m.store.sends.send(at(100).draftId, { expectedRevision: 1 })).toThrow(
+      /too many recipients for transport/,
+    );
+    const r = m.store.sends.send(at(100).draftId, { expectedRevision: 1, individually: true });
+    expect(m.queued(r).sendJobIds).toHaveLength(100);
+  });
+});
+
 describe("dispatch through Effect v4 layers", () => {
   const run = (m: ReturnType<typeof setup>, id: string, transport: Layer.Layer<MailTransport>) =>
     Effect.runPromise(

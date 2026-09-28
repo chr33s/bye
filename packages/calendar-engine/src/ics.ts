@@ -1,7 +1,7 @@
 import { calNormAddress } from "./address.ts";
 import { calParseRRule, CalRRuleError, calSerializeRRule } from "./rrule.ts";
 import type { CalEventData, CalSeries } from "./series.ts";
-import { calEndFor, type CalTime } from "./time.ts";
+import { type CalDuration, calEndFor, type CalTime } from "./time.ts";
 import { calAddDays, calIsValidTimeZone, calWallClock, calZonedToInstant } from "./tz.ts";
 
 // Tolerant iCalendar (RFC 5545) reader and conservative writer (§9, C05, A04).
@@ -362,10 +362,13 @@ const parseEvent = (c: CalIcsComponent, ctx: CalParseContext): CalIcsEvent | und
   const dtendProp = first(c, "DTEND");
   const durationProp = first(c, "DURATION");
   let dtend: CalTime;
+  let nominal: CalDuration | undefined;
   if (dtendProp) {
     dtend = calParseTimeValue(dtendProp.value, dtendProp.params, ctx);
   } else if (durationProp) {
-    dtend = calEndForIcsDuration(dtstart, calParseDurationParts(durationProp.value));
+    const parts = calParseDurationParts(durationProp.value);
+    dtend = calEndForIcsDuration(dtstart, parts);
+    if (parts.days > 0) nominal = { kind: "nominal", days: parts.days, ms: parts.ms };
   } else {
     dtend = dtstart.kind === "date" ? { kind: "date", date: calAddDays(dtstart.date, 1) } : dtstart;
   }
@@ -430,7 +433,16 @@ const parseEvent = (c: CalIcsComponent, ctx: CalParseContext): CalIcsEvent | und
       ? calParseTimeValue(recurrenceProp.value, recurrenceProp.params, ctx)
       : undefined,
     thisAndFuture: recurrenceProp?.params.RANGE?.toUpperCase() === "THISANDFUTURE",
-    series: { uid, dtstart, dtend, rule, rdates: multi("RDATE"), exdates: multi("EXDATE"), data },
+    series: {
+      uid,
+      dtstart,
+      dtend,
+      rule,
+      rdates: multi("RDATE"),
+      exdates: multi("EXDATE"),
+      ...(nominal ? { duration: nominal } : {}),
+      data,
+    },
     organizer: organizerProp
       ? { address: calNormAddress(organizerProp.value), name: organizerProp.params.CN }
       : undefined,

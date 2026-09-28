@@ -105,10 +105,15 @@ export const calCompareTimes = (a: CalTime, b: CalTime): number => {
   return calInstant(a) - calInstant(b);
 };
 
-/** Duration between start and end: milliseconds for timed, days for all-day. */
+/**
+ * Duration between start and end: milliseconds for timed, days for all-day. `nominal` is an
+ * RFC 5545 DURATION with weeks/days: whole days follow the wall clock (P1D across a DST change is
+ * 23h or 25h), then the exact `ms` part is added.
+ */
 export type CalDuration =
   | { readonly kind: "ms"; readonly ms: number }
-  | { readonly kind: "days"; readonly days: number };
+  | { readonly kind: "days"; readonly days: number }
+  | { readonly kind: "nominal"; readonly days: number; readonly ms: number };
 
 export const calDurationBetween = (start: CalTime, end: CalTime): CalDuration => {
   if (start.kind === "date" && end.kind === "date")
@@ -125,8 +130,20 @@ export const calDurationBetween = (start: CalTime, end: CalTime): CalDuration =>
 export const calEndFor = (start: CalTime, duration: CalDuration): CalTime => {
   if (start.kind === "date") {
     const days =
-      duration.kind === "days" ? duration.days : Math.max(1, Math.round(duration.ms / 86_400_000));
-    return { kind: "date", date: calAddDays(start.date, days) };
+      duration.kind === "days"
+        ? duration.days
+        : duration.kind === "nominal"
+          ? duration.days + Math.round(duration.ms / 86_400_000)
+          : Math.max(1, Math.round(duration.ms / 86_400_000));
+    return { kind: "date", date: calAddDays(start.date, Math.max(1, days)) };
+  }
+  if (duration.kind === "nominal") {
+    const local = { ...start.local, ...calAddDays(start.local, duration.days) };
+    return {
+      kind: "timed",
+      tzid: start.tzid,
+      local: calWallClock(calZonedToInstant(local, start.tzid) + duration.ms, start.tzid),
+    };
   }
   const ms = duration.kind === "ms" ? duration.ms : duration.days * 86_400_000;
   return {

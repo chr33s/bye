@@ -22,7 +22,7 @@ import { escapeHtml } from "./html.ts";
 import { metric } from "./metrics.ts";
 import { loadRuntimeNewsletterConfig } from "./newsletter-config.ts";
 import { origins } from "./origins.ts";
-import { publicHtml } from "./publishing.ts";
+import { publicSiteHtml } from "./publishing.ts";
 
 // Newsletter engine (spec.md §5.5). Drives a creator's provider work from the
 // ledger in its WorldDO: audience mapping, contact sync, then the open publication's
@@ -125,13 +125,13 @@ interface PostContent {
  * The broadcast body: one content for every recipient. Unsubscribe is the provider's per-recipient
  * link, scoped to this creator's topic; no Bye-issued token can be personalised in a broadcast.
  */
-export const renderNewsletter = (env: CoreEnv, handle: string, post: PostContent) => {
+export const renderNewsletter = async (env: CoreEnv, handle: string, post: PostContent) => {
   const { publicOrigin: origin, serviceDomain: domain } = origins(env);
   const online = `${origin}/@${handle}/${post.slug}`;
   return {
     from: `@${handle} <world@${domain}>`,
     subject: post.title,
-    html: `${publicHtml(post.html)}<hr><p><a href="${escapeHtml(online)}">Read online</a> · <a href="${RESEND_UNSUBSCRIBE_PLACEHOLDER}">Unsubscribe from @${escapeHtml(handle)}</a></p>`,
+    html: `${await publicSiteHtml(env, post.html)}<hr><p><a href="${escapeHtml(online)}">Read online</a> · <a href="${RESEND_UNSUBSCRIBE_PLACEHOLDER}">Unsubscribe from @${escapeHtml(handle)}</a></p>`,
     text: `${post.text}\n\n—\nRead online: ${online}\nUnsubscribe from @${handle}: ${RESEND_UNSUBSCRIBE_PLACEHOLDER}`,
   };
 };
@@ -139,7 +139,7 @@ export const renderNewsletter = (env: CoreEnv, handle: string, post: PostContent
 const fingerprint = async (
   postId: string,
   revision: number,
-  message: ReturnType<typeof renderNewsletter>,
+  message: Awaited<ReturnType<typeof renderNewsletter>>,
   scheduledAt: number | null,
 ) =>
   sha256Hex(
@@ -164,7 +164,7 @@ export const approveNewsletter = async (
   if (setup._tag === "Blocked") return { blocked: setup.reason };
   if (setup.dispatchBlocked) return { blocked: setup.dispatchBlocked };
   const post = await loadPost(env, handle, postId, revision);
-  const message = renderNewsletter(env, handle, post);
+  const message = await renderNewsletter(env, handle, post);
   return ledgerOf(env, handle)("approve", {
     ...setup.config,
     postId,
@@ -360,7 +360,7 @@ export const advancePublication = async (
     });
 
   const post = await loadPost(env, handle, p.postId, p.revision);
-  const message = renderNewsletter(env, handle, post);
+  const message = await renderNewsletter(env, handle, post);
   if ((await fingerprint(p.postId, p.revision, message, p.scheduledAt)) !== p.fingerprint)
     return hold("content no longer matches the approved publication");
 

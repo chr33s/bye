@@ -1227,8 +1227,8 @@ describe("signup, publishing and webhooks", () => {
     expect((await call(h, carl, "GET", "/v1/world")).body.publishAddress).toBe("world@bye.test");
   });
 
-  it("[P02] subscriber mail embeds sanitized author HTML", () => {
-    const { html: raw } = renderNewsletter(h.env, "ana", {
+  it("[P02] subscriber mail embeds sanitized author HTML", async () => {
+    const { html: raw } = await renderNewsletter(h.env, "ana", {
       slug: "hi",
       title: "Hi",
       html: `<p>ok</p><script>steal()</script><img src="x" onerror="steal()">`,
@@ -1237,6 +1237,19 @@ describe("signup, publishing and webhooks", () => {
     expect(raw).toContain("ok");
     expect(raw).not.toMatch(/<script/i);
     expect(raw).not.toMatch(/onerror/i);
+  });
+
+  it("newsletter mail proxies remote images through the signed image proxy", async () => {
+    const { html } = await renderNewsletter(h.env, "ana", {
+      slug: "hi",
+      title: "Hi",
+      html: `<p>x</p><img src="https://tracker.example/p.png" alt="a"><img src="http://plain.example/q.png" alt="b">`,
+      text: "x",
+    });
+    expect(html).not.toContain("tracker.example");
+    expect(html).not.toContain("plain.example");
+    expect(html).toContain(`${h.env.MAIL_ORIGIN}/img?u=`);
+    expect(html).toMatch(/&amp;s=/);
   });
 });
 

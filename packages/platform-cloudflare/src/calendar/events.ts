@@ -5,7 +5,6 @@ import {
   calBuildCancel,
   calBuildReply,
   calBuildRequest,
-  calDurationBetween,
   calEndFor,
   type CalException,
   calExpand,
@@ -21,6 +20,7 @@ import {
   type CalRRule,
   type CalSeries,
   calReminderRecheckAt,
+  calSeriesDuration,
   calSplitSeries,
   calStartOfDay,
   type CalTime,
@@ -518,9 +518,7 @@ export abstract class CalendarEvents extends CalendarBase {
         const { revision } = this.writeEvent(next, false);
         if (weAreOrganizer && significant) {
           const start = exception.start ?? original;
-          const end =
-            exception.end ??
-            calEndFor(start, calDurationBetween(current.series.dtstart, current.series.dtend));
+          const end = exception.end ?? calEndFor(start, calSeriesDuration(current.series));
           const occurrence: CalSeries = {
             ...current.series,
             dtstart: start,

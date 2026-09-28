@@ -424,6 +424,58 @@ describe("MailCore wiring", () => {
     }
   });
 
+  it("[E18] a dispatch that loses the claim race hands its budget reservation back", async () => {
+    enablePersonalMail(h);
+    const counted = async () =>
+      Number(
+        (
+          await h.env.DIRECTORY.prepare(
+            "SELECT COALESCE(SUM(sent), 0) AS n FROM sending_counters WHERE scope = 'identity'",
+          ).first<{ n: number }>()
+        )?.n ?? 0,
+      );
+    const ana = await signup(h, "ana@bye.test");
+    await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
+      _tag: "AddIdentity",
+      commandId: cmdId(),
+      address: "ana@bye.test",
+      kind: "hosted",
+    });
+    const draft = await api(h, ana, "POST", "/v1/drafts", {
+      mailboxId: ana.mailboxId,
+      commandId: cmdId(),
+      content: {
+        to: [{ address: "bob@example.net" }],
+        cc: [],
+        bcc: [],
+        subject: "Race",
+        text: "claimed elsewhere",
+        attachments: [],
+      },
+    });
+    await api(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
+      mailboxId: ana.mailboxId,
+      commandId: cmdId(),
+      revision: draft.body.revision,
+    });
+    const mailbox = h.namespaces.MAILBOXES.instance(ana.mailboxId) as unknown as {
+      claim: (id: string) => unknown;
+      alarm: () => Promise<void>;
+    };
+    let reservedAtClaim = -1;
+    mailbox.claim = async () => {
+      // Policy already said Proceed and reserved; another consumer wins the claim.
+      reservedAtClaim = await counted();
+      return null;
+    };
+    vi.setSystemTime(Date.now() + 60_000);
+    await mailbox.alarm();
+    await h.drain();
+    expect(reservedAtClaim).toBe(1);
+    expect(await counted()).toBe(0);
+    expect(h.sent.filter((m) => m.from === "ana@bye.test")).toEqual([]);
+  });
+
   it("[E19] hosted identities require directory send-as authority", async () => {
     const ana = await signup(h, "ana@bye.test");
     await signup(h, "bob@bye.test");

@@ -1097,6 +1097,86 @@ describe("shared propagation cleanup", () => {
       .first<{ state: string }>();
     expect(row?.state).toBe("dropped");
   });
+
+  it("[§6] with several live targets, only pending rows of this delivery outside the key list are dropped", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    await handleInbound(
+      inboundMessage(
+        "bob@example.net",
+        "ana@bye.test",
+        rfc822({
+          from: "bob@example.net",
+          to: "ana@bye.test",
+          subject: "Shared",
+          body: "hi",
+          messageId: "sp1@example.net",
+        }),
+      ),
+      h.env,
+    );
+    await h.drain();
+    const store = (
+      h.namespaces.MAILBOXES.instance(ana.mailboxId) as unknown as {
+        store: { ctx: { sql: { all<T>(sql: string, ...p: Array<unknown>): Array<T> } } };
+      }
+    ).store;
+    const [msg] = store.ctx.sql.all<{ thread_id: string; delivery_id: string }>(
+      "SELECT thread_id, delivery_id FROM deliveries",
+    );
+    const { thread_id: threadId, delivery_id: deliveryId } = msg!;
+    // A live extension target and two live include-future shares: three keys bind as one list.
+    const registry = new ControlSharedRegistry(h.env.DIRECTORY, kernelClock);
+    await registry.registerExtension(ana.mailboxId, "spc_live", "ext@bye.test");
+    const now = Date.now();
+    for (const [spaceId, sharedThreadId] of [
+      ["spc_a", "sth_a"],
+      ["spc_b", "sth_b"],
+    ] as const)
+      await registry.registerSharedThread({
+        mailboxId: ana.mailboxId,
+        threadId,
+        spaceId,
+        sharedThreadId,
+        includeFuture: true,
+      });
+    const insert = (
+      key: string,
+      space: string,
+      mailboxId: string,
+      delivery: string,
+      state: string,
+    ) =>
+      h.d1
+        .prepare(
+          `INSERT INTO shared_propagation (event_key, space_id, kind, shared_thread_id, mailbox_id, thread_id, delivery_id, state, attempts, created_at, updated_at)
+           VALUES (?, ?, 'reply', NULL, ?, ?, ?, ?, 0, ?, ?)`,
+        )
+        .bind(key, space, mailboxId, threadId, delivery, state, now, now)
+        .run();
+    await insert(`reply:spc_a:${deliveryId}`, "spc_a", ana.mailboxId, deliveryId, "pending");
+    await insert(`reply:spc_b:${deliveryId}`, "spc_b", ana.mailboxId, deliveryId, "pending");
+    await insert(`reply:spc_gone:${deliveryId}`, "spc_gone", ana.mailboxId, deliveryId, "pending");
+    await insert(`reply:spc_done:${deliveryId}`, "spc_done", ana.mailboxId, deliveryId, "applied");
+    await insert("reply:spc_gone:dlv_other", "spc_gone", ana.mailboxId, "dlv_other", "pending");
+    await insert(`reply:spc_gone:${deliveryId}:x`, "spc_gone", "mbx_other", deliveryId, "pending");
+    // Live targets are applied (never dropped by the key-list filter); a failing extension is tolerated.
+    await propagateDelivery(h.env, ana.mailboxId, threadId, deliveryId).catch(() => undefined);
+    const states = Object.fromEntries(
+      (
+        await h.d1
+          .prepare("SELECT event_key, state FROM shared_propagation")
+          .all<{ event_key: string; state: string }>()
+      ).results.map((r) => [r.event_key, r.state]),
+    );
+    expect(states[`reply:spc_gone:${deliveryId}`]).toBe("dropped");
+    expect(states[`reply:spc_a:${deliveryId}`]).toBe("applied");
+    expect(states[`reply:spc_b:${deliveryId}`]).toBe("applied");
+    // The extension target was recorded too (its unknown space is a final refusal, not the query).
+    expect(states).toHaveProperty([`extension:spc_live:${deliveryId}`]);
+    expect(states[`reply:spc_done:${deliveryId}`]).toBe("applied");
+    expect(states["reply:spc_gone:dlv_other"]).toBe("pending");
+    expect(states[`reply:spc_gone:${deliveryId}:x`]).toBe("pending");
+  });
 });
 
 describe("blob GC for sent bodies", () => {

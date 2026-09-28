@@ -1,6 +1,12 @@
 import { calFormatUtcStamp } from "./ics.ts";
 import { calCountBefore, calExpand, type CalRRule } from "./rrule.ts";
-import { calDurationBetween, calEndFor, calInstant, type CalTime } from "./time.ts";
+import {
+  type CalDuration,
+  calDurationBetween,
+  calEndFor,
+  calInstant,
+  type CalTime,
+} from "./time.ts";
 import { calAddDays, calDateToDays, calFormatDate, calStartOfDay } from "./tz.ts";
 
 // Event series, occurrence exceptions (RECURRENCE-ID), and deliberate "this and future" splits (§9).
@@ -24,6 +30,11 @@ export interface CalSeries {
   readonly rule?: CalRRule | undefined;
   readonly rdates?: ReadonlyArray<CalTime> | undefined;
   readonly exdates?: ReadonlyArray<CalTime> | undefined;
+  /**
+   * Set when the series was defined by an ICS DURATION with days/weeks: every occurrence then
+   * applies it in wall-clock time. Absent (all v1 data): the `dtend - dtstart` length is reused.
+   */
+  readonly duration?: CalDuration | undefined;
   readonly data: CalEventData;
 }
 
@@ -55,9 +66,13 @@ export interface CalWindow {
   readonly viewerZone?: string;
 }
 
+/** The series' per-occurrence duration: its nominal DURATION when set, else `dtend - dtstart`. */
+export const calSeriesDuration = (series: CalSeries): CalDuration =>
+  series.duration ?? calDurationBetween(series.dtstart, series.dtend);
+
 /** End of an occurrence starting at `start`, keeping the series' duration. */
 const endFor = (series: CalSeries, start: CalTime): CalTime =>
-  calEndFor(start, calDurationBetween(series.dtstart, series.dtend));
+  calEndFor(start, calSeriesDuration(series));
 
 const spanMs = (
   start: CalTime,
@@ -249,8 +264,11 @@ export const calApplySeriesChanges = (series: CalSeries, changes: CalSeriesChang
     (changes.start && !(changes.start.kind === "timed" && series.dtend.kind === "date")
       ? endFor(series, changes.start)
       : series.dtend);
+  // An explicit new end replaces a DURATION-defined length; otherwise it is kept.
+  const { duration, ...rest } = series;
   return {
-    ...series,
+    ...rest,
+    ...(duration && !changes.end ? { duration } : {}),
     dtstart: start,
     dtend: end,
     rule: changes.rule === null ? undefined : (changes.rule ?? series.rule),
