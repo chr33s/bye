@@ -31,6 +31,15 @@ export type { CoreEnv, PublicEnv } from "./resources/workers.ts";
 
 const optional = (name: string) => Config.String(name).pipe(Config.withDefault(""));
 
+// MailCore is in a Worker↔Container dependency cycle (Scanner/MimeParser front its DO classes), so
+// a plain downstream resolves `core.workerName` against its precreate placeholder, which has no
+// `queue` handler. Queue consumers created then fail QueueHandlerMissing once alchemy's ~60s retry
+// budget runs out while the container images build (issue #10). Actions wait for their upstreams'
+// terminal output, so routing the name through one gates consumers on MailCore's real upload.
+const UploadedScript = Alchemy.Action("UploadedScript", (input: { workerName: string }) =>
+  Effect.succeed(input.workerName),
+);
+
 export default Alchemy.Stack(
   "MailboxPlatform",
   {
@@ -92,6 +101,7 @@ export default Alchemy.Stack(
       install === undefined ? undefined : yield* makeRenderOrigin(stage, core, install);
 
     // Explicit consumer wiring for the native queue handler; one mechanism per subscription (§15.4).
+    const coreScript = yield* UploadedScript("MailCoreUploaded", { workerName: core.workerName });
     for (const name of QUEUE_NAMES) {
       const queue = yield* Queues[name];
       const dlq = yield* DeadLetters[name];
@@ -99,7 +109,7 @@ export default Alchemy.Stack(
       const ids = queueIds(name);
       yield* Cloudflare.Queues.Consumer(ids.consumer, {
         queueId: queue.queueId,
-        scriptName: core.workerName,
+        scriptName: coreScript,
         deadLetterQueue: dlq.queueName,
         settings: {
           batchSize: policy.batchSize,
@@ -113,7 +123,7 @@ export default Alchemy.Stack(
       // replay; the queue itself is never treated as the permanent record.
       yield* Cloudflare.Queues.Consumer(ids.deadLetterConsumer, {
         queueId: dlq.queueId,
-        scriptName: core.workerName,
+        scriptName: coreScript,
         settings: { ...DLQ_CONSUMER_POLICY },
       });
     }
@@ -131,7 +141,7 @@ export default Alchemy.Stack(
       yield* Cloudflare.Email.CatchAll("MailCatchAll", {
         zone: routedZone,
         enabled: true,
-        actions: [{ type: "worker", value: [core.workerName] }],
+        actions: [{ type: "worker", value: [coreScript] }],
       }).pipe(persistent);
     }
 

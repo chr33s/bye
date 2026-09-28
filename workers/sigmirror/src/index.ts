@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { handleMirror, type MirrorEnv } from "./mirror.ts";
+import { handleMirror, JOB_TIMEOUT_MS, MIRROR_HOST, type MirrorEnv } from "./mirror.ts";
 
 // SigMirror Worker. Hosts the private ClamAV mirror (R2) and the scheduled mirror job, a
 // cvdupdate container that is the single audited internet-egress point for signatures.
@@ -9,11 +9,6 @@ export interface SigMirrorEnv extends MirrorEnv {
   readonly SIGNATURES: R2Bucket & MirrorEnv["SIGNATURES"];
   readonly MIRROR_JOB: DurableObjectNamespace<SigMirrorJob>;
 }
-
-/** Internal hostname the containers use; outbound HTTP to it is intercepted, never resolved. */
-export const MIRROR_HOST = "sigmirror.internal";
-/** Upper bound on one job run (a cold full download is ~300 MB). */
-export const JOB_TIMEOUT_MS = 30 * 60_000;
 
 /**
  * Container-backed DO that runs one cvdupdate pass. Internet is enabled only for this container

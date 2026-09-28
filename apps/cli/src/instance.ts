@@ -6,6 +6,7 @@ import {
   type StoredConfig,
   type TargetEnv,
   TargetError,
+  targetOptions,
   withInstance,
   withoutInstance,
 } from "./config.ts";
@@ -147,7 +148,7 @@ export const runInstance = async (
         fetch: deps.fetch,
         clientId: CLI_CLIENT_ID,
         redirectUri: null,
-        privateNetwork: deps.env.BYE_PRIVATE_NETWORK === "allow" ? "allow" : "block",
+        ...targetOptions(deps.env),
       });
       if (result._tag !== "Valid") {
         deps.stderr(

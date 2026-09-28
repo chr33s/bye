@@ -98,6 +98,8 @@ export interface ProbeOptions {
   readonly clientId: string;
   readonly redirectUri: string | null;
   readonly privateNetwork?: PrivateNetworkPolicy;
+  /** Development only: see NormalizeOptions.insecureLoopback. */
+  readonly insecureLoopback?: boolean;
   readonly timeoutMs?: number;
   readonly maxBytes?: number;
   readonly now?: () => number;
@@ -181,19 +183,24 @@ const getJson = async (url: string, options: ProbeOptions): Promise<Fetched> => 
 const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
 
 /** RFC 8414 §3.1: the well-known segment goes between the host and the issuer's path. */
-export const metadataUrlFor = (issuer: string): string => {
-  const n = normalizeInstanceUrl(issuer, { privateNetwork: "allow" });
+export const metadataUrlFor = (issuer: string, insecureLoopback = false): string => {
+  const n = normalizeInstanceUrl(issuer, { privateNetwork: "allow", insecureLoopback });
   if (!n.ok) throw new Error("invalid issuer");
   return `${n.origin}${AS_METADATA_WELL_KNOWN}${n.path}`;
 };
 
 /** An https endpoint on exactly `origin` (query allowed on the authorization endpoint only). */
-const endpointOn = (value: unknown, origin: string, allowQuery = false): string | null => {
+const endpointOn = (
+  value: unknown,
+  origin: string,
+  allowQuery = false,
+  insecureLoopback = false,
+): string | null => {
   const s = str(value);
   if (!s || s.length > 2048 || s.includes("#")) return null;
   const [base, query] = s.split("?", 2) as [string, string | undefined];
   if (query !== undefined && !allowQuery) return null;
-  const n = normalizeInstanceUrl(base, { privateNetwork: "allow" });
+  const n = normalizeInstanceUrl(base, { privateNetwork: "allow", insecureLoopback });
   if (!n.ok || n.origin !== origin) return null;
   return query === undefined ? n.url : `${n.url}?${query}`;
 };
@@ -203,7 +210,10 @@ export const probeInstance = async (
   options: ProbeOptions,
 ): Promise<ProbeResult> => {
   const policy = options.privateNetwork ?? "block";
-  const target = normalizeInstanceUrl(candidate, { privateNetwork: policy });
+  const insecureLoopback = options.insecureLoopback === true;
+  const parse = (url: string) =>
+    normalizeInstanceUrl(url, { privateNetwork: policy, insecureLoopback });
+  const target = parse(candidate);
   if (!target.ok) return { _tag: "Invalid", reason: "invalid-url", detail: target.reason };
 
   const doc = await getJson(`${target.url}${INSTANCE_DOCUMENT_PATH}`, options);
@@ -212,7 +222,7 @@ export const probeInstance = async (
   if (d.schema !== INSTANCE_SCHEMA) return { _tag: "Invalid", reason: "unsupported-schema" };
 
   // The canonical base URL must be the one probed; a different one is a move, never a merge.
-  const canonical = normalizeInstanceUrl(str(d.baseUrl) ?? "", { privateNetwork: policy });
+  const canonical = parse(str(d.baseUrl) ?? "");
   if (!canonical.ok) return { _tag: "Invalid", reason: "not-an-instance" };
   if (canonical.url !== target.url) return { _tag: "Moved", location: canonical.url };
 
@@ -252,12 +262,12 @@ export const probeInstance = async (
   )
     return { _tag: "Invalid", reason: "client-not-registered", detail: options.clientId };
 
-  const issuerUrl = normalizeInstanceUrl(str(d.issuer) ?? "", { privateNetwork: policy });
+  const issuerUrl = parse(str(d.issuer) ?? "");
   if (!issuerUrl.ok) return { _tag: "Invalid", reason: "invalid-issuer" };
   const issuer = issuerUrl.url;
 
   // Endpoints come only from the issuer-derived metadata location, never from the candidate.
-  const meta = await getJson(metadataUrlFor(issuer), options);
+  const meta = await getJson(metadataUrlFor(issuer, insecureLoopback), options);
   if (meta._tag !== "Json")
     return meta._tag === "Invalid" && meta.reason === "not-an-instance"
       ? { _tag: "Invalid", reason: "invalid-metadata" }
@@ -272,11 +282,16 @@ export const probeInstance = async (
   )
     return { _tag: "Invalid", reason: "invalid-metadata", detail: "S256" };
 
-  const authorization = endpointOn(m.authorization_endpoint, issuerUrl.origin, true);
-  const token = endpointOn(m.token_endpoint, issuerUrl.origin);
+  const authorization = endpointOn(
+    m.authorization_endpoint,
+    issuerUrl.origin,
+    true,
+    insecureLoopback,
+  );
+  const token = endpointOn(m.token_endpoint, issuerUrl.origin, false, insecureLoopback);
   if (!authorization || !token) return { _tag: "Invalid", reason: "foreign-endpoint" };
   const optional = (v: unknown): string | null | false =>
-    v === undefined ? null : (endpointOn(v, issuerUrl.origin) ?? false);
+    v === undefined ? null : (endpointOn(v, issuerUrl.origin, false, insecureLoopback) ?? false);
   const revocation = optional(m.revocation_endpoint);
   const deviceAuthorization = optional(m.device_authorization_endpoint);
   if (revocation === false || deviceAuthorization === false)
@@ -288,7 +303,7 @@ export const probeInstance = async (
     const s = str(v);
     if (!s || s.length > 2048) return null;
     const [base] = s.split(/[?#]/, 1) as [string];
-    const n = normalizeInstanceUrl(base, { privateNetwork: policy });
+    const n = parse(base);
     return n.ok && (n.origin === target.origin || n.origin === issuerUrl.origin) ? s : null;
   };
 

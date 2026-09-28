@@ -1,4 +1,4 @@
-// Usage: guard-stage.ts <deploy|destroy> <stage>
+// Usage: guard-stage.ts <deploy|destroy|plan|dev> <stage>
 // Refuses invalid stage names and any destroy outside preview/dev stages (§15.6: never run
 // unconditional production destroy). Preview cleanup still reviews the deletion set.
 import { classifyStage } from "../resources/stage.ts";
@@ -14,7 +14,11 @@ export const guard = (
   if (result._tag === "Invalid") errors.push(result.reason);
   else if (op === "destroy" && result.stage.persistent)
     errors.push(`refusing to destroy persistent stage ${stageName}`);
-  if (op !== "deploy" && op !== "destroy" && op !== "plan") errors.push(`unknown operation ${op}`);
+  // `alchemy dev` runs the stack in local workerd but records it in the stage's state, so it is
+  // kept to personal dev-<id> stages (its own default, dev_${USER}, is not a valid stage name).
+  else if (op === "dev" && result.stage.class !== "dev")
+    errors.push(`alchemy dev runs only on dev-<id> stages, not ${stageName}`);
+  if (!["deploy", "destroy", "plan", "dev"].includes(op)) errors.push(`unknown operation ${op}`);
   for (const k of missingTelemetryOptOuts(env)) errors.push(`set ${k} before running alchemy`);
   // Shared stages have exactly one serialized writer: the CI deploy job (§15.6), or — for a
   // self-hosted installation in the operator's own account — the onboarding service, which

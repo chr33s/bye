@@ -12,6 +12,7 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import { Config } from "effect";
 import type { SigMirrorJob as SigMirrorJobClass } from "../../workers/sigmirror/src/index.ts";
 import { COMPATIBILITY } from "./compat.ts";
+import { devServer } from "./dev.ts";
 import type { StageInfo } from "./stage.ts";
 
 /** ClamAV asks mirrors to update a few times a day at most; off-peak minute, three runs/day. */
@@ -42,6 +43,7 @@ export const makeSigMirror = (_stage: StageInfo) =>
   Cloudflare.Worker("SigMirror", {
     main: "./workers/sigmirror/src/index.ts",
     compatibility: COMPATIBILITY,
+    ...devServer("SigMirror"),
     // Reachable only through service bindings (MailCore's scanner containers) — never publicly.
     workersDev: false,
     crons: [...SIGMIRROR_CRONS],

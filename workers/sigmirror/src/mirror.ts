@@ -45,6 +45,14 @@ export interface MirrorEnv {
   readonly READ_TOKEN?: string;
 }
 
+// Constants live here, not in index.ts: workerd treats every export of the entry module as an
+// entrypoint, and rejects non-handler values (a number or string) at startup.
+
+/** Internal hostname the containers use; outbound HTTP to it is intercepted, never resolved. */
+export const MIRROR_HOST = "sigmirror.internal";
+/** Upper bound on one job run (a cold full download is ~300 MB). */
+export const JOB_TIMEOUT_MS = 30 * 60_000;
+
 /** Database file names freshclam and cvdupdate use; nothing else is ever stored or served. */
 const DB_NAME = /^[a-z][a-z0-9_]{0,63}(-[0-9]{1,8})?\.(cvd|cld|cdiff|dat|txt)(\.sign)?$/;
 const STATE_KEY = "_state/state.json";

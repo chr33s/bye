@@ -43,6 +43,13 @@ describe("stage classes", () => {
     expect(guard("destroy", "staging", optOut)).toContain(
       "refusing to destroy persistent stage staging",
     );
+    expect(guard("dev", "dev-abc123def456", optOut)).toEqual([]);
+    expect(guard("dev", "preview-3", optOut)).toContain(
+      "alchemy dev runs only on dev-<id> stages, not preview-3",
+    );
+    expect(guard("dev", "prod", optOut)).toContain(
+      "alchemy dev runs only on dev-<id> stages, not prod",
+    );
     expect(guard("deploy", "preview-3", {})).toContain(
       "set ALCHEMY_TELEMETRY_DISABLED before running alchemy",
     );

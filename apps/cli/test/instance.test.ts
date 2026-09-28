@@ -143,6 +143,39 @@ describe("bye instance", () => {
     expect(bad.config).toBe(saved);
   });
 
+  it("add accepts a loopback http dev server with BYE_INSECURE_LOOPBACK=1, as BYE_API does", async () => {
+    const base = "http://localhost:1337";
+    const doc = {
+      schema: "bye.instance/1",
+      baseUrl: base,
+      issuer: base,
+      api: { min: 1, max: 1 },
+      capabilities: ["device-session", "authorization-response-iss"],
+      clients: [{ clientId: "bye-cli", redirectUris: [] }],
+    };
+    const meta = {
+      issuer: base,
+      authorization_endpoint: `${base}/oauth/authorize`,
+      token_endpoint: `${base}/oauth/token`,
+      code_challenge_methods_supported: ["S256"],
+      authorization_response_iss_parameter_supported: true,
+    };
+    const fetch: ProbeFetch = async (url) => {
+      const body =
+        url === `${base}/.well-known/bye-instance`
+          ? doc
+          : url === `${base}/.well-known/oauth-authorization-server`
+            ? meta
+            : null;
+      return { status: body ? 200 : 404, text: async () => JSON.stringify(body) };
+    };
+    const strict = deps(EMPTY_CONFIG, {}, fetch);
+    expect(await runInstance(["add", base], {}, strict.deps)).toBe(EXIT.usage);
+    const d = deps(EMPTY_CONFIG, { BYE_INSECURE_LOOPBACK: "1" }, fetch);
+    expect(await runInstance(["add", base], {}, d.deps)).toBe(EXIT.ok);
+    expect(d.config.instances[base]).toEqual({ issuer: base });
+  });
+
   it("use and remove act on saved instances only; login binds a token to one instance", async () => {
     const d = deps(saved);
     expect(await runInstance(["use", "https://x.example"], {}, d.deps)).toBe(EXIT.usage);

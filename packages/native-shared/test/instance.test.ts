@@ -79,6 +79,18 @@ describe("instance URL normalization", () => {
     expect(ok("https://192.168.1.10", { privateNetwork: "allow" })).toBe("https://192.168.1.10");
     expect(ok("https://8.8.8.8")).toBe("https://8.8.8.8");
   });
+
+  it("accepts plain http only for loopback hosts, and only when insecureLoopback is set", () => {
+    const dev = { insecureLoopback: true };
+    expect(ok("http://localhost:1337")).toBe("insecure-scheme");
+    expect(ok("http://LOCALHOST:1337/", dev)).toBe("http://localhost:1337");
+    expect(ok("http://127.0.0.1:80", dev)).toBe("http://127.0.0.1");
+    expect(ok("http://[::1]:8787", dev)).toBe("http://[::1]:8787");
+    for (const host of ["mail.example.com", "10.0.0.5", "127.0.0.2", "nas.local"])
+      expect(ok(`http://${host}`, dev), host).toBe("insecure-scheme");
+    // https keeps its normal private-network policy.
+    expect(ok("https://localhost", dev)).toBe("private-network");
+  });
 });
 
 describe("Open in Bye / QR handoff", () => {

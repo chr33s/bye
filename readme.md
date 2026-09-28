@@ -4,7 +4,7 @@
 
 ### _Say bye to what matters, and hey to the rest._
 
-**Bye** is an open-source email and calendar platform inspired by HEY. It is built in TypeScript on Cloudflare primitives, with Effect v4 and Alchemy. Core flows have been validated locally in Node and workerd; the project has not been deployed to Cloudflare or validated in production.
+**Bye** is an open-source email and calendar platform inspired by HEY. It is built in TypeScript on Cloudflare primitives, with Effect v4 and Alchemy. Core flows have been validated locally in Node, workerd and cloudflare in production.tmutmu
 
 - **Email:** Imbox, The Feed, The Paper Trail, sender screening, search, drafts and more.
 - **Calendar:** events, invitations, tasks, reminders and time tracking.
@@ -65,7 +65,14 @@ pnpm build:web       # build the PWA into apps/web/dist
 pnpm build:deploy    # PWA + MIME container bundle (run by deploy, deploy:plan and drift)
 pnpm exec bye --help
 pnpm exec bye instance add https://mail.example.com   # validate and save a self-hosted instance
+STAGE=dev-<id> pnpm dev   # whole stack in local workerd (alchemy dev), live reload
+pnpm preflight            # check Cloudflare credentials before anything else runs
+STAGE=<stage> pnpm logs   # fetch logs from a deployed stage (append -- --tail to follow)
 ```
+
+### Local development
+
+`pnpm dev` runs every Worker, Durable Object, D1 database, R2 bucket, KV namespace, queue and container locally through `alchemy dev`. MailCore serves the PWA and the API on one origin, `http://localhost:1337`. PublicSite uses 1338 and SigMirror 1339; a Worker fails to start rather than move to another port. Set `APP_ORIGIN=http://localhost:1337` so the instance document names that origin. `STAGE` must be `dev-<id>`: the guard refuses other stages, and alchemy's own default (`dev_$USER`) is not a valid stage name. Logs are written to `.alchemy/log/<stage>/<Resource>`. To point the CLI at it, use `BYE_INSECURE_LOOPBACK=1` with `BYE_API=http://localhost:1337` or `bye instance add http://localhost:1337`.
 
 Clients are not built per server. The apps and CLI default to the hosted service and can add any compatible instance: they validate its `/.well-known/bye-instance` document and RFC 8414 metadata without credentials, then sign in there with PKCE and an issuer-checked callback (RFC 9207). Onboarding hands off with `bye://add-instance?url=<https URL>`. In the CLI, `BYE_API` overrides the saved default for one invocation.
 

@@ -41,16 +41,17 @@ export class TargetError extends Error {
   override readonly name = "TargetError";
 }
 
-const LOOPBACK_HTTP = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?(\/[^?#]*)?$/i;
+/** Parser options for this environment; `bye instance add` probes with the same ones. */
+export const targetOptions = (env: TargetEnv) =>
+  ({
+    privateNetwork: env.BYE_PRIVATE_NETWORK === "allow" ? "allow" : "block",
+    insecureLoopback: env.BYE_INSECURE_LOOPBACK === "1",
+  }) as const;
 
 /** One normalization for every CLI address (the same parser the apps use). */
 export const normalizeTarget = (raw: string, env: TargetEnv = {}): string => {
   const input = raw.trim();
-  if (env.BYE_INSECURE_LOOPBACK === "1" && LOOPBACK_HTTP.test(input))
-    return input.replace(/\/+$/, "").toLowerCase();
-  const n = normalizeInstanceUrl(input, {
-    privateNetwork: env.BYE_PRIVATE_NETWORK === "allow" ? "allow" : "block",
-  });
+  const n = normalizeInstanceUrl(input, targetOptions(env));
   if (!n.ok)
     throw new TargetError(`invalid instance address ${JSON.stringify(input)}: ${n.reason}`);
   return n.url;

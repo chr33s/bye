@@ -25,6 +25,7 @@ import { ConfigCache, Directory, Exports, Originals, Parts, Published } from "./
 
 export { COMPATIBILITY } from "./compat.ts";
 import { COMPATIBILITY } from "./compat.ts";
+import { devServer } from "./dev.ts";
 
 /** Independent reconciliation (§6): catalog probe every 5 minutes; retention sweep daily. */
 export const CORE_CRONS = ["*/5 * * * *", "17 3 * * *"] as const;
@@ -240,6 +241,7 @@ export const makeCore = (
     ...(install === undefined ? {} : { name: workersDevNames(install).core }),
     main: "./workers/core/src/index.ts",
     compatibility: COMPATIBILITY,
+    ...devServer("MailCore"),
     workersDev: workersDevFor(stage, install),
     ...(domain === undefined ? {} : { domain }),
     // Web/PWA shell (X01). API paths fall through to the Worker; assets carry no secrets.
@@ -276,6 +278,7 @@ export const makePublic = (
     ...(install === undefined ? {} : { name: workersDevNames(install).site }),
     main: "./workers/public/src/index.ts",
     compatibility: COMPATIBILITY,
+    ...devServer("PublicSite"),
     workersDev: workersDevFor(stage, install),
     ...(domain === undefined ? {} : { domain }),
     logpush: false,
@@ -297,6 +300,7 @@ export const makeRenderOrigin = (
     name: workersDevNames(install).render,
     main: "./workers/core/src/render-origin.ts",
     compatibility: COMPATIBILITY,
+    ...devServer("RenderOrigin"),
     workersDev: workersDevFor(stage, install),
     logpush: false,
     observability: observabilityFor(stage),

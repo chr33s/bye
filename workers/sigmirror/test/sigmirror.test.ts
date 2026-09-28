@@ -1,13 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import worker, {
-  JOB_TIMEOUT_MS,
-  MIRROR_HOST,
-  SigMirrorJob,
-  type SigMirrorEnv,
-} from "../src/index.ts";
+import worker, { SigMirrorJob, type SigMirrorEnv } from "../src/index.ts";
 import {
   handleMirror,
   isDatabaseName,
+  JOB_TIMEOUT_MS,
+  MIRROR_HOST,
   type MirrorBucket,
   type MirrorEnv,
   parseRange,

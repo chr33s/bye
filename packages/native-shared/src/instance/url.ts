@@ -37,7 +37,12 @@ export interface NormalizeOptions {
   readonly privateNetwork?: PrivateNetworkPolicy;
   /** Manual entry only: `mail.example.com` means `https://mail.example.com`. Links never assume. */
   readonly assumeHttps?: boolean;
+  /** Development only (CLI `BYE_INSECURE_LOOPBACK=1`): accept plain http to localhost, 127.0.0.1
+   *  or [::1]. Never set by the apps; every other http address is still refused. */
+  readonly insecureLoopback?: boolean;
 }
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 const fail = (reason: InstanceUrlError): NormalizedInstanceUrl => ({ ok: false, reason });
 
@@ -95,8 +100,9 @@ export const normalizeInstanceUrl = (
   const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/.exec(withScheme);
   if (!m) return fail("malformed");
   const scheme = m[1]!.toLowerCase();
-  if (scheme === "http") return fail("insecure-scheme");
-  if (scheme !== "https") return fail("unsupported-scheme");
+  const insecure = scheme === "http" && options.insecureLoopback === true;
+  if (scheme === "http" && !insecure) return fail("insecure-scheme");
+  if (scheme !== "https" && !insecure) return fail("unsupported-scheme");
   const authority = m[2]!;
   if (authority.includes("@")) return fail("credentials");
   if (m[4] !== undefined) return fail("query");
@@ -110,8 +116,9 @@ export const normalizeInstanceUrl = (
     if (!/^\d{1,5}$/.test(hp[2])) return fail("invalid-port");
     port = Number(hp[2]);
     if (port < 1 || port > 65535) return fail("invalid-port");
-    if (port === 443) port = null;
+    if (port === (insecure ? 80 : 443)) port = null;
   }
+  if (insecure && !LOOPBACK_HOSTS.has(host)) return fail("insecure-scheme");
 
   let isPrivate: boolean;
   if (host.startsWith("[")) {
@@ -127,7 +134,7 @@ export const normalizeInstanceUrl = (
     if (/^(0x[0-9a-f]*|\d+)$/.test(labels.at(-1)!)) return fail("invalid-host");
     isPrivate = localName(host);
   }
-  if (isPrivate && options.privateNetwork !== "allow") return fail("private-network");
+  if (isPrivate && !insecure && options.privateNetwork !== "allow") return fail("private-network");
 
   const rawPath = m[3]!;
   const segments = rawPath.split("/").slice(1);
@@ -138,7 +145,7 @@ export const normalizeInstanceUrl = (
     if (/%(2f|5c|2e)/i.test(segment)) return fail("invalid-path");
   }
   const path = segments.length ? `/${segments.map(upperHex).join("/")}` : "";
-  const origin = `https://${host}${port === null ? "" : `:${port}`}`;
+  const origin = `${insecure ? "http" : "https"}://${host}${port === null ? "" : `:${port}`}`;
   return { ok: true, url: `${origin}${path}`, origin, host, port, path };
 };
 

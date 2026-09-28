@@ -1,10 +1,10 @@
 # Infrastructure runbook
 
-All commands use the pinned CLI through package scripts, which set `ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1` and run `infra/policies/guard-stage.ts` first. `deploy`, `deploy:plan` and `drift` also build the web client and the MIME container bundle (`pnpm build:deploy`: `build:web` + `build:mime`), because `containers/mime/Dockerfile` copies `dist/server.mjs`.
+All commands use the pinned CLI through package scripts, which set `ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1` and run `infra/policies/guard-stage.ts` first. `deploy`, `deploy:plan` and `drift` also build the web client and the MIME container bundle (`pnpm build:deploy`: `build:web` + `build:mime`), because `containers/mime/Dockerfile` copies `dist/server.mjs`. `pnpm dev` runs the stack locally (readme "Local development"; `dev-<id>` stages only). `STAGE=<stage> pnpm logs` reads a deployed stage's Worker logs; add `-- --tail` to follow them.
 
 ## Account prerequisites (pre-flight, before the first deploy to an account)
 
-Check each item in the dashboard for the target account (nonprod and prod separately) and record the result in the stage's change log. `check-config.ts` cannot see any of these.
+Check each item in the dashboard for the target account (nonprod and prod separately) and record the result in the stage's change log. `check-config.ts` cannot see any of these. First run `pnpm preflight` (`alchemy provider check-env --provider cloudflare`), which confirms the Cloudflare credentials resolve (`✓ Cloudflare`) before anything else runs. Without `--provider` it checks every provider alchemy knows.
 
 - [ ] **Workers Paid** plan: Durable Objects (SQLite), Queues, Workflows, Cron Triggers and Workers Logs persistence need it.
 - [ ] **Containers** enabled for the account (Scanner, MIME parser, SigMirror job). Container image pushes go to Cloudflare's registry during `alchemy deploy`; confirm the egress proxy allows them (`infra/policies/egress-proxy.ts`).
@@ -49,16 +49,17 @@ older screens say **Write**.
 
 For the application stack, grant these account permissions:
 
-| Permission               | Used for                                                                                             |
-| ------------------------ | ---------------------------------------------------------------------------------------------------- |
-| Account Settings Read    | Cloudflare account discovery by the provider.                                                        |
-| Workers Scripts Write    | MailCore, PublicSite and SigMirror Workers, including their bindings, Durable Objects and Workflows. |
-| Workers KV Storage Write | The ConfigCache namespace.                                                                           |
-| D1 Write                 | The Directory database.                                                                              |
-| Workers R2 Storage Write | Mail, export, published-content and ClamAV-signature buckets.                                        |
-| Queues Write             | Mail processing and dead-letter queues and consumers.                                                |
-| Containers Write         | Scanner, MIME parser and signature-update containers.                                                |
-| Turnstile Write          | The signup widget, when `APP_DOMAIN` is configured.                                                  |
+| Permission               | Used for                                                                                                                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Account Settings Read    | Cloudflare account discovery by the provider.                                                                                                                                                                 |
+| Workers Scripts Write    | MailCore, PublicSite and SigMirror Workers, including their bindings, Durable Objects and Workflows.                                                                                                          |
+| Workers KV Storage Write | The ConfigCache namespace.                                                                                                                                                                                    |
+| D1 Write                 | The Directory database.                                                                                                                                                                                       |
+| Workers R2 Storage Write | Mail, export, published-content and ClamAV-signature buckets.                                                                                                                                                 |
+| Queues Write             | Mail processing and dead-letter queues and consumers.                                                                                                                                                         |
+| Containers Write         | Scanner, MIME parser and signature-update containers.                                                                                                                                                         |
+| Turnstile Write          | The signup widget, when `APP_DOMAIN` is configured.                                                                                                                                                           |
+| Secrets Store Write      | Default state backend only: `Cloudflare.state()` bootstraps a secrets store. Without it, bootstrap fails with a bare `Unauthorized: Authentication error` (code 10000). Not needed with `STATE_BACKEND=http`. |
 
 The Worker `send_email` binding is part of the Worker deployment. The separate Email Sending API
 permission applies when calling Cloudflare's REST email API directly; this stack does not call that
@@ -96,6 +97,8 @@ production.
 - State is privileged operational data, separate from user data and exports. Keep encrypted checkpoints and the manifest per release (CI uploads `release-manifest.json` with the `release-<stage>-<sha>` artifact).
 - A manifest alone cannot restore encrypted state or mailbox data. Rehearse restore/adoption against the pinned backend each quarter.
 - Lost operator session / interrupted deploy: follow "Interrupted deploy" below. Never hand-edit state.
+- Inspect state read-only with the raw CLI (the scripts don't wrap it): `pnpm exec alchemy state list [path]` and `pnpm exec alchemy state read <path> [--recursive]`. Set the telemetry opt-outs first.
+- Retained resources: `prod`/`staging` data resources use `retain`, so removing or replacing them leaves the cloud resource in place. Such a resource is cleaned up only through an approved decommission (`infra/policies/decommissions.json`). Delete the cloud resource in the dashboard, then drop its record with `pnpm exec alchemy state delete <path>`, which deletes state records only and never cloud resources. `state delete` is the one sanctioned state edit, and only for a record whose resource is already gone.
 
 ## Interrupted deploy (failed-deploy recovery, §13)
 
@@ -142,7 +145,7 @@ The sending providers' dashboards can keep and show message content ("sent email
 - Secrets on previews: the `preview` and `preview-destroy` jobs run PR-head code (install scripts, `check-config.ts`, `build:deploy`, `deploy`), so every value they can resolve is readable by any same-repository PR author. Runtime application secrets (`SESSION_KEY`, `PROXY_SIGNING_KEY`, `PROBE_TOKEN`, the webhook secrets, `SIGMIRROR_WRITE_TOKEN`, `TURNSTILE_SECRET`, and every optional secret such as `OPS_TOKEN`, `CF_DNS_API_TOKEN`, `CF_CACHE_PURGE_TOKEN`, `ARC_SIGNING_KEY`, `SRS_SECRET`, `EXTERNAL_IDENTITY_SEAL_KEY`, push and provider API keys) must be **environment secrets only** (on `preview`, `staging-plan`, `staging`, `prod-plan`, `prod`), never repository-level or organization secrets, and the `preview` environment must hold distinct, preview-only values (never a staging/prod value). `ci.yml` maps only the required secrets and the sandboxed `SEND_EVENTS_WEBHOOK_SECRET` into the preview env and pins every other optional secret to `""` (`previewSecretOverreach`, `infra/tests/check-config.test.ts`); leave those names unset in the `preview` environment. Workflow edits in a PR can still name any secret the job can resolve, so the hosted scoping is the actual control: audit it (Settings → Secrets and variables → Actions → Repository secrets must list none of the runtime names) when setting up and after each rotation.
 - Turnstile on previews: each preview creates its own widget for its host, so set the preview environment's `TURNSTILE_SECRET` to Cloudflare's always-pass test secret (`1x0000000000000000000000000000000AA`); never a real secret.
 - Mail sandbox: every ephemeral stage (`preview-*`, `dev-*`) that holds a mail credential must set `MAIL_SANDBOX_DOMAINS` (the disposable test domains it may mail). `check-config.ts` refuses the deploy otherwise, and the CI `preview` and `steady` jobs map it from `vars.MAIL_SANDBOX_DOMAINS`.
-- Cleanup: `STAGE=preview-<n> pnpm destroy:preview`. The guard refuses `prod`/`staging`; review the deletion set before confirming.
+- Cleanup: `STAGE=preview-<n> pnpm destroy:preview`. The guard refuses `prod`/`staging`. The script passes `--yes` so CI can run it headlessly, so review the deletion set first, as CI does: `node --experimental-strip-types infra/policies/plan-export.ts plan-out destroy`, then `pnpm check:plan --mode destroy plan-out/plan-export.json`.
 
 ## Rollback
 
