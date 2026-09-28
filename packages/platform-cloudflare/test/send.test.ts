@@ -97,6 +97,13 @@ describe("drafts and composer", () => {
       to: [],
       forwardOf: deliveries[0]!.deliveryId,
     });
+    // A client save (which never carries forwardOf) keeps the link to the forwarded message.
+    const { forwardOf: _, ...edited } = fwd.content;
+    m.store.drafts.saveDraft(fwd.draftId, fwd.revision, {
+      ...edited,
+      to: [{ name: undefined, address: "x@example.com" }],
+    });
+    expect(m.store.drafts.draft(fwd.draftId)!.content.forwardOf).toBe(deliveries[0]!.deliveryId);
   });
 });
 

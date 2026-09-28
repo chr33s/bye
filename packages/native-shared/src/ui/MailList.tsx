@@ -23,9 +23,19 @@ interface Props {
   readonly onView: (view: MailView) => void;
   readonly onOpen: (threadId: string) => void;
   readonly refreshKey: number;
+  /** Shown above the threads (the Imbox's calendar cover panel, C09). */
+  readonly header?: React.ReactElement | null;
 }
 
-export const MailList = ({ client, mailboxId, view, onView, onOpen, refreshKey }: Props) => {
+export const MailList = ({
+  client,
+  mailboxId,
+  view,
+  onView,
+  onOpen,
+  refreshKey,
+  header,
+}: Props) => {
   const [items, setItems] = useState<ReadonlyArray<MailThreadSummaryWire>>([]);
   const [boundary, setBoundary] = useState(0);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -160,6 +170,7 @@ export const MailList = ({ client, mailboxId, view, onView, onOpen, refreshKey }
         data={data}
         keyExtractor={(item, i) => (item.kind === "thread" ? item.thread.threadId : `h${i}`)}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
+        ListHeaderComponent={header ?? null}
         onEndReachedThreshold={0.5}
         onEndReached={() => void loadMore()}
         ListFooterComponent={

@@ -1,0 +1,107 @@
+[
+  {
+    "organizer": {
+      "address": "",
+      "name": "\ud800"
+    },
+    "partstat": "NEEDS-ACTION",
+    "eventId": " ",
+    "calendarId": "|HE\"",
+    "uid": "0",
+    "summary": "",
+    "recurring": false,
+    "occurrenceKey": null,
+    "start": {
+      "kind": "timed",
+      "local": {
+        "year": 1,
+        "month": -6,
+        "day": -16,
+        "hour": 14,
+        "minute": -12,
+        "second": -6
+      },
+      "tzid": "5RQI"
+    },
+    "end": {
+      "kind": "date",
+      "date": {
+        "year": -2,
+        "month": -11,
+        "day": -2
+      }
+    },
+    "cancelled": false
+  },
+  {
+    "organizer": {
+      "address": "",
+      "name": "=MfI"
+    },
+    "partstat": "TENTATIVE",
+    "eventId": "O",
+    "calendarId": "\u0000",
+    "uid": "0",
+    "summary": "o",
+    "recurring": true,
+    "occurrenceKey": null,
+    "start": {
+      "kind": "date",
+      "date": {
+        "year": -14,
+        "month": -4,
+        "day": -2
+      }
+    },
+    "end": {
+      "kind": "timed",
+      "local": {
+        "year": 6,
+        "month": -12,
+        "day": 1,
+        "hour": -2,
+        "minute": 2,
+        "second": -15
+      },
+      "tzid": " "
+    },
+    "cancelled": true
+  },
+  {
+    "organizer": {
+      "address": " "
+    },
+    "partstat": "DECLINED",
+    "eventId": "=ux\"",
+    "calendarId": " ",
+    "uid": ",",
+    "summary": "",
+    "recurring": false,
+    "occurrenceKey": null,
+    "start": {
+      "kind": "timed",
+      "local": {
+        "year": 3,
+        "month": -14,
+        "day": -3,
+        "hour": -15,
+        "minute": -4,
+        "second": -1
+      },
+      "tzid": "]ufq"
+    },
+    "end": {
+      "kind": "timed",
+      "local": {
+        "year": 14,
+        "month": -7,
+        "day": 13,
+        "hour": 3,
+        "minute": -13,
+        "second": -10
+      },
+      "tzid": "N]hc"
+    },
+    "cancelled": true
+  }
+]

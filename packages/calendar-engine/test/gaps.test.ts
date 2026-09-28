@@ -315,3 +315,27 @@ describe("calParseTimeValue / calResolveTzid", () => {
     expect(calResolveTzid("")).toBeUndefined();
   });
 });
+
+describe("long COUNT rules", () => {
+  it("[C03] the last occurrence of a 30,000-day COUNT rule is still reachable", () => {
+    // DTSTART 2026-01-01 + 29,999 days = 2108-02-20, the last occurrence.
+    const w = { from: utc("2108-02-19T00:00:00"), to: utc("2108-02-23T00:00:00") };
+    expect(expandIso("FREQ=DAILY;COUNT=30000", "2026-01-01T09:00", "UTC", w)).toEqual([
+      "2108-02-19T09:00:00.000Z",
+      "2108-02-20T09:00:00.000Z",
+    ]);
+  });
+
+  it("[C03] sparse COUNT rules (Feb 29 yearly) reach far-future occurrences", () => {
+    // Leap days only: the 30th occurrence after 2028-02-29 falls on 2144-02-29.
+    const w = { from: utc("2144-01-01T00:00:00"), to: utc("2145-01-01T00:00:00") };
+    expect(
+      expandIso("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29;COUNT=30", "2028-02-29T09:00", "UTC", w),
+    ).toEqual(["2144-02-29T09:00:00.000Z"]);
+  });
+
+  it("[C03] COUNT above the supported bound is refused, not silently truncated", () => {
+    expect(() => calParseRRule("FREQ=DAILY;COUNT=100001")).toThrow(CalRRuleError);
+    expect(calParseRRule("FREQ=DAILY;COUNT=100000").count).toBe(100_000);
+  });
+});

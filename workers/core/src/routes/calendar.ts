@@ -13,6 +13,7 @@ import {
   calendarSearchLocations,
   calendarServeFeed,
   requireCalendar,
+  requireMailbox,
 } from "@bye/application";
 import { calParseDate } from "@bye/calendar-engine";
 import { ApiError, CALENDAR_PHOTO_KEY } from "@bye/contracts";
@@ -190,6 +191,29 @@ export const calendarRoutes: ReadonlyArray<Route<CoreEnv>> = [
         url.searchParams.get("q") ?? "",
         Number(url.searchParams.get("limit") ?? "25"),
       ).pipe(Effect.map((items) => ({ items }))),
+    ),
+  ),
+  // Invitations a delivered message carried (C09), with the owner's current answer and the
+  // occurrence key to answer a single occurrence. The caller must also be able to read the message.
+  route(
+    "GET",
+    "/v1/calendars/:id/invitations",
+    authed(({ params, url }) =>
+      Effect.gen(function* () {
+        const mailboxId = url.searchParams.get("mailboxId") ?? "";
+        const deliveryId = url.searchParams.get("deliveryId") ?? "";
+        if (!mailboxId || !deliveryId)
+          return yield* new ApiError({
+            code: "bad_request",
+            message: "mailboxId and deliveryId are required",
+          });
+        yield* requireMailbox(mailboxId, "read");
+        return yield* calendarReadQuery(params.id!, {
+          type: "Invitations",
+          mailboxId,
+          deliveryId,
+        });
+      }),
     ),
   ),
   route(

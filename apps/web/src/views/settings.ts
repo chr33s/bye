@@ -206,6 +206,15 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
           ],
           (v) => void setPref("undoWindowMs")(Number(v)),
         ),
+        select(
+          "Calendar panel in the Inbox",
+          String(p.calendarPanel === true),
+          [
+            ["false", "Hide"],
+            ["true", "Show today's agenda and next event"],
+          ],
+          (v) => void setPref("calendarPanel")(v === "true"),
+        ),
       ),
       quota
         ? h("p", {}, `Storage: ${formatSize(quota.usedBytes)} of ${formatSize(quota.limitBytes)}`)
@@ -432,7 +441,7 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
         field("Kind", idKind),
         h("button", { type: "submit" }, "Add identity"),
       ),
-      h("h2", {}, "Speakeasy"),
+      h("h2", {}, "Passcode"),
       h(
         "div",
         { class: "bulk" },
@@ -440,20 +449,20 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
           "button",
           {
             type: "button",
-            onclick: act("Speakeasy rotated", async () => {
+            onclick: act("Passcode rotated", async () => {
               const r = await mailCommand<{ secret?: string } | string>({
                 _tag: "RotateSpeakeasy",
               });
-              alert(`New Speakeasy code: ${typeof r === "string" ? r : (r.secret ?? "")}`);
+              alert(`New passcode: ${typeof r === "string" ? r : (r.secret ?? "")}`);
             }),
           },
-          "Rotate Speakeasy code",
+          "Rotate passcode",
         ),
         h(
           "button",
           {
             type: "button",
-            onclick: act("Speakeasy disabled", () => mailCommand({ _tag: "DisableSpeakeasy" })),
+            onclick: act("Passcode disabled", () => mailCommand({ _tag: "DisableSpeakeasy" })),
           },
           "Disable",
         ),

@@ -75,6 +75,7 @@ export const CALENDAR_ACCESS: { readonly [K in CalendarMessageType]: CalendarPol
   Search: "readable",
   Export: "readable",
   Changes: "readable",
+  Invitations: "owner",
   Preferences: "owner",
   WeekTasks: "owner",
   Habits: "owner",

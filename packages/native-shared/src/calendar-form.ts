@@ -268,7 +268,9 @@ export const updatePayload = (
       eventId,
       expectedRevision,
       scope,
-      ...(scope !== "series" && occurrenceKey ? { occurrenceKey } : {}),
+      // For the whole series, the occurrence tells the server which occurrence the form's times
+      // were edited from, so the series moves by the same amount (its first date is kept).
+      ...(occurrenceKey ? { occurrenceKey } : {}),
       changes: {
         start: c.start,
         end: c.end,

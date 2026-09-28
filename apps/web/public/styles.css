@@ -452,3 +452,32 @@ select {
   color: inherit;
   cursor: pointer;
 }
+.cover-panel {
+  margin: 0 0 1.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--surface);
+}
+.cover-panel summary {
+  font-weight: 700;
+  cursor: pointer;
+}
+.cover-panel h2 {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.95rem;
+}
+.cover-panel ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+.cover-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.cover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0.75rem 0 0;
+}

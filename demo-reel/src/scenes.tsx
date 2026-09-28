@@ -76,7 +76,7 @@ export const HeroScene = () => {
       <SceneHeader label="Open-source email + calendar · inspired by HEY" />
       <div className="hero-copy">
         <LineByLineSlide
-          text={"Say bye to what matters,\nand hey to the rest."}
+          text={"Mail and calendar\non your terms."}
           renderLine={(line) => {
             const [before, after] = line.split("bye");
             return after === undefined ? (
@@ -150,7 +150,7 @@ export const ScreenerScene = () => {
 
   return (
     <div className="scene">
-      <SceneHeader label="Screener · E01" />
+      <SceneHeader label="New Senders · E01" />
       <Title
         eyebrow="You decide who gets in"
         title="Unknown senders wait outside."
@@ -162,7 +162,7 @@ export const ScreenerScene = () => {
           <span className="window-dot" />
           <span className="window-dot" />
           <span className="mono" style={{ marginLeft: 8, color: "var(--muted)", fontSize: 10 }}>
-            Screener · 2 waiting
+            New Senders · 2 waiting
           </span>
         </div>
         <Row
@@ -187,7 +187,7 @@ export const ScreenerScene = () => {
           <span className="window-dot" />
           <span className="window-dot" />
           <span className="mono" style={{ marginLeft: 8, color: "var(--muted)", fontSize: 10 }}>
-            Imbox · New for you
+            Inbox · New for you
           </span>
         </div>
         <Row from="Maya Chen" subject="Notes from Thursday" />
@@ -221,7 +221,7 @@ export const ScreenerScene = () => {
 
 const piles = [
   {
-    title: "Imbox",
+    title: "Inbox",
     note: "New for you",
     left: 64,
     rows: [
@@ -231,7 +231,7 @@ const piles = [
     ],
   },
   {
-    title: "The Feed",
+    title: "Newsletters",
     note: "Newsletters, expanded",
     left: 452,
     rows: [
@@ -241,7 +241,7 @@ const piles = [
     ],
   },
   {
-    title: "The Paper Trail",
+    title: "Receipts",
     note: "Receipts + transactions",
     left: 840,
     rows: [
@@ -310,7 +310,7 @@ export const PilesScene = () => {
         {[
           ["Reply Later", "a queue that survives restarts"],
           ["Set Aside", "a reference pile, not the archive"],
-          ["Bubble Up", "return a thread when you need it"],
+          ["Follow Up", "return a thread when you need it"],
         ].map(([name, copy], index) => (
           <div
             className="node"

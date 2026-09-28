@@ -78,7 +78,6 @@ Everything that could be fixed in code has been removed from this list. What rem
 ### Needs a design decision or more work
 
 - [ ] **Native OAuth redirect.** Mobile and macOS still use the custom-scheme redirect `bye://oauth/callback`. Move to Universal Links or App Links on mobile (`ASWebAuthenticationSession` on iOS) and a loopback redirect on desktop; the sandboxed Mac app needs `com.apple.security.network.server`. This needs AASA and `assetlinks.json` hosting and a server redirect allowlist.
-- [ ] **Security review of native draft encryption.** `packages/native-shared/src/sealed-store.ts` uses a custom construction: HMAC-SHA256 in counter mode plus an HMAC tag, because Hermes has no WebCrypto. Get it reviewed, or replace it with a native AES-GCM module.
 - [ ] **Choose a crash reporter.** Web and native have a pluggable reporter (`setErrorReporter`), but it is a no-op by default. Install one, and upload `apps/web/sourcemaps/` and the dSYMs.
 - [ ] **Set up alerting.**
   - Add Cloudflare Notifications for Worker errors, queue backlog, DLQ depth and container failures.
@@ -95,8 +94,6 @@ Everything that could be fixed in code has been removed from this list. What rem
 ### Known limitations of the fixes
 
 - [ ] **Calendar contract validation.** Time zone and date bounds are checked in the store and dispatcher, not in `contracts/src/calendar.ts`, because the v1 golden fixtures contain invalid values. Tighten the schema when v2 contracts are introduced.
-- [ ] **ICS import isn't resumable.** A crash mid-import leaves earlier batches committed; a retry re-imports everything and upserts by UID, which is safe. A checkpoint needs a new CalendarDO migration and an optional `ImportIcs` contract field; decide whether the cursor is keyed by `commandId` or content hash, and when it clears.
-- [ ] **Very long COUNT rules.** Rules beyond about 20,000 periods can hide occurrences, because of the existing `calExpand` `maxPeriods` bound.
 
 ---
 

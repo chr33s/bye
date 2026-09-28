@@ -191,7 +191,8 @@ describe("calendar editor", () => {
       scope: "series",
       changes: { rrule: "FREQ=DAILY" },
     });
-    expect(series.ok && "occurrenceKey" in series.command).toBe(false);
+    // The occurrence anchors a whole-series time change (the server shifts the series by it).
+    expect(series.ok && series.command).toMatchObject({ occurrenceKey: "20261001T090000" });
   });
 
   it("[C01] week starts honour the first-weekday preference and month grids are whole weeks", () => {

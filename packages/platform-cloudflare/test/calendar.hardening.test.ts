@@ -442,4 +442,61 @@ describe("ICS import in bounded batches", () => {
     expect(again).toMatchObject({ imported: 0, updated: 250 });
     expect(count()).toBe(250);
   });
+
+  it("[C05] a retried import resumes after the last committed batch and reports whole-import totals", () => {
+    const ctx = setup();
+    const commandId = ctx.cmd();
+    const ics = many(250);
+    const input = { commandId, actor: ctx.owner, calendarId: ctx.calendarId, ics };
+    // Crash while committing the second batch: it rolls back, the first stays committed.
+    const run = ctx.store.sql.run.bind(ctx.store.sql);
+    let checkpoints = 0;
+    ctx.store.sql.run = (query, ...bindings) => {
+      if (query.includes("INSERT INTO cal_import_checkpoints") && ++checkpoints === 2)
+        throw new Error("crash");
+      return run(query, ...bindings);
+    };
+    expect(() => ctx.store.importIcs(input)).toThrow("crash");
+    ctx.store.sql.run = run;
+    const revision = (uid: string) =>
+      Number(
+        ctx.store.sql.one<{ revision: number }>(
+          "SELECT revision FROM cal_events WHERE uid = ?",
+          uid,
+        )?.revision ?? 0,
+      );
+    expect(revision("bulk-0@example.com")).toBeGreaterThan(0);
+    expect(revision("bulk-100@example.com")).toBe(0);
+    const firstBatch = revision("bulk-0@example.com");
+    // A different document under the same command ID is refused rather than mixed in.
+    expect(() => ctx.store.importIcs({ ...input, ics: many(250, "Other") })).toThrow(
+      /different document/,
+    );
+    const result = ctx.store.importIcs(input);
+    expect(result).toMatchObject({ imported: 250, updated: 0 });
+    expect(result.warnings.filter((w) => w.startsWith("broken@example.com"))).toHaveLength(1);
+    // The committed batch was not rewritten, and the checkpoint is gone with the receipt.
+    expect(revision("bulk-0@example.com")).toBe(firstBatch);
+    expect(
+      ctx.store.sql.one(
+        "SELECT 1 AS x FROM cal_import_checkpoints WHERE command_id = ?",
+        commandId,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("[C05] abandoned import checkpoints expire", () => {
+    const ctx = setup();
+    ctx.store.sql.run(
+      "INSERT INTO cal_import_checkpoints VALUES ('old', ?, 'h', 100, 100, 0, '[]', 0)",
+      ctx.calendarId,
+    );
+    ctx.store.importIcs({
+      commandId: ctx.cmd(),
+      actor: ctx.owner,
+      calendarId: ctx.calendarId,
+      ics: many(1),
+    });
+    expect(ctx.store.sql.one("SELECT 1 AS x FROM cal_import_checkpoints")).toBeUndefined();
+  });
 });

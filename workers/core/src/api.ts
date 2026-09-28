@@ -28,7 +28,7 @@ import { authenticate, bearer, requestId, serviceDomain } from "./routes/common.
 
 export { serviceDomain };
 
-const ALL_ROUTES = [
+export const ALL_ROUTES = [
   ...identityRoutes,
   ...mailRoutes,
   ...calendarRoutes,

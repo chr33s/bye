@@ -134,6 +134,96 @@ describe("a11y (axe-core 4.13.0, WCAG 2.1 A/AA)", () => {
     expect(violations).toEqual([]);
   });
 
+  it("[C09] imbox with the calendar cover panel", async () => {
+    const start = new Date();
+    start.setHours(23, 0, 0, 0);
+    const { window, violations } = await render("#/mail/imbox", (method, path) => {
+      if (path.endsWith("/preferences"))
+        return { status: 200, body: { preferences: { calendarPanel: true } } };
+      if (path.endsWith("/events"))
+        return {
+          status: 200,
+          body: {
+            schemaVersion: 1,
+            occurrences: [
+              {
+                eventId: "evt_1",
+                calendarId: "cal_a",
+                key: "k1",
+                startMs: start.getTime(),
+                endMs: start.getTime() + 1_800_000,
+                allDay: false,
+                data: { summary: "Standup" },
+              },
+            ],
+          },
+        };
+      return signedIn(method, path);
+    });
+    const panel = window.document.querySelector("aside.cover-panel");
+    expect(panel?.textContent).toContain("Standup");
+    expect(panel?.textContent).toContain("Open calendar");
+    expect(violations).toEqual([]);
+  });
+
+  it("[C09] thread with an invitation and create-event-from-message", async () => {
+    const { window, violations } = await render("#/thread/thr_1", (method, path) => {
+      if (path === "/v1/mailboxes/mbx_1/threads/thr_1")
+        return {
+          status: 200,
+          body: {
+            thread: { threadId: "thr_1", subject: "Invitation: Standup", revision: 1 },
+            deliveries: [
+              {
+                deliveryId: "dlv_1",
+                from: { address: "ana@example.net" },
+                date: Date.UTC(2026, 8, 25),
+                renderUrl: "https://mail.bye.test/r/1",
+                attachments: [],
+                scan: { status: "clean" },
+                routing: { hasCalendar: true, calendarMethod: "REQUEST" },
+              },
+            ],
+          },
+        };
+      if (path.endsWith("/invitations"))
+        return {
+          status: 200,
+          body: {
+            schemaVersion: 1,
+            invitations: [
+              {
+                eventId: "evt_1",
+                calendarId: "cal_a",
+                uid: "u1",
+                summary: "Standup",
+                recurring: true,
+                occurrenceKey: "20261012T090000",
+                start: { kind: "date", date: { year: 2026, month: 10, day: 12 } },
+                end: { kind: "date", date: { year: 2026, month: 10, day: 13 } },
+                cancelled: false,
+                organizer: { address: "ana@example.net" },
+                partstat: "DECLINED",
+              },
+            ],
+          },
+        };
+      return signedIn(method, path);
+    });
+    const invitation = window.document.querySelector('[aria-label="Invitation"]');
+    expect(invitation?.textContent).toContain("Standup (this occurrence)");
+    expect(invitation?.textContent).toContain("Declined");
+    expect([...(invitation?.querySelectorAll("button") ?? [])].map((b) => b.textContent)).toEqual([
+      "Accept",
+      "Maybe",
+      "Decline",
+    ]);
+    expect(window.document.querySelector("details summary")?.textContent).toBe(
+      "Create event from this message",
+    );
+    expect(violations).toEqual([]);
+  });
+
   it("compose", async () => {
     const { violations } = await render("#/compose", signedIn);
     expect(violations).toEqual([]);

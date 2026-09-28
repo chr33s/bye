@@ -1,10 +1,14 @@
 import {
   calAddDays,
   calApplySeriesChanges,
+  calAtTime,
   type CalAttendee,
   calBuildCancel,
   calBuildReply,
   calBuildRequest,
+  calDateOf,
+  calDateToDays,
+  calDaysToDate,
   calEndFor,
   type CalException,
   calExpand,
@@ -12,6 +16,7 @@ import {
   type CalIcsEvent,
   calInstant,
   calIsValidTimeZone,
+  type CalLocalDateTime,
   calNextReminder,
   calNormAddress,
   type CalPartstat,
@@ -84,6 +89,34 @@ const newAttendee = (person: CalPerson): CalAttendee => ({
   role: "REQ-PARTICIPANT",
   rsvp: true,
 });
+
+/**
+ * `time` moved by the same wall-clock amount that took `from` to `to` (days for all-day values,
+ * minutes for timed ones, keeping `to`'s zone). A change of kind can't be carried over: `to` wins.
+ */
+const shiftLike = (time: CalTime, from: CalTime, to: CalTime): CalTime => {
+  if (time.kind === "date" && from.kind === "date" && to.kind === "date")
+    return {
+      kind: "date",
+      date: calAddDays(time.date, calDateToDays(to.date) - calDateToDays(from.date)),
+    };
+  if (time.kind !== "timed" || from.kind !== "timed" || to.kind !== "timed") return to;
+  const minutes = (t: CalLocalDateTime) =>
+    calDateToDays(calDateOf(t)) * 1440 + t.hour * 60 + t.minute + t.second / 60;
+  const shifted = minutes(time.local) + minutes(to.local) - minutes(from.local);
+  const days = Math.floor(shifted / 1440);
+  const rest = shifted - days * 1440;
+  return {
+    kind: "timed",
+    tzid: to.tzid,
+    local: calAtTime(
+      calDaysToDate(days),
+      Math.floor(rest / 60),
+      Math.floor(rest % 60),
+      Math.round((rest * 60) % 60),
+    ),
+  };
+};
 
 export abstract class CalendarEvents extends CalendarBase {
   protected parseRule(rrule: string | undefined | null): CalRRule | undefined {
@@ -489,10 +522,27 @@ export abstract class CalendarEvents extends CalendarBase {
         : current.organizer;
       const weAreOrganizer = current.weAreOrganizer || (!current.organizer && attendees.length > 0);
       const sequence = weAreOrganizer && significant ? current.sequence + 1 : current.sequence;
+      // A whole-series time change made from one occurrence (the occurrence key names it) moves
+      // the series by the same wall-clock amount, rather than making that occurrence the first.
+      const anchorKey =
+        input.scope === "series" && current.series.rule ? input.occurrenceKey : undefined;
+      const anchor = anchorKey
+        ? current.exceptions.find((e) => e.recurrenceKey === anchorKey)
+        : undefined;
+      const anchorStart = anchorKey
+        ? (anchor?.start ?? this.timeFromKey(current.series, anchorKey))
+        : undefined;
+      const duration = calSeriesDuration(current.series);
+      const start =
+        c.start && anchorStart ? shiftLike(current.series.dtstart, anchorStart, c.start) : c.start;
+      const end =
+        c.end && anchorStart
+          ? shiftLike(current.series.dtend, anchor?.end ?? calEndFor(anchorStart, duration), c.end)
+          : c.end;
       // `null` (or an empty rule) removes the recurrence; `undefined` keeps it.
       const seriesChanges = {
-        start: c.start,
-        end: c.end,
+        start,
+        end,
         rule: c.rrule === null || c.rrule === "" ? null : this.parseRule(c.rrule),
         data: c.data,
       };
@@ -706,9 +756,22 @@ export abstract class CalendarEvents extends CalendarBase {
       input.from,
     );
     const viewerZone = input.viewerZone ?? this.zone;
-    return this.toRecords(rows)
-      .flatMap((record) =>
-        calExpandSeries(record.series, record.exceptions, {
+    const records = this.toRecords(rows);
+    // Invitation state is the owner's own business: shared readers see the event, not the answer.
+    const self = new Set(this.self);
+    const invited = new Map(
+      this.isOwner(input.actor)
+        ? records.flatMap((r) => {
+            const me = this.invitedAs(r, self);
+            return me ? [[r.id, me] as const] : [];
+          })
+        : [],
+    );
+    const answers = this.occurrenceResponses([...invited.keys()]);
+    return records
+      .flatMap((record) => {
+        const me = invited.get(record.id);
+        return calExpandSeries(record.series, record.exceptions, {
           from: input.from,
           to: input.to,
           viewerZone,
@@ -719,9 +782,44 @@ export abstract class CalendarEvents extends CalendarBase {
           highlight: record.highlight,
           countdown: record.countdown,
           revision: record.revision,
-        })),
-      )
+          ...(me
+            ? {
+                invitation: {
+                  organizer: record.organizer!,
+                  partstat: answers.get(`${record.id}\u0000${o.key}`) ?? me.partstat,
+                },
+              }
+            : {}),
+        }));
+      })
       .sort((a, b) => a.startMs - b.startMs || a.eventId.localeCompare(b.eventId));
+  }
+
+  // ---------------------------------------------------------------- invitation state (C04)
+
+  /**
+   * The owner's attendee entry when someone else organizes this event, else undefined. Pass
+   * `self` when checking many events, so the owner's addresses are normalized once.
+   */
+  protected invitedAs(
+    record: CalendarEventRecord,
+    self: ReadonlySet<string> = new Set(this.self),
+  ): CalAttendee | undefined {
+    if (record.weAreOrganizer || !record.organizer) return undefined;
+    return record.attendees.find((a) => self.has(a.address));
+  }
+
+  /** Per-occurrence answers for these events, keyed `eventId\0occurrenceKey`. */
+  protected occurrenceResponses(eventIds: ReadonlyArray<string>): Map<string, CalPartstat> {
+    if (eventIds.length === 0) return new Map();
+    return new Map(
+      this.sql
+        .all<{ event_id: string; occurrence_key: string; partstat: CalPartstat }>(
+          "SELECT event_id, occurrence_key, partstat FROM cal_occurrence_responses WHERE event_id IN (SELECT value FROM json_each(?))",
+          JSON.stringify(eventIds),
+        )
+        .map((r) => [`${r.event_id}\u0000${r.occurrence_key}`, r.partstat]),
+    );
   }
 
   // ---------------------------------------------------------------- reminders and jobs

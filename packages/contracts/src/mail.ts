@@ -79,10 +79,19 @@ export const MailDraftContent = Schema.Struct({
 );
 export type MailDraftContent = typeof MailDraftContent.Type;
 
+/** `if-no-reply` bubbles are cancelled by a qualifying reply (E09); absent means `always`. */
+export const MailBubbleCondition = Schema.Literals(["always", "if-no-reply"]);
+export type MailBubbleCondition = typeof MailBubbleCondition.Type;
+
 export const MailAfterSend = Schema.Union([
   Schema.TaggedStruct("None", {}),
   Schema.TaggedStruct("MarkDone", {}),
-  Schema.TaggedStruct("BubbleUp", { at: Timestamp }),
+  Schema.TaggedStruct("BubbleUp", {
+    at: Timestamp,
+    condition: Schema.optional(MailBubbleCondition),
+  }),
+  /** Send-and-pop: the reply resolves the bubble; the thread is not resurfaced (as ClearBubble). */
+  Schema.TaggedStruct("ClearBubble", {}),
 ]);
 
 const RuleConditions = Schema.Struct({
@@ -151,7 +160,7 @@ export const MailboxCommand = Schema.Union([
     flag: Schema.Literals(["replyLater", "setAside", "unfollowed"]),
     on: Schema.Boolean,
   }),
-  cmd("BubbleUp", { threadId: Id, at: Timestamp }),
+  cmd("BubbleUp", { threadId: Id, at: Timestamp, condition: Schema.optional(MailBubbleCondition) }),
   cmd("PinBubble", { threadId: Id }),
   cmd("PopBubble", { threadId: Id }),
   cmd("ClearBubble", { threadId: Id }),
@@ -306,7 +315,11 @@ export type MailViewQuery = typeof MailViewQuery.Type;
 
 export const MailBubble = Schema.Union([
   Schema.TaggedStruct("None", {}),
-  Schema.TaggedStruct("Scheduled", { at: Timestamp, generation: Revision }),
+  Schema.TaggedStruct("Scheduled", {
+    at: Timestamp,
+    generation: Revision,
+    condition: Schema.optional(MailBubbleCondition),
+  }),
   Schema.TaggedStruct("Pinned", {}),
 ]);
 
@@ -462,7 +475,7 @@ export const MailSendRequest = Schema.Struct({
   revision: Revision,
   sendAt: Schema.optional(Timestamp),
   individually: Schema.optional(Schema.Boolean),
-  /** Send-and-mark-done / send-and-bubble-up (E08/E09). */
+  /** Send-and-mark-done / send-and-bubble-up / send-and-pop (`ClearBubble`) (E08/E09). */
   afterSend: Schema.optional(MailAfterSend),
 });
 

@@ -6,9 +6,9 @@ It is isolated from the pnpm workspace and installs with npm.
 
 Storyboard (about 41 s, no voice-over, works muted):
 
-1. Hero: "Say bye to what matters. Say hey to the rest."
+1. Hero: "Mail and calendar on your terms."
 2. Screener: approve an unknown sender, it lands in the Imbox (E01, E04)
-3. Piles: Imbox, The Feed, The Paper Trail, Reply Later, Set Aside, Bubble Up
+3. Piles: Imbox, Newsletters, Receipts, Reply Later, Set Aside, Bubble Up
 4. Outbound: frozen draft → undo window → MIME → submit → record; `unknown` is never retried blindly
 5. Calendar: invitations from approved senders become events
 6. Clients: `bye instance add` validation and platform matrix

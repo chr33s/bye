@@ -1,4 +1,7 @@
 import { probeInstance, type ProbeFetch, PROBE_ERRORS } from "@bye/native-shared/instance";
+import { Effect } from "effect";
+import { Argument, Command } from "effect/unstable/cli";
+import { bool, CalendarFlag, Invocation, Json, MailboxFlag, opt } from "./args.ts";
 import { EXIT } from "./client.ts";
 import {
   normalizeTarget,
@@ -25,17 +28,6 @@ export interface InstanceDeps {
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
 }
-
-export const INSTANCE_HELP = [
-  "  bye instance [show]            effective target, where it came from, and whether a credential is saved",
-  "  bye instance list              saved instances",
-  "  bye instance add <url> [--select] [--token t]   validate a compatible instance and save it",
-  "  bye instance use <url>         make a saved instance the default",
-  "  bye instance remove <url>      forget an instance and its credential on this machine",
-  "  bye login --api <url> --token <token> [--mailbox id] [--calendar id]",
-  "",
-  "Target precedence: BYE_API (this invocation only), then the saved default, then hosted on first use.",
-];
 
 type Flags = Readonly<Record<string, string | boolean>>;
 const str = (flags: Flags, k: string) =>
@@ -203,7 +195,72 @@ export const runInstance = async (
       return EXIT.ok;
     }
     default:
-      deps.stderr(`unknown instance command: ${sub}\n\n${INSTANCE_HELP.join("\n")}`);
+      deps.stderr(`unknown instance command: ${sub}`);
       return EXIT.usage;
   }
 };
+
+// ---- commands ----
+
+/** Run a local command with this machine's config store; it reports its own exit code. */
+const local = (run: (deps: InstanceDeps, json: boolean) => Promise<number>) =>
+  Effect.gen(function* () {
+    const invocation = yield* Invocation;
+    const json = yield* Json;
+    const deps = invocation.instance;
+    if (!deps) {
+      invocation.stderr("instance configuration isn't available here");
+      return invocation.exit(EXIT.failure);
+    }
+    invocation.exit(yield* Effect.promise(() => run(deps, json)));
+  });
+
+const flags = (entries: Record<string, string | boolean | undefined>): Flags =>
+  Object.fromEntries(
+    Object.entries(entries).filter(([, v]) => v !== undefined && v !== false),
+  ) as Flags;
+
+const url = Argument.String("url");
+const show = (name: string) =>
+  Command.make(name, {}, () => local((deps, json) => runInstance(["show"], flags({ json }), deps)));
+
+export const LOCAL_COMMANDS = [
+  Command.make("login", { api: opt("api"), token: opt("token") }, ({ api, token }) =>
+    Effect.gen(function* () {
+      const mailbox = yield* MailboxFlag;
+      const calendar = yield* CalendarFlag;
+      yield* local((deps) => runLogin(flags({ api, token, mailbox, calendar }), deps));
+    }),
+  ).pipe(
+    Command.withDescription(
+      "Save a credential for an instance and select it (--api <url> --token <token> [--mailbox id] [--calendar id])",
+    ),
+  ),
+  show("instance").pipe(
+    Command.withDescription(
+      "Instances: the effective target, where it came from, and whether a credential is saved",
+    ),
+    Command.withSubcommands([
+      show("show").pipe(
+        Command.withDescription(
+          "Effective target, where it came from, and whether a credential is saved",
+        ),
+      ),
+      Command.make("list", {}, () =>
+        local((deps, json) => runInstance(["list"], flags({ json }), deps)),
+      ).pipe(Command.withDescription("Saved instances")),
+      Command.make(
+        "add",
+        { url, select: bool("select"), token: opt("token") },
+        ({ url, select, token }) =>
+          local((deps, json) => runInstance(["add", url], flags({ json, select, token }), deps)),
+      ).pipe(Command.withDescription("Validate a compatible instance and save it")),
+      Command.make("use", { url }, ({ url }) =>
+        local((deps, json) => runInstance(["use", url], flags({ json }), deps)),
+      ).pipe(Command.withDescription("Make a saved instance the default")),
+      Command.make("remove", { url }, ({ url }) =>
+        local((deps, json) => runInstance(["remove", url], flags({ json }), deps)),
+      ).pipe(Command.withDescription("Forget an instance and its credential on this machine")),
+    ]),
+  ),
+];

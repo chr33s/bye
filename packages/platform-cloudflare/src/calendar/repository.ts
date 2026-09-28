@@ -293,6 +293,11 @@ export const calendarRead = (
       );
     case "Search":
       return store.search(who, q.query, q.limit);
+    case "Invitations":
+      return {
+        schemaVersion: 1,
+        invitations: store.invitationsForMessage(q.mailboxId, q.deliveryId),
+      };
     case "Export":
       return store.exportIcs(who, q.calendarIds);
     case "Changes":
@@ -337,6 +342,19 @@ export const calendarOccurrenceWire = (o: CalendarOccurrenceView): OccurrenceWir
   highlight: o.highlight,
   countdown: o.countdown,
   revision: o.revision,
+  ...(o.invitation
+    ? {
+        invitation: {
+          organizer: {
+            address: o.invitation.organizer.address,
+            ...(o.invitation.organizer.name !== undefined
+              ? { name: o.invitation.organizer.name }
+              : {}),
+          },
+          partstat: o.invitation.partstat,
+        },
+      }
+    : {}),
   data: {
     summary: o.data.summary,
     ...(o.data.description !== undefined ? { description: o.data.description } : {}),

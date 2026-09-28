@@ -2,7 +2,8 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { EXIT, type FetchLike, makeCliApi, parseArgs, runCli } from "@bye/cli";
+import { EXIT, type FetchLike, makeCliApi, runCli } from "@bye/cli";
+import { invoke } from "../src/commands.ts";
 import { sanitize } from "../src/tui.ts";
 
 interface Call {
@@ -49,21 +50,26 @@ const harness = (respond: (call: Call) => { status: number; body: unknown }) => 
 };
 
 describe("CLI", () => {
-  it("[X02] parses flags, booleans and -- separators", () => {
-    expect(
-      parseArgs(["mail", "view", "imbox", "--limit", "5", "--json", "--", "--literal"]),
-    ).toEqual({
-      positionals: ["mail", "view", "imbox", "--literal"],
-      flags: { limit: "5", json: true },
-    });
-    expect(parseArgs(["instance", "add", "--select", "https://example.com"])).toEqual({
-      positionals: ["instance", "add", "https://example.com"],
-      flags: { select: true },
-    });
-    expect(parseArgs(["--verbose", "mail", "focus"])).toEqual({
-      positionals: ["mail", "focus"],
-      flags: { verbose: true },
-    });
+  it("[X02] parses flags anywhere, booleans and -- separators", async () => {
+    const h = harness(() => ({ status: 200, body: {} }));
+    expect(await h.run(["--json", "mail", "trash", "--mailbox", "mbx_2", "--", "-odd-id"])).toBe(
+      EXIT.ok,
+    );
+    expect(h.calls[0]!.url).toBe("https://api.test/v1/mailboxes/mbx_2/commands");
+    expect(h.calls[0]!.body).toMatchObject({ _tag: "MoveToTrash", threadIds: ["-odd-id"] });
+    // A `-term` before `--` is a flag, not text: a usage error with a hint, nothing sent.
+    expect(await h.run(["search", "invoice", "-spam"])).toBe(EXIT.usage);
+    expect(h.err.join("\n")).toContain("go after `--`");
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it("[X02] prints help on request and with no command", async () => {
+    const h = harness(() => ({ status: 200, body: {} }));
+    expect(await h.run(["--help"])).toBe(EXIT.ok);
+    expect(h.out.join("\n")).toContain("mail");
+    expect(await h.run(["mail", "view", "--help"])).toBe(EXIT.ok);
+    expect(await h.run([])).toBe(EXIT.usage);
+    expect(h.calls).toHaveLength(0);
   });
 
   it("[X02] lists a view with bearer credentials and machine-readable JSON output", async () => {
@@ -133,7 +139,7 @@ describe("CLI", () => {
     const h = harness(() => ({ status: 200, body: {} }));
     await h.run(["screen", "approve", "a@example.com", "--to", "feed", "--yes"]);
     await h.run(["workflow", "add", "brd_1", "thr_1"]);
-    await h.run(["search", '"exact', 'phrase"', "-spam", "from:a@example.com"]);
+    await h.run(["search", "--", '"exact', 'phrase"', "-spam", "from:a@example.com"]);
     await h.run([
       "cal",
       "events",
@@ -142,7 +148,7 @@ describe("CLI", () => {
       "--to",
       "2026-09-08T00:00:00Z",
     ]);
-    await h.run(["mail", "bubble", "thr_1", "--at", "2026-10-01T09:00:00Z"]);
+    await h.run(["mail", "follow-up", "thr_1", "--at", "2026-10-01T09:00:00Z"]);
     expect(h.calls.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
       "POST /v1/mailboxes/mbx_1/commands",
       "POST /v1/mailboxes/mbx_1/commands",
@@ -200,7 +206,7 @@ describe("CLI", () => {
     const h = harness(() => ({ status: 200, body: {} }));
     expect(await h.run(["frobnicate"])).toBe(EXIT.usage);
     expect(await h.run(["mail", "view", "nope"])).toBe(EXIT.usage);
-    expect(await h.run(["mail", "bubble", "thr_1", "--at", "not-a-date"])).toBe(EXIT.usage);
+    expect(await h.run(["mail", "follow-up", "thr_1", "--at", "not-a-date"])).toBe(EXIT.usage);
     // An invalid destination is a usage error before anything is sent (it used to reach the server).
     expect(await h.run(["screen", "approve", "a@example.com", "--to", "bogus", "--yes"])).toBe(
       EXIT.usage,
@@ -267,6 +273,74 @@ describe("CLI", () => {
       { schemaVersion: 1, commandId: expect.any(String), calendarIds: ["cal_1"], label: "Phone" },
     ]);
     expect(h.calls).toHaveLength(8);
+  });
+});
+
+describe("CLI review fixes", () => {
+  it("[X02] human output of untrusted text is terminal-safe and keeps its lines", async () => {
+    const h = harness(() => ({
+      status: 200,
+      body: { text: "hi\u001b]0;pwned\u0007\u001b[31m red\nsecond\u202e line" },
+    }));
+    expect(await h.run(["mail", "text", "dl/1"])).toBe(EXIT.ok);
+    // IDs are path segments, never extra path.
+    expect(new URL(h.calls[0]!.url).pathname).toBe("/v1/mailboxes/mbx_1/deliveries/dl%2F1/text");
+    expect(h.out[0]).toBe("text: hi red\nsecond line");
+  });
+
+  it("[X02] invalid event windows are usage errors; follow-ups count from the send time", async () => {
+    const h = harness(() => ({ status: 200, body: {} }));
+    expect(await h.run(["cal", "events", "--from", "garbage"])).toBe(EXIT.usage);
+    expect(h.calls).toHaveLength(0);
+    const at = "2030-01-01T00:00:00Z";
+    expect(
+      await h.run(["draft", "send", "drf_1", "--at", at, "--after", "follow-up", "--yes"]),
+    ).toBe(EXIT.ok);
+    expect(h.calls[0]!.body).toMatchObject({
+      sendAt: Date.parse(at),
+      afterSend: { _tag: "BubbleUp", at: Date.parse(at) + 86_400_000, condition: "always" },
+    });
+  });
+
+  it("[E09] the earlier bubble names still work as aliases", async () => {
+    const h = harness(() => ({ status: 200, body: {} }));
+    expect(await h.run(["mail", "bubble", "thr_1", "--at", "2026-10-01T09:00:00Z"])).toBe(EXIT.ok);
+    expect(await h.run(["draft", "send", "drf_1", "--after", "bubble-no-reply", "--yes"])).toBe(
+      EXIT.ok,
+    );
+    expect(h.calls[0]!.body).toMatchObject({ _tag: "BubbleUp" });
+    expect(h.calls[1]!.body).toMatchObject({
+      afterSend: { _tag: "BubbleUp", condition: "if-no-reply" },
+    });
+  });
+
+  it("[X02] the TUI's calls skip absent flags instead of sending the text undefined", async () => {
+    const h = harness(() => ({ status: 200, body: {} }));
+    await invoke(
+      "cal respond",
+      ["evt_1", "accept"],
+      { occurrence: undefined },
+      {
+        api: makeCliApi(
+          { apiUrl: "https://api.test", token: "t", mailboxId: "mbx_1", calendarId: "cal_1" },
+          async (url, init) => {
+            h.calls.push({
+              url,
+              method: init.method,
+              headers: init.headers,
+              body: JSON.parse(init.body as string),
+            });
+            return {
+              status: 200,
+              headers: { get: () => "application/json" },
+              text: async () => "{}",
+            };
+          },
+        ),
+        newCommandId: () => "cmd_1",
+      },
+    );
+    expect((h.calls[0]!.body as { command: object }).command).not.toHaveProperty("occurrenceKey");
   });
 });
 

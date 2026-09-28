@@ -1,6 +1,7 @@
 import { json } from "../durable/sql.ts";
 import { type MailboxContext, reject } from "./context.ts";
 import type { ThreadLedger } from "./threads.ts";
+import type { BubbleCondition } from "@bye/domain";
 import type { MailboxAfterSend } from "./types.ts";
 
 // Per-thread triage (E07–E11, E24): attention flags, Bubble Up, local rename/merge, and moves to
@@ -40,11 +41,16 @@ export class MailboxTriage {
     this.ctx.change("thread", "attention", { threadId: t.thread_id, flag, on });
   }
 
-  bubbleUp(threadId: string, at: number): { readonly generation: number } {
+  bubbleUp(
+    threadId: string,
+    at: number,
+    condition: BubbleCondition = "always",
+  ): { readonly generation: number } {
     return {
       generation: this.ledger.setBubble(this.ledger.require(threadId).thread_id, {
         _tag: "Scheduled",
         at,
+        condition,
         resetSeen: true,
       })!,
     };
@@ -69,7 +75,7 @@ export class MailboxTriage {
     });
   }
 
-  /** Send-and-done / send-and-bubble, applied when the provider accepts the message (E08/E09). */
+  /** Send-and-done / send-and-bubble / send-and-pop, applied when the provider accepts the message (E08/E09). */
   afterSend(threadId: string | null, action: MailboxAfterSend): void {
     if (!threadId || action._tag === "None") return;
     const id = this.ledger.resolve(threadId);
@@ -79,8 +85,16 @@ export class MailboxTriage {
         id,
       );
       this.ctx.change("thread", "attention", { threadId: id, done: true });
+    } else if (action._tag === "ClearBubble") {
+      // The reply itself resolves the bubble; nothing new arrived, so the thread is not resurfaced.
+      this.ledger.setBubble(id, { _tag: "Popped", surface: false });
     } else {
-      this.ledger.setBubble(id, { _tag: "Scheduled", at: action.at, resetSeen: false });
+      this.ledger.setBubble(id, {
+        _tag: "Scheduled",
+        at: action.at,
+        condition: action.condition ?? "always",
+        resetSeen: false,
+      });
     }
   }
 

@@ -2,7 +2,7 @@
 
 ## Spec sketch — Cloudflare primitives, TypeScript, Effect v4, and Alchemy beta
 
-**Version:** 0.6  
+**Version:** 0.7  
 **Research baseline:** September 25, 2026  
 **Status:** Implemented in this repository and validated in Node and local workerd (Miniflare); not deployed to Cloudflare or production-validated.  
 **Implementation baseline:** Effect `4.0.0-rc.115`; Alchemy `2.0.0-beta.78`. Exact, deliberately selected prerelease pins—not floating distribution tags. [I1]
@@ -43,6 +43,14 @@
 - **Credentials (§15.11):** least-privilege OAuth scopes with no DNS or Email Routing; encrypted at rest; disconnect blocks writes and revokes access without touching resources or state.
 - **Acceptance and open decisions (§15.11, §14):** OB01–OB10, and the decisions required before release.
 
+**Revision 0.7 — release requirements (September 28, 2026):** Folds in the former `hey-bye-parity-spec.md`. A capability is claimed only at the evidence level it has actually reached, and each release declares the profile whose gates it passes. `infra/EVIDENCE.md` remains the evidence register; `infra/PARITY.md` is the generated per-capability ledger.
+
+- **Completion levels and ledger evidence (§2.4):** repository-complete, client-complete, integration-qualified, and production-accepted; ten evidence dimensions per ledger row; a tagged test is traceability, not acceptance.
+- **Release profiles and priorities (§13.2):** private/self-hosted (A), hosted (B), and paid hosted (C) profiles; P0/P1/P2 priorities.
+- **Release requirements (§13.3–13.5):** P0 production foundation (deployment, mail qualification, recovery, monitoring, security, performance, hosted obligations, billing, licensing); P1 product gaps, including conditional Bubble Up and send-and-pop (E09), the calendar cover panel (C09), and TUI parity (X02); P2 bounded limitations.
+- **Gates, phases, and done (§13.6, §13.8):** gates G1–G10, four release phases, and a merged definition of done.
+- **Licensing and scope (§10, §1):** MIT distribution requirements; release non-goals merged into the scope boundaries.
+
 ## 1. Decision summary
 
 Build a **Cloudflare-first, multi-tenant email service**, not merely an email client. Target the publicly documented HEY experience across personal email, calendar, custom domains, collaboration, publishing, and programmatic clients. Use an original brand, interface implementation, and assets. HEY names below are feature identifiers for the parity checklist, not proposed product branding. [H0][H1][H2][H3][H5]
@@ -74,7 +82,7 @@ Intended provider roles: Cloudflare Email Routing for inbound Worker routing; Cl
 
 “Feature complete” means the public feature baseline is covered by executable acceptance tests on supported clients. It does not claim knowledge of HEY's private implementation or undocumented behavior. Where public descriptions leave details unspecified, this document proposes explicit behavior.
 
-Include ordinary email correctness, account operations, accessibility, exports, abuse handling, and recovery—not only the distinctive inbox screens. Exclude hosting IMAP/POP servers, arbitrary third-party mailbox synchronization, and built-in generative AI from the parity requirement. HEY itself documents a custom-client model without IMAP/POP and a fresh-start approach rather than historical-mail import. Calendar import and external send-as remain in scope. [H16][H3]
+Include ordinary email correctness, account operations, accessibility, exports, abuse handling, and recovery—not only the distinctive inbox screens. Exclude from the parity requirement: hosting IMAP/POP servers; arbitrary third-party mailbox synchronization or historical-mail import; built-in generative AI; HEY branding, trade dress, private implementation, or proprietary assets; a native Linux application (the PWA is the documented Linux client, X01); paid checkout for a private self-hosted release (§13.2); and newsletter email delivery when only World web/RSS publishing is advertised (P1.5). HEY itself documents a custom-client model without IMAP/POP and a fresh-start approach rather than historical-mail import. Calendar import and external send-as remain in scope. [H16][H3]
 
 ## 2. Product parity ledger
 
@@ -149,6 +157,38 @@ Domain collaboration is documented separately from personal accounts; CLI/TUI an
 | X02 | CLI, TUI, and agents           | Authenticated TypeScript clients covering mail, screening, workflows, search, and calendar, with structured output, scoped credentials, and auditable write actions. [H5]                                                                                                                                                                                                                           |
 
 A PWA alone is an intermediate release, not complete parity with native widgets, share extensions, and system integration. Small platform-specific bridges may be required; application and service logic remain TypeScript.
+
+### 2.4 Completion levels and ledger evidence
+
+A tagged test provides traceability, not proof that every acceptance clause works: a test titled `[E09] send-and-pop …` once exercised send-and-bubble because send-and-pop did not exist. Claim each capability only at the highest level it has actually reached:
+
+| Level                 | Meaning                                                                                                                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Repository-complete   | Domain behavior and contracts are implemented, material behaviors have executable tests, and no known limitation contradicts advertised behavior.                                                                   |
+| Client-complete       | The full workflow is usable on the client, including loading, empty, validation, permission, failure, persistence, and accessibility states. Backend support alone does not complete an advertised client workflow. |
+| Integration-qualified | Stage-scoped configuration is documented; provider approval exists where required; real-provider happy and failure paths are exercised; event authenticity and replay are tested; limits are recorded.              |
+| Production-accepted   | Every applicable repository, client, integration, security, performance, operational, and recovery gate passes in a production-like environment.                                                                    |
+
+Integrations qualify independently: personal sending, forwarding, external send-as, newsletters, push, payments, and location each need their own evidence.
+
+**Ledger.** `infra/PARITY.md` has one row per capability above, each naming an owner, and one column per evidence dimension below. Each cell is `—` (not applicable), `open`, a link to a test file or `evidence/…` run, or `excluded` with a reason. A row's level is the lowest reached across its applicable cells. The file is generated by `pnpm parity:ledger` from this ledger, the `[ID]` tags in test titles, and the hand-kept owners and evidence in `infra/parity-evidence.json`; `infra/tests/parity.test.ts` fails when it is stale or when a row reaches production-accepted without an `evidence/` run.
+
+| Dimension          | Required evidence                                                    |
+| ------------------ | -------------------------------------------------------------------- |
+| Domain/application | Material state-transition tests                                      |
+| API                | Validation, authorization, idempotency tests                         |
+| Web                | User-visible workflow acceptance                                     |
+| Native             | UI tests plus signed-device evidence where platform behavior matters |
+| CLI                | Command and structured-output tests                                  |
+| TUI                | Interactive acceptance for the P1.3 workflows                        |
+| Provider           | Real-provider evidence for external boundaries                       |
+| Recovery           | Restart/retry/replay behavior                                        |
+| Security           | Authorization, isolation, revocation, unsafe-input tests             |
+| Accessibility      | Client-appropriate audit/evidence                                    |
+
+A row is never production-accepted solely because its ID appears in a test title, and Bye is never declared feature-complete from the 47-row ledger alone.
+
+**Evidence register.** `infra/EVIDENCE.md` is the single register of evidence and status. Its rows EV1–EV8 track the corresponding §14 decisions, and it maps each §13 release requirement to them; new evidence rows are added there rather than tracked elsewhere. Every acceptance run is recorded under `evidence/<date>-<item>/` in the release artifact bucket (never in git) with commit, lockfile digest, stage, date, operator, and the pass/fail result per acceptance clause; the register links the latest run per row.
 
 ## 3. Cloudflare architecture
 
@@ -588,7 +628,9 @@ Draft autosave uses optimistic revisions and conflict recovery; never last-write
 | `POST /v1/drafts/:id/send`                            | Idempotency key; frozen revision; returns a send-job ID, not a delivery guarantee    |
 | `POST /v1/send-jobs/:id/cancel`                       | Atomic pre-submission cancellation or an explicit too-late result                    |
 | `/v1/uploads`                                         | Quota reservation, multipart upload, completion verification, scan status            |
+| `GET /v1/mailboxes/:id/deliveries/:id/text`           | Plain-text body for terminal and agent clients; HTML-only mail converted server-side |
 | `/v1/calendars/:id/events`                            | Versioned event/series/exception operations                                          |
+| `GET /v1/calendars/:id/invitations`                   | Invitations one delivery carried: occurrence key and the owner's current answer      |
 | `/v1/collections`, `/v1/shared-threads`, `/v1/grants` | Resource-specific permission checks                                                  |
 | `/v1/world/posts`, `/v1/world/subscriptions`          | Explicit publish intent and subscriber consent state                                 |
 | `/v1/domains`, `/v1/memberships`, `/v1/exports`       | Administrative/long-running operations with status resources                         |
@@ -768,6 +810,14 @@ Clients require the `device-session` and `authorization-response-iss` capabiliti
 - Provide accurate privacy disclosures (native-client collection separate from instance-operator processing), support details, and a reviewer demo instance with reproducible clean-device sign-in and self-host selection, without production data or an authentication bypass.
 - Where account creation is offered, provide in-app deletion initiation and the store-required web deletion route, routed to the selected instance/account. [N29][N30]
 
+**Licensing.** Bye is MIT licensed; the standard text is in `LICENSE` at the repository root. These requirements apply whenever source or builds are distributed publicly (P0.10); a private self-hosted deployment does not need them.
+
+- Every workspace manifest declares `"license": "MIT"`, and the readme identifies the license.
+- Third-party notices are preserved and aggregated in `THIRD_PARTY_NOTICES.md` (model: `demo-reel/THIRD_PARTY_NOTICES.md`); dependency licenses are checked for MIT compatibility.
+- `design.pdf`, `screenshots/`, demo-reel audio, and any other committed media contain no HEY/37signals-derived assets, and the product name is checked for trademark confusion with HEY before public distribution.
+- Nothing represents MIT as licensing HEY/37signals trademarks, branding, or proprietary assets.
+- User-facing text uses generic names, never HEY's coined feature names: Inbox (Imbox), Newsletters (The Feed), Receipts (The Paper Trail), New Senders (Screener), Follow Up (Bubble Up), Passcode (Speakeasy), Blog (HEY World), Reply Queue (Focus & Reply), Read All (Read Together). The HEY names remain only in this spec, as references for the §2 parity ledger, and in internal identifiers (view names, command tags) that are wire contracts. "HEY" appears only to describe the inspiration, with a non-affiliation notice, never as branding or in a tagline.
+
 **Acceptance (NA01–NA10).** These extend X01/X02. Evidence names the exact artifacts, OS versions, instance versions and expected/observed results. A development-only build or an unspecified "platform review check" satisfies nothing.
 
 | ID   | Required outcome                                                                                                                                                                                                                                                                                                        |
@@ -857,7 +907,9 @@ Proposed retention defaults: Trash 30 days; Spam and Screened Out 90 days; user-
 
 ## 13. Delivery sequence and release acceptance
 
-### Incremental build sequence
+Release acceptance is behavioral, not checklist coverage (§2.4). Mail correctness comes first: ambiguous delivery stays `unknown` and is never blindly retried (§5.2). Cross-client gaps are product gaps, and deployment, backups, recovery, migrations, monitoring, performance, and failure handling are release requirements.
+
+### 13.1 Incremental build sequence
 
 | Stage                                  | Deliverable                                                                                                                                                                                | Exit gate                                                                                                                                                                   |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -870,7 +922,178 @@ Proposed retention defaults: Trash 30 days; Spam and Screened Out 90 days; user-
 | 6. Client parity                       | Desktop/mobile surfaces, offline behavior, CLI/TUI, scoped agent actions                                                                                                                   | X01–X02 and NA01–NA10 pass; a PWA does not stand in for unimplemented native surfaces                                                                                       |
 | 7. Production hardening                | Load, D1/DO migrations, Alchemy state restore and drift drills, preview isolation, release/rollback controls, erasure, accessibility, monitoring                                           | All feature IDs pass; transport gates signed off; no unintended resource replacement, secret leakage, or unapproved telemetry                                               |
 
-### Minimum adversarial acceptance suite
+### 13.2 Release profiles and priorities
+
+Every release declares a release profile. Release profiles describe who is served and what is sold; they are independent of the §1 deployment profiles, which describe infrastructure.
+
+| Priority | Meaning                                                                                |
+| -------- | -------------------------------------------------------------------------------------- |
+| **P0**   | Blocks the applicable production release, paid launch, or primary-mail claim.          |
+| **P1**   | Required before broad adoption or advertising the affected feature/client as complete. |
+| **P2**   | Bounded post-launch work whose limitation is documented.                               |
+
+Some P0 items apply only to certain profiles or advertised surfaces; this table is authoritative:
+
+| Item                      |  A — private/self-hosted  | B — hosted, no paid checkout |     C — paid hosted     |
+| ------------------------- | :-----------------------: | :--------------------------: | :---------------------: |
+| P0.1 Deployment           |             ✓             |              ✓               |            ✓            |
+| P0.2 Personal outbound    |             ✓             |              ✓               |            ✓            |
+| P0.3 Inbound retry        |             ✓             |              ✓               |            ✓            |
+| P0.4 Recovery             |             ✓             |              ✓               |            ✓            |
+| P0.5 Monitoring           |             ✓             |              ✓               |            ✓            |
+| P0.6a Server/web security | ✓ (pen test not required) |              ✓               |            ✓            |
+| P0.6b Native security     |   if native advertised    |     if native advertised     |  if native advertised   |
+| P0.7 Performance          |             ✓             |              ✓               |            ✓            |
+| P0.8 Hosted obligations   |                           |              ✓               |            ✓            |
+| P0.9 Billing              |                           |                              |            ✓            |
+| P0.10 MIT licensing       |  if distributed publicly  |              ✓               |            ✓            |
+| P1 items                  |  for advertised surfaces  |   for advertised surfaces    | for advertised surfaces |
+
+Regardless of profile, P1.5 is required before World email subscriptions are advertised as production-ready; web/RSS publishing may reach an earlier, independent milestone.
+
+Each item names the `infra/EVIDENCE.md` rows (EV*n*) that carry its evidence (§2.4).
+
+### 13.3 P0 — production foundation
+
+**P0.1 Real Cloudflare deployment (EV6, EV8).** Deploy to a real non-production Cloudflare account before production release. A fresh `dev-*` deploy succeeds; a second deploy is a no-op or expected update only; staging succeeds through reviewed CI; declared resources match the plan; D1/DO migrations apply; state backup/restore works; concurrent deploys serialize or fail closed (§15.6, §15.10).
+
+**P0.2 Personal outbound mail qualification (EV1, EV3).** The provider is Cloudflare Email Service sending (§1); any other personal transport qualifies separately under this item.
+
+- Sending-domain onboarding is approved for arbitrary recipients; the §1 limits (5 MiB, 50 recipients) are recorded and enforced before submission.
+- DKIM passes and SPF/DMARC align for the supported sending-domain configurations.
+- New, reply, reply-all, forward, undo, and Send Later work against external mailboxes; EV3's Gmail/Outlook/Apple Mail procedure passes (threading, Bcc envelope-only, wire `Message-ID` recorded).
+- Post-submission timeouts become `unknown` rather than blind retries, and the user sees a clear `unknown` state with guidance; provider-exposed per-recipient failures are surfaced.
+- Provider sent-email previews are disabled and attested (`PROVIDER_SENT_PREVIEWS=disabled`, §10).
+
+**P0.3 Inbound SMTP retry behavior (EV2).** External SMTP delivery is tested against handler, storage, and timeout faults (`BYE_FAULT_INGRESS`). Temporary faults yield retryable behavior; a retry commits exactly once; stored-but-uncommitted receipts reconcile; transient faults never become permanent sender rejection.
+
+**P0.4 Recovery (EV7, EV8).** The §15.9 rollback interval is N−1: readers and queue consumers accept the prior release's wire and schema version, and at least 14 days pass before a contract step removes N−1 support. State and representative mailbox, organization/shared-resource, calendar, and full-export data restore (§12); rollback is tested with queued work and running Workflows; N−1 Workflows, send jobs, and messages survive the window; lost alarms/jobs reconstruct; erasure tombstones replay after restore; off-account critical backups exist; at least one staging restore drill (`infra/drills/*`) is recorded.
+
+**P0.5 Monitoring (EV8).** Each alert below has a threshold, routes to a named on-call owner, and has fired at least once in staging.
+
+| Signal                    | Initial threshold                                             |
+| ------------------------- | ------------------------------------------------------------- |
+| Worker error rate         | > 1% of requests over 5 min                                   |
+| Queue backlog             | oldest message > 5 min                                        |
+| DLQ depth                 | > 0                                                           |
+| Reconciliation failure    | any failed run, or no successful run in 2 scheduled intervals |
+| Container failure         | scanner/MIME container unhealthy > 5 min                      |
+| Scheduled-action lateness | p99 > 60 s (§12)                                              |
+| Shard storage             | > 50% of budget (§12)                                         |
+
+Cost/capacity counters have a dashboard; ordinary telemetry excludes subjects, bodies, attachment names, and full addresses; advertised clients have crash/error reporting or a documented exception.
+
+**P0.6a Server and web security (all profiles).**
+
+- HTML mail rendering is sanitized and isolated; CSP blocks script execution and remote content by default; the tracking-pixel/remote-image policy is enforced (§10).
+- Authorization and tenant-isolation tests cover every `/v1` route and RPC entrypoint, including revoked grants and suspended members.
+- Session/device management, passkeys, and recovery (A03) pass adversarial tests.
+- Attachment scanning fails closed.
+- An independent security review or penetration test of the web client and API is completed before Profile B.
+
+**P0.6b Native security (only when a native client is advertised).**
+
+- Sealed native draft storage (`packages/native-shared/src/sealed-store.ts`) uses an audited AEAD. Hermes lacks `crypto.subtle`, so use an audited pure-JS implementation such as `@noble/ciphers` XChaCha20-Poly1305 with 24-byte random nonces, or a vetted native crypto module; legacy `s1.` records migrate on read. A custom construction is acceptable only after an independent cryptographic review.
+- Production OAuth redirects are platform-appropriate; callbacks remain instance/issuer-bound; secrets use OS secure storage (§10).
+- Signed-build relaunch, reboot, upgrade, sign-out, and instance-removal behavior is verified under P1.6 for each advertised platform.
+
+**P0.7 Performance (EV5).** The §12 targets are met against staging under a documented load profile (k6 or equivalent, sized from the §12 scenario); `BYE_BENCH_MESSAGES=50000 pnpm evidence:bench` passes; results and the maximum tested scale are recorded.
+
+**P0.8 Hosted service obligations (Profiles B and C).**
+
+- **Account lifecycle:** sign-up, invitation, suspension, cancellation, account deletion, and domain removal are distinct, tested operations (§11), with erasure tombstones as in §12.
+- **Data portability:** A04 exports (MBOX, vCard, ICS, and notes/tasks/settings) are available to users.
+- **Abuse and deliverability:** the §10 controls are tested against a simulated compromised account.
+- **Policies:** published terms of service, privacy policy, acceptable-use policy, and a data-processing statement listing subprocessors (Cloudflare, mail providers, push, payments).
+- **Support:** a support contact, an operator runbook for account recovery and abuse reports, and a status page.
+
+**P0.9 Paid-hosted billing (Profile C).** Users can purchase and manage the supported plan; entitlements follow the signed-event billing ledger (§11); renewal, cancellation, failure, seat, and refund flows reconcile; webhook replay is idempotent; delayed or duplicate webhooks cannot incorrectly grant or remove access; billing state is visible; family billing never grants data access (A01).
+
+**P0.10 MIT licensing and distribution (when distributed publicly).** The §10 licensing requirements pass.
+
+### 13.4 P1 — product gaps
+
+**P1.1 E09 — conditional Bubble Up and send-and-pop.** Scheduling, pin, pop, clear, and send-and-bubble are not sufficient: E09 also requires conditional no-reply resurfacing and send-and-pop.
+
+```ts
+type BubbleCondition = "always" | "if-no-reply";
+
+type BubbleSchedule = {
+  at: number;
+  condition: BubbleCondition;
+  generation: number; // assigned by the mailbox authority, never by clients
+};
+
+type AfterSend =
+  | { _tag: "None" }
+  | { _tag: "MarkDone" }
+  | { _tag: "BubbleUp"; at: number; condition?: BubbleCondition } // absent = "always"
+  | { _tag: "ClearBubble" }; // send-and-pop: the reply resolves the bubble without resurfacing
+```
+
+Send jobs persist `afterSend` as JSON. `condition` is optional and defaults to `"always"` so jobs queued by the previous release still parse; readers accept `ClearBubble` before any client emits it (expand → migrate → contract within the P0.4 window).
+
+A **qualifying reply** suppresses an `if-no-reply` bubble: a message delivered to the thread after the triggering send, from a sender that is not one of the user's own identities, and not an auto-reply (`Auto-Submitted` other than `no`, or an out-of-office pattern), a delivery status notification or bounce (empty envelope sender, `multipart/report`), or mail classified as spam or screened out. A reply from any one original recipient qualifies; the user's own sends from other clients never do.
+
+Acceptance: an unconditional bubble resurfaces on time; a no-reply bubble is suppressed by a qualifying reply and by none of the excluded cases; an incoming reply surfaces promptly despite a later timer; rescheduling fences old generations; retries are idempotent; the after-send action executes only on `AcceptedByTransport`; send-and-pop has an explicit tested transition; N−1 send jobs without `condition` behave as `"always"`; advertised clients expose consistent semantics.
+
+**P1.2 C09 — email/calendar integration.** The calendar cover panel is an optional collapsible panel in the mail view showing today's agenda and the next event, with a link into the calendar; the user can hide it, and the preference persists. Acceptance: invitation email supports accept/tentative/decline; RSVP emits valid iTIP and updates state; create-event-from-message uses a permission-checked backlink; native clients expose the same actions as web; the cover panel meets this definition on each advertised client; duplicate or out-of-order invitation updates remain safe.
+
+**P1.3 X02 — TUI parity.** X02 claims both CLI and TUI, so the TUI (`apps/cli/src/tui.ts`) needs parity alongside the CLI, not only a mail-list/triage surface.
+
+- **Reading:** complete thread bodies; message and attachment metadata navigation.
+- **Writing:** compose, reply, reply-all, and forward, with undo and Send Later.
+- **Triage:** screening and attention actions (including Bubble Up per P1.1); trash, spam, and restore.
+- **Search:** mail search.
+- **Calendar:** agenda and day views; basic event create/edit; invitation response (C09).
+- **Safety:** structured errors; terminal-control sanitization of all rendered mail content.
+- **Accessibility:** works without a mouse, at 80×24, and in a monochrome terminal.
+- **Tests:** interactive acceptance tests cover each workflow above.
+
+**P1.4 Domains, forwarding, external identities (EV4).** Customer-domain onboarding (§11) succeeds on a disposable real zone; unrelated DNS records survive; DKIM/SPF/DMARC checks pass; removal preserves other routing; forwarding destination verification, loop protection, and failures are tested; external send-as authority is rechecked at dispatch; revoked authority blocks subsequent sends.
+
+**P1.5 World subscription delivery (EV1).** A `NewsletterProvider` is qualified (§5.4); newsletter traffic never falls back to personal transport; the recipient remains opted in at dispatch; a pre-dispatch unsubscribe excludes delivery; confirmation and unsubscribe work; webhooks authenticate and persist before acknowledgement; bounces and complaints update suppression; cancellation reports coverage; exports preserve consent metadata.
+
+**P1.6 Native release matrix (EV5).** A native platform is supported only after a signed release build passes: compile; signing; fresh install; upgrade; relaunch/reboot auth behavior; sign-out/remove-instance semantics; secure storage (P0.6b); attachments; push if advertised (P1.7); share surface, widget/timer, and deep links if advertised; accessibility audit. This complements DS01–DS12 and NA01–NA10 (§10). Linux is PWA-only (§1) and documented as such.
+
+**P1.7 Push notifications (when advertised on any client).** APNs/FCM/WNS credentials are stage-scoped; registration, rotation, and revocation on sign-out or instance removal work; payloads contain no subject, body, or full address unless the user opts in; delivery failures and invalid tokens prune registrations; notifications respect screening and attention state; tested on signed builds.
+
+**P1.8 Location lookup (C10, when autocomplete is advertised).** The adapter is stage-configured with recorded quota and cost; queries are not linked to user identity beyond what the provider requires; it fails soft (free-text locations still work); rate limits are enforced per user.
+
+### 13.5 P2 — bounded limitations
+
+- **P2.1 C03 long recurrence rules:** document and validate supported recurrence bounds, or redesign expansion so valid long-count rules remain discoverable. Accepted events never silently lose future occurrences without a visible warning.
+- **P2.2 C05 resumable ICS import:** durable checkpoints for large imports. A restart resumes after the last committed batch; replay remains idempotent; checkpoint identity, cleanup, and cancellation semantics are specified.
+- **P2.3 Mailbox metadata sharding:** monitor against the §12 storage-safety rule; the §12 shard migration preserves authority and ordering guarantees and is benchmarked before production mailboxes approach 50%.
+- **P2.4 Reconciliation scale:** load-test scheduled catalog reconciliation and record the maximum tested scale and duration. If one invocation cannot meet targets safely, partition through queues/Workflows; reconciliation remains idempotent.
+
+### 13.6 Release gates and phases
+
+A production release must not claim full parity until every applicable gate passes:
+
+| Gate | Name         | Satisfied by                                             |
+| ---- | ------------ | -------------------------------------------------------- |
+| G1   | Deployment   | P0.1                                                     |
+| G2   | Mail         | P0.2, P0.3, and P1.4/P1.5 where advertised               |
+| G3   | Recovery     | P0.4                                                     |
+| G4   | Security     | P0.6a, and P0.6b where native is advertised              |
+| G5   | Clients      | P1.1–P1.3, P1.6, and §2.4 rows for the advertised matrix |
+| G6   | Integrations | P1.4, P1.5, P1.7, P1.8 for each advertised adapter       |
+| G7   | Operations   | P0.5, and P0.8 for hosted profiles                       |
+| G8   | Performance  | P0.7                                                     |
+| G9   | License      | P0.10 where applicable                                   |
+| G10  | Commercial   | P0.9, paid hosted only                                   |
+
+Release work follows four phases. They order what is proven and advertised; they do not replace the build stages in §13.1. For the first real-user release, dependable mail delivery, security, and recovery come first, then the E09/C09 gaps, then a wider advertised client and integration matrix.
+
+| Phase                                         | Scope                                                                                                                                  | Exit                                                                             |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| 1. Prove the service                          | P0.1–P0.7, and P0.10 if distributing publicly                                                                                          | Bye can safely carry real mail in a controlled release (Profile A)               |
+| 2. Close core workflow gaps                   | P1.1 (E09), P1.2 (C09), P1.3 (TUI parity), behavioral acceptance for under-tested UI paths; `infra/PARITY.md` populated                | Advertised core mail/calendar workflows are behaviorally complete                |
+| 3. Release clients, integrations, and hosting | Native platforms (P1.6, P0.6b), custom domains and forwarding (P1.4), push (P1.7), optional location (P1.8), hosted obligations (P0.8) | Every advertised surface has explicit acceptance evidence (Profile B)            |
+| 4. Commercial and publishing                  | Billing (P0.9), newsletter-provider qualification (P1.5), bounded P2 scale/calendar gaps                                               | Commercial and publishing promises match the accepted implementation (Profile C) |
+
+### 13.7 Minimum adversarial acceptance suite
 
 | Area                     | Required tests                                                                                                                                                                                                             |
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -900,7 +1123,21 @@ Proposed retention defaults: Trash 30 days; Spam and Screened Out 90 days; user-
 | Infrastructure lifecycle | D1/DO expand-contract migrations; failed deploy recovery; serialized deployment writers; state backend/key recovery; preview destruction cannot touch production; deletion/replacement policy rejects unsafe plans         |
 | Deployment privacy       | CLI opt-out verified; deployed state-Worker version/artifact and exporter bindings checked independently; opaque resource names; secret redaction; no unapproved external observability egress                             |
 
-**Definition of done:** no unimplemented parity row hidden behind the phrase “later”; every client limitation is visible; all transport and durability gates have evidence; mutable state, original content, and deployment state can be restored; pinned application/IaC builds pass; the product's privacy claims match its actual runtime and deployment architecture.
+### 13.8 Definition of done
+
+A parity release is done when:
+
+1. Every advertised feature has an acceptance contract, and no unimplemented parity row is hidden behind the phrase “later”.
+2. Every advertised client has a passing support matrix for those features, and every client limitation is visible.
+3. All P0 items applicable to the release profile (§13.2) are closed.
+4. P1 items are closed, or the affected capability is explicitly excluded from advertised scope.
+5. Remaining P2 limitations are bounded and documented.
+6. All transport and durability gates have evidence, including real-provider evidence for every enabled external traffic or integration class.
+7. Mutable state, original content, and deployment state can be restored, and restore and rollback drills have passed against staging.
+8. Operational alerts and ownership are active, and §12 performance targets are met against staging.
+9. Pinned application/IaC builds pass, and the product's privacy claims match its actual runtime and deployment architecture.
+10. Where distributed, the release is MIT licensed with compatible notices (§10).
+11. Release notes describe the supported release profile, clients, integrations, and known limitations, and each capability is claimed only at the completion level it reached (§2.4), never by equating tagged test coverage with production acceptance.
 
 ## 14. Decisions still requiring implementation evidence
 

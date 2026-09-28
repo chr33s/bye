@@ -102,6 +102,19 @@ export class MailboxIngest {
     return { ...out.result, replayed: out.replayed };
   }
 
+  /**
+   * A reply that answers the user (E09): not automated (auto-replies, bounces, delivery reports,
+   * list or no-reply traffic) and not sent from one of the user's own identities. Spam and
+   * screened-out mail never reach this check because they are not active.
+   */
+  private isQualifyingReply(s: MessageSummary, from: string): boolean {
+    if (s.automated) return false;
+    return (
+      this.sql.one<{ n: number }>("SELECT 1 AS n FROM identities WHERE address = ?", from) ===
+      undefined
+    );
+  }
+
   private applyDelivery(input: MailboxDeliveryInput): Omit<MailboxDeliveryResult, "replayed"> {
     const s = input.summary;
     const from = normalizeAddress(s.from.address);
@@ -177,7 +190,13 @@ export class MailboxIngest {
       });
 
     // A new reply invalidates any scheduled Bubble Up and returns the thread to New For You (§4.2).
-    if (becomesNew && current.bubble_tag === "Scheduled")
+    // An `if-no-reply` bubble yields only to a qualifying reply, so an away reply or bounce leaves
+    // the reminder in place (E09).
+    if (
+      becomesNew &&
+      current.bubble_tag === "Scheduled" &&
+      (current.bubble_condition !== "if-no-reply" || this.isQualifyingReply(s, from))
+    )
       this.ledger.setBubble(threadId, { _tag: "Invalidated" });
     const seq = this.ctx.change("thread", "delivered", {
       threadId,

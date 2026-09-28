@@ -92,6 +92,9 @@ importers:
       '@bye/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@bye/mail-codec':
+        specifier: workspace:*
+        version: link:../../packages/mail-codec
       '@bye/native-shared':
         specifier: workspace:*
         version: link:../../packages/native-shared
@@ -177,6 +180,9 @@ importers:
       '@bye/domain':
         specifier: workspace:*
         version: link:../domain
+      '@noble/ciphers':
+        specifier: 2.4.0
+        version: 2.4.0
     devDependencies:
       '@bye/contracts':
         specifier: workspace:*
@@ -1043,6 +1049,10 @@ packages:
 
   '@neon-rs/load@0.0.4':
     resolution: {integrity: sha512-kTPhdZyTQxB+2wpiRcFWrDcejc4JI6tkPuS7UZCG4l6Zvc5kU/gGQ/ozvHTh1XR5tS+UlfAfGuPajjzQjCiHCw==}
+
+  '@noble/ciphers@2.4.0':
+    resolution: {integrity: sha512-AnjFn0Jv92laAkvMrghlFZq4qQCIN/4DxFV/eooqtC2YTjB7kBeLMS2T9KJX4Dn+ZVXLOwK0lSgqDtx9gvxtiw==}
+    engines: {node: '>= 20.19.0'}
 
   '@nodable/entities@3.0.0':
     resolution: {integrity: sha512-8L9xFeTYKhm49xfIypoe2W5wV1m/3Z58kT+7kR9A8OyFxcPduI4VmxaUMQyKYrRjUoLLSXv6EKKID5Tvj9cUVw==}
@@ -3404,6 +3414,8 @@ snapshots:
       lilconfig: 2.1.0
 
   '@neon-rs/load@0.0.4': {}
+
+  '@noble/ciphers@2.4.0': {}
 
   '@nodable/entities@3.0.0': {}
 

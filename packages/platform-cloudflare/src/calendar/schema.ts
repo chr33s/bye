@@ -156,4 +156,58 @@ export const CALENDAR_MIGRATIONS: ReadonlyArray<Migration> = [
       )`,
     ],
   },
+  {
+    // Resumable ICS import (C05): progress of an import command, committed with each batch.
+    version: 2,
+    name: "ics-import-checkpoints",
+    statements: [
+      `CREATE TABLE cal_import_checkpoints (
+        command_id TEXT PRIMARY KEY,
+        calendar_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        next_index INTEGER NOT NULL,
+        imported INTEGER NOT NULL,
+        updated INTEGER NOT NULL,
+        warnings TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+    ],
+  },
+  {
+    // Invitation state for clients (C04/C09): which delivered message carried which invitation,
+    // and the owner's answer to single occurrences (a series answer lives on the attendee row).
+    version: 3,
+    name: "invitation-messages-and-occurrence-responses",
+    statements: [
+      `CREATE TABLE cal_invitation_messages (
+        delivery_id TEXT NOT NULL,
+        mailbox_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        recurrence_key TEXT NOT NULL,
+        received_at INTEGER NOT NULL,
+        PRIMARY KEY (delivery_id, event_id, recurrence_key)
+      )`,
+      "CREATE INDEX cal_invitation_messages_event ON cal_invitation_messages (event_id)",
+      `CREATE TABLE cal_occurrence_responses (
+        event_id TEXT NOT NULL,
+        occurrence_key TEXT NOT NULL,
+        partstat TEXT NOT NULL,
+        responded_at INTEGER NOT NULL,
+        PRIMARY KEY (event_id, occurrence_key)
+      )`,
+    ],
+  },
+  {
+    // Invitations received before message links existed: link each to the delivery that created
+    // it (later updates of those events stay unlinked; clients fall back to a title search).
+    version: 4,
+    name: "backfill-invitation-messages",
+    statements: [
+      `INSERT OR IGNORE INTO cal_invitation_messages (delivery_id, mailbox_id, event_id, recurrence_key, received_at)
+       SELECT json_extract(source_ref, '$.deliveryId'), json_extract(source_ref, '$.mailboxId'), id, '', created_at
+       FROM cal_events
+       WHERE deleted = 0 AND organizer IS NOT NULL AND we_are_organizer = 0 AND source_ref IS NOT NULL
+         AND json_extract(source_ref, '$.deliveryId') IS NOT NULL`,
+    ],
+  },
 ];

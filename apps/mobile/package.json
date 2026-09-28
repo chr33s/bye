@@ -15,6 +15,7 @@
     "ios:archive": "xcodebuild -workspace ios/ByeMobile.xcworkspace -scheme ByeMobile -configuration Release -destination 'generic/platform=iOS' -archivePath build/ByeMobile.xcarchive CURRENT_PROJECT_VERSION=${BYE_BUILD_NUMBER:-1} archive && xcodebuild -exportArchive -archivePath build/ByeMobile.xcarchive -exportOptionsPlist ios/ExportOptions.plist -exportPath build/ipa"
   },
   "dependencies": {
+    "@noble/ciphers": "2.4.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "react": "19.1.4",
     "react-native": "0.81.6",

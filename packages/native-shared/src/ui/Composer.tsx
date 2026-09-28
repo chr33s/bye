@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ScrollView, Text, TextInput } from "react-native";
+import { ScrollView, Text, TextInput, View } from "react-native";
+import { AFTER_SEND_CHOICES, type AfterSendChoice, afterSendFor } from "../after-send.ts";
 import type { ByeClient } from "../client.ts";
 import { type DraftStore, type NativeDraft, syncDraft } from "../drafts.ts";
 import { describeSendJobs, sendJobsSettled } from "../send-status.ts";
@@ -53,6 +54,7 @@ export const Composer = ({
     updatedAt: Date.now(),
   }));
   const [status, setStatus] = useState("");
+  const [afterSend, setAfterSend] = useState<AfterSendChoice>("none");
   const [jobs, setJobs] = useState<ReadonlyArray<string>>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -97,7 +99,13 @@ export const Composer = ({
       return;
     }
     try {
-      const result = await client.send(mailboxId, synced.draftId, synced.baseRevision);
+      const result = await client.send(
+        mailboxId,
+        synced.draftId,
+        synced.baseRevision,
+        undefined,
+        afterSendFor(afterSend, Date.now()),
+      );
       if (result._tag === "Conflict")
         return setStatus("This draft changed elsewhere; review before sending.");
       setJobs(result.sendJobIds);
@@ -170,6 +178,23 @@ export const Composer = ({
         value={draft.content.text}
         onChangeText={(v) => update({ text: v })}
       />
+      <Text style={s.muted} nativeID="after-send-label">
+        After sending
+      </Text>
+      <View
+        style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8 }}
+        accessibilityRole="radiogroup"
+        accessibilityLabel="After sending"
+      >
+        {AFTER_SEND_CHOICES.filter((c) => draft.threadId || !c.replyOnly).map((c) => (
+          <Button
+            key={c.value}
+            label={c.label}
+            selected={afterSend === c.value}
+            onPress={() => setAfterSend(c.value)}
+          />
+        ))}
+      </View>
       {jobs.length ? (
         <Button label="Undo send" onPress={undo} />
       ) : (

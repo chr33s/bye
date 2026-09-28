@@ -4,6 +4,7 @@ import type {
   CalException,
   CalItipDecision,
   CalOccurrence,
+  CalPartstat,
   CalPerson,
   CalSeries,
   CalTime,
@@ -90,6 +91,29 @@ export interface CalendarOccurrenceView extends CalOccurrence {
   readonly countdown: boolean;
   /** Event revision for optimistic UpdateEvent (expectedRevision). */
   readonly revision: number;
+  /** Set when someone else organizes this event and the owner is invited (C04). */
+  readonly invitation?: CalendarInvitationState | undefined;
+}
+
+/** The owner's side of an invitation, for one occurrence or the whole series. */
+export interface CalendarInvitationState {
+  readonly organizer: CalPerson;
+  /** The answer that applies here: an occurrence's own answer, else the series answer. */
+  readonly partstat: CalPartstat;
+}
+
+/** An invitation carried by one delivered message (C09): what a thread's RSVP buttons act on. */
+export interface CalendarMessageInvitation extends CalendarInvitationState {
+  readonly eventId: string;
+  readonly calendarId: string;
+  readonly uid: string;
+  readonly summary: string;
+  readonly recurring: boolean;
+  /** Set when the message is about one occurrence; RespondInvitation then answers only it. */
+  readonly occurrenceKey: string | null;
+  readonly start: CalTime;
+  readonly end: CalTime;
+  readonly cancelled: boolean;
 }
 
 export interface CalendarSeriesInput {

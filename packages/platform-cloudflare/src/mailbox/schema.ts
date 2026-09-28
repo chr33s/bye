@@ -297,4 +297,10 @@ export const MAILBOX_MIGRATIONS: ReadonlyArray<Migration> = [
       "CREATE INDEX send_jobs_draft ON send_jobs (draft_id)",
     ],
   },
+  {
+    // Conditional Bubble Up (E09). Existing scheduled bubbles keep their unconditional meaning.
+    version: 5,
+    name: "bubble-condition",
+    statements: ["ALTER TABLE threads ADD COLUMN bubble_condition TEXT NOT NULL DEFAULT 'always'"],
+  },
 ];

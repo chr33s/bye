@@ -1,4 +1,6 @@
 import {
+  calEndFor,
+  calInstant,
   type CalException,
   type CalIcsEvent,
   calInterpretItip,
@@ -8,6 +10,7 @@ import {
   calParseCalendar,
   calRecurrenceKey,
   type CalSeries,
+  calSeriesDuration,
   type CalTime,
 } from "@bye/calendar-engine";
 import { bool } from "../durable/sql.ts";
@@ -15,6 +18,7 @@ import { CalendarCalendars } from "./calendars.ts";
 import {
   calendarError,
   type CalendarInvitationResult,
+  type CalendarMessageInvitation,
   type CalendarMessageRef,
   type EventRow,
   REMINDER_JOB,
@@ -128,6 +132,13 @@ export abstract class CalendarInvitations extends CalendarCalendars {
           seriesStart,
         });
         if (decision._tag !== "Apply") {
+          // A re-sent or out-of-date copy of an invitation we hold still lets its thread answer it.
+          if (
+            row &&
+            parsed.method?.toUpperCase() !== "REPLY" &&
+            (decision._tag === "Duplicate" || decision._tag === "IgnoreStale")
+          )
+            this.linkMessage(input.sourceRef, row.id, recurrenceKey);
           results.push(decision);
           continue;
         }
@@ -138,6 +149,8 @@ export abstract class CalendarInvitations extends CalendarCalendars {
           row,
           input.sourceRef,
         );
+        if (eventId && decision.action !== "reply")
+          this.linkMessage(input.sourceRef, eventId, recurrenceKey);
         if (decision.action === "reply") {
           // A series-level attendee REPLY also applies to every tail series split from it.
           if (!recurrenceKey) {
@@ -240,6 +253,21 @@ export abstract class CalendarInvitations extends CalendarCalendars {
     }
     if (recurrenceKey) {
       if (!record) return undefined; // Occurrence update for an unknown series: wait for the series.
+      // A moved occurrence needs a new answer: forget the owner's answer to the old time. The old
+      // time is the stored exception's, else the slot the series gives that occurrence; times are
+      // compared as instants so the same moment written in another zone is not a move.
+      const prior = record.exceptions.find((e) => e.recurrenceKey === recurrenceKey);
+      const priorStart = prior?.start ?? this.timeFromKey(record.series, recurrenceKey);
+      const priorEnd = prior?.end ?? calEndFor(priorStart, calSeriesDuration(record.series));
+      const nextEnd = calEndFor(event.series.dtstart, calSeriesDuration(event.series));
+      const same = (a: CalTime, b: CalTime) =>
+        a.kind === b.kind && calInstant(a, this.zone) === calInstant(b, this.zone);
+      if (!same(priorStart, event.series.dtstart) || !same(priorEnd, nextEnd))
+        this.sql.run(
+          "DELETE FROM cal_occurrence_responses WHERE event_id = ? AND occurrence_key = ?",
+          record.id,
+          recurrenceKey,
+        );
       const exception: CalException = {
         recurrenceKey,
         cancelled: event.series.data.status === "cancelled",
@@ -264,6 +292,8 @@ export abstract class CalendarInvitations extends CalendarCalendars {
       const timingChanged =
         JSON.stringify([record.series.dtstart, record.series.dtend, record.series.rule]) !==
         JSON.stringify([event.series.dtstart, event.series.dtend, event.series.rule]);
+      if (timingChanged)
+        this.sql.run("DELETE FROM cal_occurrence_responses WHERE event_id = ?", record.id);
       const attendees = event.attendees.map((a) => {
         const address = calNormAddress(a.address);
         const prior = record.attendees.find((p) => p.address === address);
@@ -320,12 +350,22 @@ export abstract class CalendarInvitations extends CalendarCalendars {
       const record = this.toRecord(row);
       if (record.weAreOrganizer || !record.organizer)
         throw calendarError("bad_request", "not an invitation");
-      const me = record.attendees.find((a) => this.self.includes(a.address));
+      const me = this.invitedAs(record);
       if (!me) throw calendarError("forbidden", "this account is not an attendee");
       const attendees = input.occurrenceKey
         ? record.attendees
         : record.attendees.map((a) => (a === me ? { ...a, partstat: input.partstat } : a));
       const { revision } = this.writeEvent({ ...record, attendees }, false);
+      // An occurrence answer is kept beside the series answer, so clients can show it (C04).
+      if (input.occurrenceKey)
+        this.sql.run(
+          `INSERT INTO cal_occurrence_responses (event_id, occurrence_key, partstat, responded_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT (event_id, occurrence_key) DO UPDATE SET partstat = excluded.partstat, responded_at = excluded.responded_at`,
+          record.id,
+          input.occurrenceKey,
+          input.partstat,
+          this.clock.now(),
+        );
       this.itipReply(
         record.id,
         record,
@@ -337,6 +377,67 @@ export abstract class CalendarInvitations extends CalendarCalendars {
       );
       return { revision };
     });
+  }
+
+  /** Remember which message carried an invitation, so its thread can show and answer it (C09). */
+  private linkMessage(
+    ref: CalendarMessageRef | undefined,
+    eventId: string,
+    recurrenceKey: string,
+  ): void {
+    if (!ref?.deliveryId) return;
+    this.sql.run(
+      `INSERT INTO cal_invitation_messages (delivery_id, mailbox_id, event_id, recurrence_key, received_at)
+       VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+      ref.deliveryId,
+      ref.mailboxId,
+      eventId,
+      recurrenceKey,
+      this.clock.now(),
+    );
+  }
+
+  /**
+   * The invitations a delivered message carried (C09), with the owner's current answer. Owner-only:
+   * the links are written only for the owner's own mailbox deliveries.
+   */
+  invitationsForMessage(mailboxId: string, deliveryId: string): Array<CalendarMessageInvitation> {
+    const links = this.sql.all<{ event_id: string; recurrence_key: string }>(
+      "SELECT event_id, recurrence_key FROM cal_invitation_messages WHERE delivery_id = ? AND mailbox_id = ? ORDER BY event_id, recurrence_key",
+      deliveryId,
+      mailboxId,
+    );
+    const answers = this.occurrenceResponses([...new Set(links.map((l) => l.event_id))]);
+    const out: Array<CalendarMessageInvitation> = [];
+    const self = new Set(this.self);
+    for (const link of links) {
+      const row = this.eventRow(link.event_id);
+      if (!row) continue;
+      const record = this.toRecord(row);
+      const me = this.invitedAs(record, self);
+      if (!me) continue;
+      const key = link.recurrence_key || null;
+      const exception = key ? record.exceptions.find((e) => e.recurrenceKey === key) : undefined;
+      const start =
+        exception?.start ?? (key ? this.timeFromKey(record.series, key) : record.series.dtstart);
+      out.push({
+        eventId: record.id,
+        calendarId: record.calendarId,
+        uid: record.uid,
+        summary: exception?.data?.summary ?? record.series.data.summary,
+        recurring: record.series.rule !== undefined,
+        occurrenceKey: key,
+        start,
+        end: exception?.end ?? calEndFor(start, calSeriesDuration(record.series)),
+        cancelled:
+          record.series.data.status === "cancelled" ||
+          exception?.cancelled === true ||
+          exception?.data?.status === "cancelled",
+        organizer: record.organizer!,
+        partstat: (key ? answers.get(`${record.id}\u0000${key}`) : undefined) ?? me.partstat,
+      });
+    }
+    return out;
   }
 
   /** DTSTART of the stored series for a UID (following split links when the original is gone). */

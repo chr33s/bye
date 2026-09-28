@@ -196,7 +196,7 @@ const boot = (): void => {
     h("a", { href: "#/search", "aria-keyshortcuts": "/" }, "Search"),
     h("a", { href: "#/contacts" }, "Contacts"),
     h("a", { href: "#/spaces" }, "Shared"),
-    h("a", { href: "#/world" }, "World"),
+    h("a", { href: "#/world" }, "Blog"),
     h("a", { href: "#/newsletters" }, "Newsletters"),
     h("a", { href: "#/settings" }, "Settings"),
     h("a", { href: "#/compose", "aria-keyshortcuts": "c", class: "primary" }, "Write"),

@@ -1,3 +1,4 @@
+import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { base64Url, constantTimeEqual, type RandomBytes, secureRandom } from "./auth/pkce.ts";
 import { sha256 } from "./auth/sha256.ts";
 import { SecureStoreError, type SecureSessionStore } from "./auth/store.ts";
@@ -8,13 +9,22 @@ import type { KeyValueStore } from "./drafts.ts";
 // (Keychain, Android Keystore, Windows Credential Manager), which is also why values are not stored
 // there directly (Credential Manager caps a secret at 2.5 KB).
 //
-// Hermes has no crypto.subtle, so this uses the package's pure-TS SHA-256: HMAC-SHA256 as a PRF in
-// counter mode for the keystream, and encrypt-then-MAC with a separate HMAC-SHA256 key over the
-// version, storage key, nonce and ciphertext (a record can't be moved to another key or altered).
+// Hermes has no crypto.subtle, so records (`s2.`) use the audited pure-JS XChaCha20-Poly1305 from
+// @noble/ciphers with a random 24-byte nonce per write (192 bits: random nonces won't collide). The
+// AEAD key is HMAC-SHA256(device key, "bye drafts v2 xchacha20poly1305") — a single HKDF-Expand
+// style PRF step, domain-separated from the s1 keys — and the associated data is the version plus
+// storage key, so a record can't be moved to another key or altered. The device key and its secure
+// store slot are unchanged from s1.
+//
+// Legacy `s1.` records (HMAC-SHA256 counter-mode keystream, encrypt-then-MAC) remain readable and
+// are rewritten as `s2.` the first time they are read; nothing writes s1 any more.
 
-const VERSION = "s1.";
-const NONCE = 16;
-const TAG = 32;
+const VERSION = "s2.";
+const NONCE = 24;
+const TAG = 16;
+const LEGACY = "s1.";
+const LEGACY_NONCE = 16;
+const LEGACY_TAG = 32;
 const KEY_SLOT = "email.bye.drafts-key.v1";
 
 // UTF-8 by hand: Hermes' TextEncoder/TextDecoder support varies by React Native version.
@@ -97,12 +107,44 @@ const fromBase64Url = (value: string): Uint8Array | null => {
   return new Uint8Array(out);
 };
 
-interface Keys {
+const aeadKey = (master: Uint8Array): Uint8Array =>
+  hmacSha256(master, enc.encode("bye drafts v2 xchacha20poly1305"));
+
+const associatedData = (storageKey: string): Uint8Array => enc.encode(`${VERSION}${storageKey}`);
+
+export const seal = (
+  master: Uint8Array,
+  storageKey: string,
+  plaintext: string,
+  random: RandomBytes = secureRandom,
+): string => {
+  const nonce = random(NONCE);
+  const aead = xchacha20poly1305(aeadKey(master), nonce, associatedData(storageKey));
+  return VERSION + base64Url(concat(nonce, aead.encrypt(enc.encode(plaintext))));
+};
+
+const openCurrent = (master: Uint8Array, storageKey: string, sealed: string): string | null => {
+  const bytes = fromBase64Url(sealed.slice(VERSION.length));
+  if (!bytes || bytes.length < NONCE + TAG) return null;
+  try {
+    const aead = xchacha20poly1305(
+      aeadKey(master),
+      bytes.subarray(0, NONCE),
+      associatedData(storageKey),
+    );
+    return dec.decode(aead.decrypt(bytes.subarray(NONCE)));
+  } catch {
+    return null;
+  }
+};
+
+// s1, read-only: HMAC-SHA256 counter-mode keystream with encrypt-then-MAC.
+interface LegacyKeys {
   readonly enc: Uint8Array;
   readonly mac: Uint8Array;
 }
 
-const deriveKeys = (master: Uint8Array): Keys => ({
+const legacyKeys = (master: Uint8Array): LegacyKeys => ({
   enc: hmacSha256(master, enc.encode("bye drafts v1 encryption")),
   mac: hmacSha256(master, enc.encode("bye drafts v1 authentication")),
 });
@@ -121,31 +163,21 @@ const keystreamXor = (key: Uint8Array, nonce: Uint8Array, data: Uint8Array): Uin
   return out;
 };
 
-const tagOf = (keys: Keys, storageKey: string, nonce: Uint8Array, ciphertext: Uint8Array) =>
-  hmacSha256(keys.mac, concat(enc.encode(`${VERSION}${storageKey}\u0000`), nonce, ciphertext));
-
-export const seal = (
-  master: Uint8Array,
+const legacyTag = (
+  keys: LegacyKeys,
   storageKey: string,
-  plaintext: string,
-  random: RandomBytes = secureRandom,
-): string => {
-  const keys = deriveKeys(master);
-  const nonce = random(NONCE);
-  const ciphertext = keystreamXor(keys.enc, nonce, enc.encode(plaintext));
-  return VERSION + base64Url(concat(nonce, ciphertext, tagOf(keys, storageKey, nonce, ciphertext)));
-};
+  nonce: Uint8Array,
+  ciphertext: Uint8Array,
+) => hmacSha256(keys.mac, concat(enc.encode(`${LEGACY}${storageKey}\u0000`), nonce, ciphertext));
 
-/** The plaintext, or null when the record is not authentic (tampered, moved or wrong key). */
-export const open = (master: Uint8Array, storageKey: string, sealed: string): string | null => {
-  if (!sealed.startsWith(VERSION)) return null;
-  const bytes = fromBase64Url(sealed.slice(VERSION.length));
-  if (!bytes || bytes.length < NONCE + TAG) return null;
-  const keys = deriveKeys(master);
-  const nonce = bytes.subarray(0, NONCE);
-  const ciphertext = bytes.subarray(NONCE, bytes.length - TAG);
-  const tag = bytes.subarray(bytes.length - TAG);
-  if (!constantTimeEqual(base64Url(tag), base64Url(tagOf(keys, storageKey, nonce, ciphertext))))
+const openLegacy = (master: Uint8Array, storageKey: string, sealed: string): string | null => {
+  const bytes = fromBase64Url(sealed.slice(LEGACY.length));
+  if (!bytes || bytes.length < LEGACY_NONCE + LEGACY_TAG) return null;
+  const keys = legacyKeys(master);
+  const nonce = bytes.subarray(0, LEGACY_NONCE);
+  const ciphertext = bytes.subarray(LEGACY_NONCE, bytes.length - LEGACY_TAG);
+  const tag = bytes.subarray(bytes.length - LEGACY_TAG);
+  if (!constantTimeEqual(base64Url(tag), base64Url(legacyTag(keys, storageKey, nonce, ciphertext))))
     return null;
   try {
     return dec.decode(keystreamXor(keys.enc, nonce, ciphertext));
@@ -153,6 +185,17 @@ export const open = (master: Uint8Array, storageKey: string, sealed: string): st
     return null;
   }
 };
+
+/**
+ * The plaintext of an `s2.` (or legacy `s1.`) record, or null when the record is not authentic
+ * (tampered, moved or wrong key).
+ */
+export const open = (master: Uint8Array, storageKey: string, sealed: string): string | null =>
+  sealed.startsWith(VERSION)
+    ? openCurrent(master, storageKey, sealed)
+    : sealed.startsWith(LEGACY)
+      ? openLegacy(master, storageKey, sealed)
+      : null;
 
 /**
  * The device's drafts key from the OS secure store, created on first use. Any storage error other
@@ -185,8 +228,8 @@ export const secureStoreKey = (
 
 /**
  * Wrap a key-value store so every value is sealed with the secure-store key. Values written by
- * older builds in plaintext are re-sealed the first time they are read; records that fail
- * authentication read as missing.
+ * older builds in plaintext or as `s1.` are re-sealed as `s2.` the first time they are read;
+ * records that fail authentication read as missing.
  */
 export const sealedStore = (kv: KeyValueStore, key: () => Promise<Uint8Array>): KeyValueStore => ({
   getItem: async (name) => {
@@ -194,6 +237,11 @@ export const sealedStore = (kv: KeyValueStore, key: () => Promise<Uint8Array>): 
     if (stored === null) return null;
     const master = await key();
     if (stored.startsWith(VERSION)) return open(master, name, stored);
+    if (stored.startsWith(LEGACY)) {
+      const plaintext = open(master, name, stored);
+      if (plaintext !== null) await kv.setItem(name, seal(master, name, plaintext));
+      return plaintext;
+    }
     await kv.setItem(name, seal(master, name, stored));
     return stored;
   },

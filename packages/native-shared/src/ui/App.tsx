@@ -34,6 +34,7 @@ import { sealedStore } from "../sealed-store.ts";
 import type { MeWire } from "../wire.ts";
 import { Calendar } from "./Calendar.tsx";
 import { Composer } from "./Composer.tsx";
+import { CoverPanel } from "./CoverPanel.tsx";
 import { ErrorBoundary, installNativeErrorHandler } from "./errors.tsx";
 import { EventEditor } from "./EventEditor.tsx";
 import { MailList } from "./MailList.tsx";
@@ -388,6 +389,17 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
             refreshKey={refreshKey}
             onView={(view) => setRoute({ screen: "mail", view })}
             onOpen={(threadId) => setRoute({ screen: "thread", threadId })}
+            header={
+              route.view === "imbox" && calendarId ? (
+                <CoverPanel
+                  client={client}
+                  mailboxId={mailboxId}
+                  calendarId={calendarId}
+                  refreshKey={refreshKey}
+                  onOpenCalendar={() => setRoute({ screen: "calendar" })}
+                />
+              ) : null
+            }
           />
         );
       case "thread":
@@ -395,6 +407,7 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
           <Thread
             client={client}
             mailboxId={mailboxId}
+            {...(calendarId ? { calendarId } : {})}
             threadId={route.threadId}
             onReply={() => setRoute({ screen: "compose", threadId: route.threadId })}
             onDone={() => setRoute(DEFAULT_ROUTE)}

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { htmlToText, sanitizeCss, sanitizeHtml, type SanitizeOptions } from "@bye/mail-codec";
+import {
+  htmlToReadableText,
+  htmlToText,
+  sanitizeCss,
+  sanitizeHtml,
+  type SanitizeOptions,
+} from "@bye/mail-codec";
 
 const opts: SanitizeOptions = {
   proxyImage: (url) => `https://img.proxy.example/p?u=${encodeURIComponent(url)}`,
@@ -302,5 +308,17 @@ describe("sanitizeCss", () => {
     expect(out.css).not.toMatch(/expression|\/\*/);
     expect(out.css).toContain("color: blue");
     expect(out.css).toContain("color: green");
+  });
+});
+
+describe("htmlToReadableText", () => {
+  it("[X02] decodes entities, keeps preformatted text, and shows link targets", () => {
+    expect(
+      htmlToReadableText(
+        `<head><title>t</title></head><p>One&nbsp;&amp;&#32;two</p><ul><li>a</li><li>b</li></ul><pre>  keep\n  lines</pre><p><a href="https://example.com/x">Read more</a> <a href="https://example.com">https://example.com</a> <a href="javascript:x()">no</a></p><script>x()</script>`,
+      ),
+    ).toBe(
+      "One & two\n\n- a\n- b\n\n  keep\n  lines\n\nRead more <https://example.com/x> https://example.com no",
+    );
   });
 });

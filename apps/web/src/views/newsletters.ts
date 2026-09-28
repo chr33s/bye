@@ -107,7 +107,7 @@ export const renderNewsletters = async (signal: AbortSignal): Promise<void> => {
             "p",
             {},
             "Publish a post from ",
-            h("a", { href: "#/world" }, "World"),
+            h("a", { href: "#/world" }, "Blog"),
             " to send it to your subscribers.",
           ),
         ),

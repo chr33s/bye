@@ -1443,6 +1443,58 @@ describe("message rendering, search and redelivery", () => {
     expect(blocked).toContain("/render/inline."); // inline parts are part of the message, not remote
   });
 
+  it("[X02] plain-text bodies convert HTML-only mail and stay inside the owner's mailbox", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    const bob = await signup(h, "bob@bye.test");
+    await command(h, ana, {
+      _tag: "SetPolicy",
+      kind: "domain",
+      subject: "example.net",
+      policy: {
+        decision: "allowed",
+        destination: "imbox",
+        labels: [],
+        bundle: false,
+        notify: false,
+      },
+    });
+    await handleInbound(
+      inboundMessage("news@example.net", "ana@bye.test", newsletter("txt1@example.net")),
+      h.env,
+    );
+    await h.drain();
+    const imbox = await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`);
+    const thread = await call(
+      h,
+      ana,
+      "GET",
+      `/v1/mailboxes/${ana.mailboxId}/threads/${imbox.body.items[0].threadId}`,
+    );
+    const deliveryId = thread.body.deliveries[0].deliveryId;
+    const path = `/v1/mailboxes/${ana.mailboxId}/deliveries/${deliveryId}/text`;
+    const text = await call(h, ana, "GET", path);
+    expect(text.status).toBe(200);
+    expect(text.body).toMatchObject({
+      deliveryId,
+      source: "html",
+      hasHtml: true,
+      truncated: false,
+    });
+    expect(text.body.text).toContain("Hero");
+    expect(text.body.text).not.toContain("<p>");
+    expect((await call(h, bob, "GET", path)).status).toBe(403);
+    expect(
+      (await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/deliveries/dlv_missing/text`))
+        .status,
+    ).toBe(404);
+    // A purged body is reported, not shown as an empty message.
+    for (const key of h.buckets.PARTS.objects.keys())
+      if (key.includes("/body/")) h.buckets.PARTS.objects.delete(key);
+    const purged = await call(h, ana, "GET", path);
+    expect(purged.status).toBe(404);
+    expect(purged.body.error.code).toBe("not_found");
+  });
+
   it("[§11] Redeliver from someone else's mailbox is refused without revealing the delivery", async () => {
     const ana = await signup(h, "ana@bye.test");
     const bob = await signup(h, "bob@bye.test");

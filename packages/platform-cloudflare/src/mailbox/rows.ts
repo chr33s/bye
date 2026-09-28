@@ -1,4 +1,5 @@
 import type {
+  BubbleCondition,
   BubbleState,
   Destination,
   Disposition,
@@ -51,13 +52,19 @@ export interface ThreadRow {
   readonly bubble_tag: BubbleTag;
   readonly bubble_at: number | null;
   readonly bubble_generation: number;
+  readonly bubble_condition?: BubbleCondition;
   readonly merged_into: string | null;
   readonly bundle_count?: number;
 }
 
 export const bubbleOf = (r: ThreadRow): BubbleState =>
   r.bubble_tag === "Scheduled"
-    ? { _tag: "Scheduled", at: Number(r.bubble_at), generation: Number(r.bubble_generation) }
+    ? {
+        _tag: "Scheduled",
+        at: Number(r.bubble_at),
+        generation: Number(r.bubble_generation),
+        condition: r.bubble_condition ?? "always",
+      }
     : r.bubble_tag === "Pinned"
       ? { _tag: "Pinned" }
       : { _tag: "None" };

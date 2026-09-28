@@ -34,7 +34,7 @@
       EntryPoint="$targetentrypoint$">
       <uap:VisualElements
         DisplayName="Bye"
-        Description="Bye: calm email and calendar with an Imbox, screening and planning."
+        Description="Bye: calm email and calendar with a screened inbox and planning."
         BackgroundColor="transparent"
         Square150x150Logo="Images\Square150x150Logo.png"
         Square44x44Logo="Images\Square44x44Logo.png">

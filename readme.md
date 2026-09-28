@@ -4,12 +4,12 @@
 
 ### _Say bye to what matters, and hey to the rest._
 
-**Bye** is an open-source email and calendar platform inspired by HEY. It is built in TypeScript on Cloudflare primitives, with Effect v4 and Alchemy. Core flows have been validated locally in Node, workerd and cloudflare in production.tmutmu
+**Bye** is an open-source email and calendar platform inspired by HEY's public feature set. It is built in TypeScript on Cloudflare primitives, with Effect v4 and Alchemy. Core flows have been validated locally in Node, workerd and cloudflare in production.tmutmu
 
-- **Email:** Imbox, The Feed, The Paper Trail, sender screening, search, drafts and more.
+- **Email:** a screened Inbox, Newsletters, Receipts, follow-ups, search, drafts and more.
 - **Calendar:** events, invitations, tasks, reminders and time tracking.
 - **Client apps:** a PWA, CLI/TUI, and React Native apps for mobile and desktop.
-- **Open source:** the code is available here for you to inspect and run.
+- **Open source:** MIT licensed; the code is available here for you to inspect and run.
 
 https://github.com/user-attachments/assets/ba2b19e1-0675-4500-9c8d-58ff4973fe1c
 
@@ -108,4 +108,8 @@ All 47 ledger rows in §2 have at least one tagged executable test; `infra/tests
 | Runtime validation             | Workerd tests cover inbound mail, search, calendar layout, draft dispatch and publishing. Production ingress retries, wire Message-ID, customer-zone onboarding and performance remain unverified.                                                                                                                                                                                                                                                            |
 | Strict Cloudflare-only profile | A self-hosted state backend (per-stage tokens, encrypted snapshots) is implemented but not deployed. The default Alchemy state backend uses an upstream Worker.                                                                                                                                                                                                                                                                                               |
 
-See [spec.md](./spec.md) for the full parity requirements and deployment gates, and [infra/RUNBOOK.md](./infra/RUNBOOK.md) for deployment and recovery procedures.
+See [spec.md](./spec.md) for the full parity requirements and deployment gates (release profiles and acceptance gates are in §13), [infra/PARITY.md](./infra/PARITY.md) for per-capability evidence, and [infra/RUNBOOK.md](./infra/RUNBOOK.md) for deployment and recovery procedures.
+
+## License
+
+Bye is released under the [MIT License](./LICENSE). Third-party notices are in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md). HEY is a trademark of 37signals; Bye is an independent project and is not affiliated with or endorsed by 37signals.

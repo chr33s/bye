@@ -1,0 +1,282 @@
+[
+  {
+    "schemaVersion": 1,
+    "invitations": [
+      {
+        "organizer": {
+          "address": ""
+        },
+        "partstat": "NEEDS-ACTION",
+        "eventId": ".[,p",
+        "calendarId": "svw$",
+        "uid": "\t",
+        "summary": " ",
+        "recurring": false,
+        "occurrenceKey": "IA7&",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 16,
+            "month": 15,
+            "day": -13,
+            "hour": -14,
+            "minute": 6,
+            "second": 12
+          },
+          "tzid": "\u0000"
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": -3,
+            "month": -4,
+            "day": -2
+          }
+        },
+        "cancelled": false
+      },
+      {
+        "organizer": {
+          "address": "\n",
+          "name": "😀"
+        },
+        "partstat": "ACCEPTED",
+        "eventId": "",
+        "calendarId": "",
+        "uid": "\u0000",
+        "summary": "\udc00",
+        "recurring": false,
+        "occurrenceKey": null,
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 5,
+            "month": 12,
+            "day": 1,
+            "hour": -13,
+            "minute": -6,
+            "second": -15
+          },
+          "tzid": "\udc00"
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 14,
+            "month": 12,
+            "day": 15
+          }
+        },
+        "cancelled": false
+      },
+      {
+        "organizer": {
+          "address": "B",
+          "name": "\u0000"
+        },
+        "partstat": "NEEDS-ACTION",
+        "eventId": "VxI",
+        "calendarId": "\u0000",
+        "uid": "",
+        "summary": "6N27",
+        "recurring": false,
+        "occurrenceKey": null,
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": -9,
+            "month": 2,
+            "day": -1,
+            "hour": 2,
+            "minute": 2,
+            "second": -16
+          },
+          "tzid": "_F"
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": 14,
+            "month": -1,
+            "day": -1,
+            "hour": -3,
+            "minute": 15,
+            "second": -15
+          },
+          "tzid": ""
+        },
+        "cancelled": true
+      },
+      {
+        "organizer": {
+          "address": " "
+        },
+        "partstat": "TENTATIVE",
+        "eventId": "I",
+        "calendarId": "OiSV",
+        "uid": "",
+        "summary": "^",
+        "recurring": true,
+        "occurrenceKey": ")4",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": -1,
+            "month": 1,
+            "day": -1,
+            "hour": 15,
+            "minute": 16,
+            "second": -8
+          },
+          "tzid": "0"
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 12,
+            "month": -1,
+            "day": 0
+          }
+        },
+        "cancelled": false
+      }
+    ]
+  },
+  {
+    "schemaVersion": 1,
+    "invitations": [
+      {
+        "organizer": {
+          "address": ""
+        },
+        "partstat": "NEEDS-ACTION",
+        "eventId": "",
+        "calendarId": "^b|",
+        "uid": "P/{=",
+        "summary": "\t",
+        "recurring": true,
+        "occurrenceKey": "ao;",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 4,
+            "month": -15,
+            "day": -1,
+            "hour": -16,
+            "minute": -12,
+            "second": 0
+          },
+          "tzid": "\udc00"
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": -15,
+            "month": 15,
+            "day": -1,
+            "hour": 3,
+            "minute": -2,
+            "second": -16
+          },
+          "tzid": "'hyg"
+        },
+        "cancelled": true
+      },
+      {
+        "organizer": {
+          "address": "\udc00"
+        },
+        "partstat": "TENTATIVE",
+        "eventId": "",
+        "calendarId": "K4",
+        "uid": "0",
+        "summary": "",
+        "recurring": true,
+        "occurrenceKey": null,
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": 5,
+            "month": 1,
+            "day": 1
+          }
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": -6,
+            "month": 3,
+            "day": -1,
+            "hour": -1,
+            "minute": 3,
+            "second": 7
+          },
+          "tzid": "{N"
+        },
+        "cancelled": false
+      },
+      {
+        "organizer": {
+          "address": "\n"
+        },
+        "partstat": "ACCEPTED",
+        "eventId": " ",
+        "calendarId": "-1",
+        "uid": "-1",
+        "summary": "E8V#",
+        "recurring": false,
+        "occurrenceKey": "\udc00",
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": 3,
+            "month": -16,
+            "day": 2
+          }
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": -2,
+            "month": 0,
+            "day": 1
+          }
+        },
+        "cancelled": false
+      },
+      {
+        "organizer": {
+          "address": " "
+        },
+        "partstat": "TENTATIVE",
+        "eventId": "1.W?",
+        "calendarId": "-1",
+        "uid": " ",
+        "summary": "\u0000",
+        "recurring": true,
+        "occurrenceKey": null,
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": -1,
+            "month": 1,
+            "day": 0
+          }
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 6,
+            "month": 11,
+            "day": -4
+          }
+        },
+        "cancelled": false
+      }
+    ]
+  },
+  {
+    "schemaVersion": 1,
+    "invitations": []
+  }
+]

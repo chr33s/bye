@@ -16,6 +16,35 @@ import { calendarError, type EventRow, SUBSCRIPTION_JOB } from "./types.ts";
 /** Events written per transaction when importing or refreshing from ICS. */
 const IMPORT_BATCH = 100;
 
+/** An import checkpoint nobody has resumed for this long is abandoned and deleted. */
+const IMPORT_CHECKPOINT_TTL_MS = 7 * 24 * 3600_000;
+
+/** Identity of an import body, so a retry resumes only the same document (FNV-1a, 2×32 bits). */
+const contentHash = (text: string): string => {
+  let a = 0x811c9dc5;
+  let b = 0x01000193 ^ text.length;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193) >>> 0;
+    b = Math.imul(b ^ c, 0x5bd1e995) >>> 0;
+  }
+  return `${text.length.toString(36)}.${a.toString(36)}.${b.toString(36)}`;
+};
+
+interface ImportCheckpoint {
+  readonly commandId: string;
+  readonly hash: string;
+}
+
+interface CheckpointRow {
+  readonly calendar_id: string;
+  readonly content_hash: string;
+  readonly next_index: number;
+  readonly imported: number;
+  readonly updated: number;
+  readonly warnings: string;
+}
+
 // Interoperability (C05, A04): ICS import/export, external read-only subscriptions (fetched
 // outside the authority), and revocable private outbound feeds. Private notes, journals and
 // source-message backlinks are never part of any ICS.
@@ -78,8 +107,12 @@ export abstract class CalendarInterop extends CalendarPlanner {
 
   /**
    * Import events from ICS. The document is parsed once and written in bounded batches, each its
-   * own transaction, so a large file never becomes one huge write. Rows are upserted by UID, so a
-   * retry after a failure part-way resumes idempotently; the receipt commits last.
+   * own transaction, so a large file never becomes one huge write. Each batch commits a checkpoint
+   * keyed by the command ID, so a retry of the same command with the same document resumes after
+   * the last committed batch and reports totals for the whole import; the receipt commits last and
+   * removes the checkpoint. A different document under the same command ID is refused. There is no
+   * explicit cancel: an import that is never retried keeps its committed batches (rows are upserted
+   * by UID, so a later import of the same file is still idempotent) and its checkpoint expires.
    */
   importIcs(input: {
     commandId: string;
@@ -92,8 +125,18 @@ export abstract class CalendarInterop extends CalendarPlanner {
     if (this.hasReceipt(input.commandId))
       return this.command(input.commandId, "ImportIcs", () => empty);
     this.writableCalendar(input.calendarId);
-    const result = this.replaceFromIcs(input.calendarId, input.ics, input.maxItems ?? 5000, false);
-    return this.command(input.commandId, "ImportIcs", () => result);
+    this.sql.run(
+      "DELETE FROM cal_import_checkpoints WHERE updated_at < ?",
+      this.clock.now() - IMPORT_CHECKPOINT_TTL_MS,
+    );
+    const result = this.replaceFromIcs(input.calendarId, input.ics, input.maxItems ?? 5000, false, {
+      commandId: input.commandId,
+      hash: contentHash(input.ics),
+    });
+    return this.command(input.commandId, "ImportIcs", () => {
+      this.sql.run("DELETE FROM cal_import_checkpoints WHERE command_id = ?", input.commandId);
+      return result;
+    });
   }
 
   private replaceFromIcs(
@@ -101,12 +144,26 @@ export abstract class CalendarInterop extends CalendarPlanner {
     ics: string,
     maxItems: number,
     removeMissing: boolean,
+    checkpoint?: ImportCheckpoint,
   ): { imported: number; updated: number; warnings: Array<string> } {
     const parsed = calParseCalendar(ics, { defaultZone: this.zone, maxItems });
     const warnings = [...parsed.warnings];
     if (parsed.truncated) warnings.push(`only the first ${maxItems} items were imported`);
-    let imported = 0;
-    let updated = 0;
+    const resumed = checkpoint
+      ? this.sql.one<CheckpointRow>(
+          "SELECT * FROM cal_import_checkpoints WHERE command_id = ?",
+          checkpoint.commandId,
+        )
+      : undefined;
+    if (
+      resumed &&
+      (resumed.content_hash !== checkpoint!.hash || resumed.calendar_id !== calendarId)
+    )
+      throw calendarError("conflict", "this import was started with a different document");
+    let imported = resumed ? Number(resumed.imported) : 0;
+    let updated = resumed ? Number(resumed.updated) : 0;
+    // Per-event warnings from committed batches; parse warnings are recomputed from the document.
+    const eventWarnings: Array<string> = resumed ? json<Array<string>>(resumed.warnings, []) : [];
     const seen = new Set<string>();
     const overrides = new Map<string, Array<CalIcsEvent>>();
     for (const o of parsed.events) {
@@ -169,14 +226,37 @@ export abstract class CalendarInterop extends CalendarPlanner {
         if (existing) updated++;
         else imported++;
       } catch (error) {
-        warnings.push(`${e.uid}: ${error instanceof Error ? error.message : "invalid event"}`);
+        eventWarnings.push(`${e.uid}: ${error instanceof Error ? error.message : "invalid event"}`);
       }
     };
     const masters = parsed.events.filter((x) => !x.recurrenceId);
-    for (let i = 0; i < masters.length; i += IMPORT_BATCH) {
+    const start = resumed ? Number(resumed.next_index) : 0;
+    // Resumed batches were written by an earlier attempt: their UIDs still count as present.
+    for (const e of masters.slice(0, start)) seen.add(e.uid);
+    for (let i = start; i < masters.length; i += IMPORT_BATCH) {
       const batch = masters.slice(i, i + IMPORT_BATCH);
-      this.sql.tx(() => batch.forEach(upsert));
+      this.sql.tx(() => {
+        batch.forEach(upsert);
+        if (checkpoint)
+          this.sql.run(
+            `INSERT INTO cal_import_checkpoints
+               (command_id, calendar_id, content_hash, next_index, imported, updated, warnings, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (command_id) DO UPDATE SET next_index = excluded.next_index,
+               imported = excluded.imported, updated = excluded.updated,
+               warnings = excluded.warnings, updated_at = excluded.updated_at`,
+            checkpoint.commandId,
+            calendarId,
+            checkpoint.hash,
+            i + batch.length,
+            imported,
+            updated,
+            JSON.stringify(eventWarnings),
+            this.clock.now(),
+          );
+      });
     }
+    warnings.push(...eventWarnings);
     if (removeMissing) {
       const gone = this.sql
         .all<{ id: string; uid: string }>(

@@ -1,5 +1,32 @@
 // Human and machine output. JSON output is stable; human output is a compact table.
 
+/* oxlint-disable no-control-regex -- these match terminal controls on purpose */
+const CONTROL_SEQUENCE = /\u001b\[[0-?]*[ -/]*[@-~]|\u009b[0-?]*[ -/]*[@-~]/g;
+// OSC, DCS, SOS, PM and APC strings, up to their BEL or ST terminator.
+const CONTROL_STRING =
+  /(?:\u001b[\]P^_X]|[\u0090\u0098\u009d-\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)/g;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+/* oxlint-enable no-control-regex */
+
+/**
+ * Terminal-safe text from untrusted mail/calendar content: drops escape sequences (CSI, OSC, DCS…)
+ * and every C0/C1 control, DEL and bidi override/isolate (which could reorder what is shown), and
+ * flattens line breaks and tabs to spaces. Callers that keep lines split on newlines first.
+ */
+export const sanitize = (text: string): string =>
+  text
+    .replace(CONTROL_SEQUENCE, "")
+    .replace(CONTROL_STRING, "")
+    .replace(/[\r\n\t\u2028\u2029]+/g, " ")
+    .replace(CONTROL, "");
+
+/** Untrusted text made terminal-safe line by line, keeping its line breaks. */
+const safeLines = (text: string): string =>
+  text
+    .split(/\r\n|[\r\n\u2028\u2029]/)
+    .map(sanitize)
+    .join("\n");
+
 /** Leaf value as text: primitives via String, anything structured as JSON. */
 const leaf = (v: unknown): string =>
   typeof v === "string"
@@ -10,6 +37,7 @@ const leaf = (v: unknown): string =>
 
 export const formatOutput = (value: unknown, json: boolean): string => {
   // Raw exports (vCard/ICS/CSV) are written as-is so `bye contacts export > contacts.vcf` works.
+  // Everything else human-readable is terminal-safe: mail and calendar text is untrusted.
   if (typeof value === "string" && !json) return value;
   if (json) return JSON.stringify(value ?? null, null, 2);
   if (value === null || value === undefined) return "ok";
@@ -17,10 +45,10 @@ export const formatOutput = (value: unknown, json: boolean): string => {
   if (items) return items.length === 0 ? "(empty)" : table(items);
   if (typeof value === "object") {
     return Object.entries(value as Record<string, unknown>)
-      .map(([k, v]) => `${k}: ${leaf(v)}`)
+      .map(([k, v]) => `${sanitize(k)}: ${safeLines(leaf(v))}`)
       .join("\n");
   }
-  return leaf(value);
+  return safeLines(leaf(value));
 };
 
 const extractItems = (value: unknown): ReadonlyArray<Record<string, unknown>> | undefined => {
@@ -54,19 +82,19 @@ const table = (rows: ReadonlyArray<Record<string, unknown>>): string => {
     ...keys.filter((k) => !PREFERRED.includes(k)),
   ].slice(0, 5);
   const cell = (v: unknown): string => {
-    const s = v === undefined || v === null ? "" : leaf(v);
-    // oxlint-disable-next-line no-control-regex -- intentional control-char match
-    const flat = s.replace(/[\r\n\t]+/g, " ").replace(/[\u0000-\u001f\u007f\u001b]/g, "");
+    const flat = sanitize(v === undefined || v === null ? "" : leaf(v));
     return flat.length > 48 ? `${flat.slice(0, 47)}…` : flat;
   };
-  const widths = columns.map((c) => Math.max(c.length, ...rows.map((r) => cell(r[c]).length)));
+  const widths = columns.map((c) =>
+    Math.max(sanitize(c).length, ...rows.map((r) => cell(r[c]).length)),
+  );
   const line = (values: ReadonlyArray<string>) =>
     values
       .map((v, i) => v.padEnd(widths[i]!))
       .join("  ")
       .trimEnd();
   return [
-    line(columns),
+    line(columns.map(sanitize)),
     line(widths.map((w) => "-".repeat(w))),
     ...rows.map((r) => line(columns.map((c) => cell(r[c])))),
   ].join("\n");

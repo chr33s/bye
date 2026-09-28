@@ -482,7 +482,7 @@ export const renderWorld = async (
   show(
     section(
       "world-title",
-      `World${world.handle ? ` · @${text(world.handle)}` : ""}`,
+      `Blog${world.handle ? ` · @${text(world.handle)}` : ""}`,
       world.handle
         ? h(
             "p",

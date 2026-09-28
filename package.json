@@ -1,6 +1,7 @@
 {
   "name": "bye",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.workers.json && tsc -p tsconfig.workers-test.json && tsc -p tsconfig.web.json && tsc -p tsconfig.sw.json && tsc -p infra/tsconfig.json",
@@ -25,6 +26,7 @@
     "scanner:smoke": "sh containers/scanner/smoke.sh",
     "scanner:mirror-smoke": "sh containers/sigmirror/smoke.sh",
     "fixtures:contracts": "node --experimental-strip-types packages/contracts/test/fixtures/generate.ts && oxfmt packages/contracts/test/fixtures",
+    "parity:ledger": "node --experimental-strip-types infra/policies/parity-ledger.ts && oxfmt infra/PARITY.md",
     "check:concurrency": "node --experimental-strip-types infra/policies/check-concurrency.ts",
     "onboarding": "node --experimental-strip-types infra/onboarding/server.ts",
     "evidence:bench": "BYE_BENCH_MESSAGES=${BYE_BENCH_MESSAGES:-1000} vitest run infra/tests/evidence-bench.test.ts",

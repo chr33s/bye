@@ -1,4 +1,9 @@
 import { pushDraft, syncedState } from "@bye/native-shared/drafts";
+import {
+  AFTER_SEND_CHOICES,
+  type AfterSendChoice,
+  afterSendFor,
+} from "@bye/native-shared/after-send";
 import { degrade, bestEffort } from "../core/degrade.ts";
 import { api, list, ApiRequestError, apiRaw, client, newCommandId } from "../api.ts";
 import { announce, errorMessage, field, formatSize, h, show } from "../core/dom.ts";
@@ -502,13 +507,13 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
   const afterSend = h(
     "select",
     { "aria-label": "After sending" },
-    h("option", { value: "none" }, "Keep in place"),
-    h(
-      "option",
-      { value: "done", ...(afterSendParam === "done" ? { selected: true } : {}) },
-      "Mark done",
+    ...AFTER_SEND_CHOICES.filter((c) => threadId || !c.replyOnly).map((c) =>
+      h(
+        "option",
+        { value: c.value, ...(afterSendParam === c.value ? { selected: true } : {}) },
+        c.label,
+      ),
     ),
-    h("option", { value: "bubble" }, "Bubble up tomorrow"),
   );
   const outcomes = h("div", { "aria-live": "polite" });
 
@@ -559,12 +564,7 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
       return;
     }
     const at = sendLater.value ? Date.parse(sendLater.value) : undefined;
-    const after =
-      afterSend.value === "done"
-        ? { _tag: "MarkDone" }
-        : afterSend.value === "bubble"
-          ? { _tag: "BubbleUp", at: Date.now() + 24 * 3600_000 }
-          : undefined;
+    const after = afterSendFor(afterSend.value as AfterSendChoice, Date.now());
     let job;
     try {
       job = await api<

@@ -2,6 +2,7 @@
   "name": "@bye/demo-reel",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "audio": "node scripts/generate-audio.ts",

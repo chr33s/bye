@@ -276,9 +276,9 @@ export const renderRules = async (signal: AbortSignal): Promise<void> => {
     "select",
     {},
     h("option", { value: "" }, "Keep destination"),
-    h("option", { value: "imbox" }, "Imbox"),
-    h("option", { value: "feed" }, "The Feed"),
-    h("option", { value: "paper-trail" }, "Paper Trail"),
+    h("option", { value: "imbox" }, "Inbox"),
+    h("option", { value: "feed" }, "Newsletters"),
+    h("option", { value: "paper-trail" }, "Receipts"),
   );
   const bundle = h("input", { type: "checkbox" });
   show(
@@ -675,7 +675,7 @@ export const renderNotes = async (signal: AbortSignal): Promise<void> => {
             reload,
           ),
         },
-        field("New Imbox sticky note", body),
+        field("New Inbox sticky note", body),
         h("button", { type: "submit" }, "Add"),
       ),
     ),
@@ -773,9 +773,9 @@ export const renderPolicies = async (signal: AbortSignal): Promise<void> => {
   const destination = h(
     "select",
     {},
-    h("option", { value: "imbox" }, "Imbox"),
-    h("option", { value: "feed" }, "The Feed"),
-    h("option", { value: "paper-trail" }, "Paper Trail"),
+    h("option", { value: "imbox" }, "Inbox"),
+    h("option", { value: "feed" }, "Newsletters"),
+    h("option", { value: "paper-trail" }, "Receipts"),
   );
   show(
     section(

@@ -179,6 +179,17 @@ END:VCALENDAR
     expect(Array.from(summary.snippet).length).toBeLessThanOrEqual(200);
     expect(summary.date).toBe(42);
   });
+
+  it("[E09] treats delivery status reports as automated even from a personal address", () => {
+    const report = parseMessage(
+      enc(
+        `From: alice@example.com\nSubject: Undeliverable\nContent-Type: multipart/report; report-type=delivery-status; boundary=b\n\n--b\nContent-Type: text/plain\n\nfailed\n--b--\n`,
+      ),
+    );
+    expect(summarizeMessage(report, 1).automated).toBe(true);
+    const plain = parseMessage(enc(`From: alice@example.com\nSubject: Re: Hi\n\nthanks`));
+    expect(summarizeMessage(plain, 1).automated).toBe(false);
+  });
 });
 
 describe("parseAddressList", () => {

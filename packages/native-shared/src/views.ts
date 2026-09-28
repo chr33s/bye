@@ -21,13 +21,13 @@ export interface MailViewNav {
 
 /** Views shown in navigation, in display order ("everything" is reachable but not listed). */
 export const MAIL_VIEW_NAV: ReadonlyArray<MailViewNav> = [
-  { view: "imbox", label: "Imbox", short: "Imbox", key: "i" },
-  { view: "feed", label: "The Feed", short: "Feed", key: "f" },
-  { view: "paper-trail", label: "Paper Trail", short: "Paper Trail", key: "p" },
-  { view: "screener", label: "Screener", short: "Screener", key: "s" },
+  { view: "imbox", label: "Inbox", short: "Inbox", key: "i" },
+  { view: "feed", label: "Newsletters", short: "News", key: "f" },
+  { view: "paper-trail", label: "Receipts", short: "Receipts", key: "p" },
+  { view: "screener", label: "New Senders", short: "New", key: "s" },
   { view: "reply-later", label: "Reply Later", short: "Later", key: "l" },
   { view: "set-aside", label: "Set Aside", short: "Aside", key: "a" },
-  { view: "bubble-up", label: "Bubble Up", short: "Bubble Up", key: "b" },
+  { view: "bubble-up", label: "Follow Up", short: "Follow Up", key: "b" },
   { view: "spam", label: "Spam", short: "Spam" },
   { view: "screened-out", label: "Screened Out", short: "Screened Out" },
   { view: "trash", label: "Trash", short: "Trash", key: "t" },

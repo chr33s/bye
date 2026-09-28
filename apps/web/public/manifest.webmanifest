@@ -2,7 +2,7 @@
   "id": "/",
   "name": "bye",
   "short_name": "bye",
-  "description": "Private email and calendar: an Imbox for mail that matters, with passkey sign-in.",
+  "description": "Private email and calendar: an inbox for mail that matters, with passkey sign-in.",
   "start_url": "/#/mail/imbox",
   "scope": "/",
   "display": "standalone",

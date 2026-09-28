@@ -2,20 +2,10 @@ import { readFileSync } from "node:fs";
 import { PARITY_LEDGER } from "@bye/domain";
 import { describe, expect, it } from "vitest";
 import { sourceFiles } from "../policies/fs.ts";
+import { LEDGER_PATH, renderLedger, tagsIn } from "../policies/parity-ledger.ts";
 
 // Definition of done (§13): no parity row hidden behind "later". Every ledger ID must have at
 // least one executable test tagged `[ID]` in its name.
-
-const tagsIn = (source: string): Set<string> => {
-  const tags = new Set<string>();
-  // Only count tags inside a test/describe title string, not arbitrary comments.
-  for (const m of source.matchAll(
-    /\b(?:it|test|describe)(?:\.\w+)*(?:\([^)]*\))?\(\s*(["'`])([^"'`]*)\1/g,
-  )) {
-    for (const t of (m[2] ?? "").matchAll(/\[([ECOPAX]\d\d)\]/g)) tags.add(t[1] as string);
-  }
-  return tags;
-};
 
 describe("§2 product parity ledger", () => {
   const covered = new Set<string>();
@@ -49,5 +39,28 @@ describe("§2 product parity ledger", () => {
         '// [E01]\nit("[E02] screener", () => {});\ndescribe.each([1])("[C03] x", () => {});',
       ),
     ]).toEqual(["E02", "C03"]);
+  });
+
+  it("infra/PARITY.md is current (run `pnpm parity:ledger`)", () => {
+    // Compare table content, not the formatter's column padding.
+    const normalize = (md: string) =>
+      md
+        .split("\n")
+        .map((l) =>
+          l
+            .replace(/\s*\|\s*/g, "|")
+            .replace(/-{3,}/g, "---")
+            .trim(),
+        )
+        .filter(Boolean)
+        .join("\n");
+    expect(normalize(readFileSync(LEDGER_PATH, "utf8"))).toBe(normalize(renderLedger()));
+  });
+
+  it("no row is production-accepted on tagged tests alone", () => {
+    const accepted = renderLedger()
+      .split("\n")
+      .filter((l) => /\| production-accepted \|/.test(l) && !l.includes("evidence/"));
+    expect(accepted).toEqual([]);
   });
 });

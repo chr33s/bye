@@ -1,7 +1,14 @@
-import { api, list, apiDownload, newCommandId } from "../api.ts";
+import {
+  firstCalendarId,
+  fromMessagePayload,
+  findThreadInvitations,
+  PARTSTAT_LABEL,
+  RSVP_CHOICES,
+} from "@bye/native-shared/mail-calendar";
+import { api, list, apiDownload, client } from "../api.ts";
 import { degrade, bestEffort } from "../core/degrade.ts";
 import { act, choice, field, formatDate, formatSize, h, show } from "../core/dom.ts";
-import { cal, calendarCommand, mailCommand, mb, state, withStepUp, zone } from "../core/state.ts";
+import { cal, mailCommand, mb, state, withStepUp, zone } from "../core/state.ts";
 
 // Thread view (E11–E15, E19, E20, C09): sandboxed message rendering, attachments gated on scan state,
 // rename / merge / unmerge with visible history, labels, notes, clips, workflow boards, redelivery,
@@ -107,50 +114,54 @@ const attachmentList = (d: Delivery): HTMLElement | null => {
   );
 };
 
-/** Invitation actions (C09): find the matching calendar event and reply with iTIP. */
-const invitationPanel = (threadId: string, subject: string, d: Delivery): HTMLElement => {
+/** Invitation actions (C09): the events this message carried, the current answer, and iTIP replies. */
+const invitationPanel = (subject: string, deliveryId: string): HTMLElement => {
   const out = h(
     "div",
     { class: "invitation", role: "group", "aria-label": "Invitation" },
     h("p", {}, "This message contains a calendar invitation."),
   );
-  const title = subject.replace(/^(invitation|updated invitation|invitation updated)\s*:\s*/i, "");
+  const status = h("p", { role: "status" }, "Looking for the event in your calendar…");
+  out.append(status);
   void (async () => {
     try {
-      const hits = await list<{ kind: string; ref: string; snippet: string }>(
-        `/v1/calendars/${cal()}/search?q=${encodeURIComponent(title)}&limit=5`,
-      );
-      const events = hits.filter((hit) => hit.kind === "event");
-      if (!events.length) out.append(h("p", {}, "The event hasn't reached your calendar yet."));
+      const events = await findThreadInvitations(client, cal(), mb(), deliveryId, subject);
+      status.textContent = events.length ? "" : "The event hasn't reached your calendar yet.";
       for (const e of events) {
-        const respond = (partstat: "ACCEPTED" | "TENTATIVE" | "DECLINED", label: string) =>
-          h(
-            "button",
-            {
-              type: "button",
-              onclick: act(label, () =>
-                calendarCommand({ type: "RespondInvitation", eventId: e.ref, partstat }),
-              ),
-            },
-            label,
-          );
+        const answer = h("span", { class: "muted" }, e.answer ? ` · ${e.answer}` : "");
         out.append(
           h(
             "div",
-            { class: "bulk" },
-            h("span", {}, e.snippet),
-            respond("ACCEPTED", "Accept"),
-            respond("TENTATIVE", "Maybe"),
-            respond("DECLINED", "Decline"),
+            { class: "bulk", role: "group", "aria-label": `Respond to ${e.label}` },
+            h("span", {}, e.label),
+            answer,
+            e.cancelled
+              ? h("span", {}, " · Cancelled by the organizer")
+              : RSVP_CHOICES.map(([partstat, label]) =>
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      onclick: act(label, async () => {
+                        await client.respondInvitation(
+                          cal(),
+                          e.eventId,
+                          partstat,
+                          e.occurrenceKey ?? undefined,
+                        );
+                        answer.textContent = ` · ${PARTSTAT_LABEL[partstat]}`;
+                      }),
+                    },
+                    label,
+                  ),
+                ),
           ),
         );
       }
     } catch {
-      out.append(h("p", {}, "Calendar unavailable."));
+      status.textContent = "Calendar unavailable.";
     }
   })();
-  void threadId;
-  void d;
   return out;
 };
 
@@ -158,15 +169,6 @@ const createEventForm = (threadId: string, subject: string, d: Delivery): HTMLEl
   const title = h("input", { value: subject, required: true });
   const start = h("input", { type: "datetime-local", required: true });
   const end = h("input", { type: "datetime-local", required: true });
-  const toCal = (v: string) => {
-    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(v);
-    if (!m) throw new Error("Pick a start and end");
-    return {
-      kind: "timed",
-      tzid: zone(),
-      local: { year: +m[1]!, month: +m[2]!, day: +m[3]!, hour: +m[4]!, minute: +m[5]!, second: 0 },
-    };
-  };
   return h(
     "details",
     {},
@@ -176,20 +178,21 @@ const createEventForm = (threadId: string, subject: string, d: Delivery): HTMLEl
       {
         class: "compose",
         onsubmit: act("Event created", async () => {
-          const calendars = await list<{ id?: string; calendarId?: string }>(
-            `/v1/calendars/${cal()}/calendars`,
-          );
-          const target = calendars[0]?.id ?? calendars[0]?.calendarId;
-          if (!target) throw new Error("Create a calendar first");
-          await api("POST", `/v1/calendars/${cal()}/from-message`, {
-            schemaVersion: 1,
-            commandId: newCommandId(),
-            calendarId: target,
-            message: { mailboxId: mb(), threadId, deliveryId: d.deliveryId },
+          const { items } = await client.calendars(cal());
+          const calendarId = firstCalendarId(items);
+          if (!calendarId) throw new Error("Create a calendar first");
+          const built = fromMessagePayload({
+            calendarId,
+            mailboxId: mb(),
+            threadId,
+            deliveryId: d.deliveryId,
             title: title.value,
-            start: toCal(start.value),
-            end: toCal(end.value),
+            start: start.value,
+            end: end.value,
+            timeZone: zone(),
           });
+          if (!built.ok) throw new Error(built.errors.join("; "));
+          await client.createEventFromMessage(cal(), built.body);
         }),
       },
       field("Title", title),
@@ -541,7 +544,7 @@ export const renderThread = async (threadId: string, signal: AbortSignal): Promi
             new Date(d.date).toLocaleString(),
           ),
         ),
-        d.routing?.hasCalendar ? invitationPanel(threadId, t.subject, d) : null,
+        d.routing?.hasCalendar ? invitationPanel(t.subject, d.deliveryId) : null,
         h("iframe", {
           title: `Message from ${fromText(d.from)}`,
           sandbox: "allow-popups allow-popups-to-escape-sandbox",

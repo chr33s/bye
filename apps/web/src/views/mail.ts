@@ -4,6 +4,7 @@ import { api, list, query, type ThreadRow, type ViewPage } from "../api.ts";
 import { act, announce, choice, h, section, show } from "../core/dom.ts";
 import { mailCommand, mb } from "../core/state.ts";
 import { appendPage, emptyPaged, type Paged } from "../lib/paging.ts";
+import { coverPanel, coverPanelEnabled } from "./cover-panel.ts";
 
 // Mailbox views (E01–E10, E24): paging, Screener bulk decisions, Spam/Screened Out/Trash restore and
 // empty, attention piles (Reply Later, Set Aside, Bubble Up), Focus & Reply, Read Together, the
@@ -13,7 +14,7 @@ const EMPTY: Readonly<Record<string, string>> = {
   screener: "Nobody is waiting to be screened.",
   "reply-later": "Nothing to reply to later.",
   "set-aside": "Nothing set aside.",
-  "bubble-up": "Nothing bubbling up.",
+  "bubble-up": "No follow-ups.",
   spam: "No spam.",
   "screened-out": "Nobody screened out.",
   trash: "Trash is empty.",
@@ -99,7 +100,11 @@ const rowActions = (row: ThreadRow, view: string): HTMLElement => {
         "button",
         {
           type: "button",
-          onclick: act("Popped", () => mailCommand({ _tag: "PopBubble", threadId: id }), refresh),
+          onclick: act(
+            "Back in the Inbox",
+            () => mailCommand({ _tag: "PopBubble", threadId: id }),
+            refresh,
+          ),
         },
         "Pop",
       ),
@@ -160,7 +165,11 @@ const threadItem = (row: ThreadRow, s: ListState): HTMLElement => {
     row.newSinceVisit ? h("span", { class: "badge" }, "New since last visit") : null,
     row.quarantined ? h("span", { class: "badge warn" }, "Quarantined") : null,
     bubble?._tag === "Scheduled"
-      ? h("span", { class: "badge" }, `Bubbles up ${new Date(bubble.at).toLocaleString()}`)
+      ? h(
+          "span",
+          { class: "badge" },
+          `Follow-up ${new Date(bubble.at).toLocaleString()}${bubble.condition === "if-no-reply" ? " if no reply" : ""}`,
+        )
       : null,
     bubble?._tag === "Pinned" ? h("span", { class: "badge" }, "Pinned") : null,
     ...(row.labels ?? []).map((l) => h("span", { class: "label" }, l)),
@@ -215,9 +224,9 @@ const bulkBar = (s: ListState): HTMLElement => {
     const dest = h(
       "select",
       { "aria-label": "Approve into" },
-      h("option", { value: "imbox" }, "Imbox"),
-      h("option", { value: "feed" }, "The Feed"),
-      h("option", { value: "paper-trail" }, "Paper Trail"),
+      h("option", { value: "imbox" }, "Inbox"),
+      h("option", { value: "feed" }, "Newsletters"),
+      h("option", { value: "paper-trail" }, "Receipts"),
     );
     buttons.push(
       dest,
@@ -278,7 +287,7 @@ const bulkBar = (s: ListState): HTMLElement => {
         {
           type: "button",
           onclick: act(
-            "Cleared the Screener",
+            "Cleared New Senders",
             () => mailCommand({ _tag: "ClearScreener", boundary: s.boundary }),
             refresh,
           ),
@@ -328,7 +337,7 @@ const bulkBar = (s: ListState): HTMLElement => {
         {
           type: "button",
           onclick: act(
-            "Read Together",
+            "Read All",
             need(() => readTogether(ids())),
           ),
         },
@@ -359,7 +368,7 @@ const bulkBar = (s: ListState): HTMLElement => {
         "Spam",
       ),
     );
-    const when = h("input", { type: "datetime-local", "aria-label": "Bubble up at" });
+    const when = h("input", { type: "datetime-local", "aria-label": "Follow up at" });
     buttons.push(
       when,
       h(
@@ -376,7 +385,7 @@ const bulkBar = (s: ListState): HTMLElement => {
             refresh,
           ),
         },
-        "Bubble up",
+        "Follow up",
       ),
       h(
         "button",
@@ -394,14 +403,14 @@ const bulkBar = (s: ListState): HTMLElement => {
       ),
     );
     if (s.view === "reply-later")
-      buttons.unshift(h("a", { href: "#/focus", class: "button primary" }, "Focus & Reply"));
+      buttons.unshift(h("a", { href: "#/focus", class: "button primary" }, "Reply Queue"));
     if (s.view === "imbox")
       buttons.unshift(
         h(
           "button",
           {
             type: "button",
-            onclick: act("Read Together", () => readTogether("new-for-you")),
+            onclick: act("Read All", () => readTogether("new-for-you")),
           },
           "Power through new",
         ),
@@ -481,10 +490,23 @@ export const renderView = async (
     more.hidden = s.paged.done;
   };
   more.addEventListener("click", act("Loaded more", load));
+  // The calendar cover panel (C09) is optional and shown in the Imbox only.
+  const cover = view === "imbox" && !label ? coverPanelEnabled(signal) : Promise.resolve(false);
+  // If the list itself fails, the route's error state wins; the preference read is then moot.
+  cover.catch(bestEffort);
   await load();
   if (view === "feed" || view === "paper-trail")
     void mailCommand({ _tag: "VisitView", view }).catch(bestEffort);
-  show(section("view-title", title, s.paged.items.length ? bulkBar(s) : null, body, more));
+  show(
+    section(
+      "view-title",
+      title,
+      (await cover) ? coverPanel() : null,
+      s.paged.items.length ? bulkBar(s) : null,
+      body,
+      more,
+    ),
+  );
 };
 
 /** Expanded Feed (E05): newsletters rendered in place, lazily, with visit markers and remembered position. */
@@ -569,7 +591,7 @@ export const renderFeed = async (signal: AbortSignal): Promise<void> => {
   show(
     section(
       "view-title",
-      "The Feed",
+      "Newsletters",
       h(
         "div",
         { class: "bulk" },
@@ -684,7 +706,7 @@ const sequential = async (
 export const renderFocus = async (signal: AbortSignal): Promise<void> => {
   const queue = await list<{ thread: ThreadRow }>(`/v1/mailboxes/${mb()}/focus`, signal);
   await sequential(
-    "Focus & Reply",
+    "Reply Queue",
     queue.map((q) => q.thread?.threadId ?? (q as unknown as ThreadRow).threadId),
     signal,
     (threadId) => mailCommand({ _tag: "SetAttention", threadId, flag: "replyLater", on: false }),
@@ -698,7 +720,7 @@ export const renderBatch = async (batchId: string, signal: AbortSignal): Promise
     signal,
   );
   await sequential(
-    "Read Together",
+    "Read All",
     batch.map((b) => b.thread.threadId),
     signal,
     async () => undefined,

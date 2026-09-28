@@ -23,7 +23,7 @@ import {
   MailSendRequest,
   MailUploadReserveRequest,
 } from "@bye/contracts";
-import { parseVCards, serializeVCards, type VCard } from "@bye/mail-codec";
+import { htmlToReadableText, parseVCards, serializeVCards, type VCard } from "@bye/mail-codec";
 import {
   authorizeSearchResults,
   type MailboxReadQuery,
@@ -32,6 +32,7 @@ import {
   zipStream,
 } from "@bye/platform-cloudflare";
 import { call, mailbox } from "../authorities.ts";
+import { bodyKeyFor, type StoredBody } from "../objects.ts";
 import type { CoreEnv } from "../env.ts";
 import { errorResponse, type Params, route, type Route } from "../http.ts";
 import { downloadToken, previewToken, renderToken } from "../render.ts";
@@ -60,6 +61,8 @@ const MAX_UNIFIED_MAILBOXES = 10;
 const MAX_SEARCH_SHARDS = 24;
 const ZIP_MAX_BYTES = 200 * 1024 * 1024;
 const CONTACT_IMPORT_MAX_BYTES = 1024 * 1024;
+/** Characters of plain-text body returned per message (larger bodies say `truncated`). */
+const TEXT_BODY_MAX_CHARS = 1_000_000;
 
 const downloadHeaders = (filename: string, size?: number): Record<string, string> => ({
   "content-type": "application/octet-stream",
@@ -259,6 +262,42 @@ export const mailRoutes: ReadonlyArray<Route<CoreEnv>> = [
           { concurrency: 8 },
         );
         return { ...detail, deliveries };
+      }),
+    ),
+  ),
+  // Plain-text body for terminal and agent clients (X02): the same stored, sanitized body the
+  // render origin serves, as text. HTML-only messages are converted here, so clients never parse
+  // HTML themselves. Output is data, not markup: clients must still sanitize control characters.
+  route(
+    "GET",
+    "/v1/mailboxes/:id/deliveries/:deliveryId/text",
+    authed(({ params, env }) =>
+      Effect.gen(function* () {
+        yield* requireMailbox(params.id!, "read");
+        const renderable = yield* Effect.promise(() =>
+          mailbox(env, params.id!).renderable(params.deliveryId!),
+        );
+        if (!renderable) return yield* new NotFound({ resource: "delivery" });
+        const object = yield* Effect.promise(() =>
+          env.PARTS.get(bodyKeyFor(renderable.messageKey)),
+        );
+        // A missing body (purged, or not yet stored) is reported, never shown as an empty message.
+        if (!object) return yield* new NotFound({ resource: "message body" });
+        const stored = (yield* Effect.promise(() => object.json())) as StoredBody;
+        const converted = !stored.text.trim() && stored.html !== null;
+        const text = converted ? htmlToReadableText(stored.html!) : stored.text;
+        const truncated = text.length > TEXT_BODY_MAX_CHARS;
+        let cut = truncated ? text.slice(0, TEXT_BODY_MAX_CHARS) : text;
+        // Never end on half of a surrogate pair (an emoji cut in two).
+        if (truncated && /[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+        return {
+          schemaVersion: 1,
+          deliveryId: params.deliveryId!,
+          text: cut,
+          truncated,
+          source: converted ? "html" : "text",
+          hasHtml: stored.html !== null,
+        };
       }),
     ),
   ),

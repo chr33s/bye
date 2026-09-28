@@ -1,0 +1,21 @@
+[
+  {
+    "organizer": {
+      "address": " "
+    },
+    "partstat": "ACCEPTED"
+  },
+  {
+    "organizer": {
+      "address": "",
+      "name": "az;X"
+    },
+    "partstat": "DECLINED"
+  },
+  {
+    "organizer": {
+      "address": ""
+    },
+    "partstat": "ACCEPTED"
+  }
+]

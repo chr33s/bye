@@ -440,10 +440,17 @@ export const parseMessage = (
 const AUTOMATED_SENDER =
   /^(no-?reply|do-?not-?reply|mailer-daemon|postmaster|bounces?|notifications?)([+-][^@]*)?@/i;
 
+// Delivery status and disposition notifications (RFC 3462 / RFC 6522): bounces and read receipts.
+const REPORT_TYPE = /^\s*multipart\/report\b/i;
+
 export const isAutomatedMessage = (
-  parsed: Pick<ParsedMessage, "autoSubmitted" | "precedence" | "listId" | "from">,
+  parsed: Pick<ParsedMessage, "autoSubmitted" | "precedence" | "listId" | "from"> &
+    Partial<Pick<ParsedMessage, "headers">>,
 ): boolean =>
   (parsed.autoSubmitted !== undefined && parsed.autoSubmitted !== "no") ||
+  (parsed.headers ?? []).some(
+    ([n, v]) => n.toLowerCase() === "content-type" && REPORT_TYPE.test(v),
+  ) ||
   (parsed.precedence !== undefined &&
     ["bulk", "list", "junk", "auto_reply"].includes(parsed.precedence)) ||
   parsed.listId !== undefined ||

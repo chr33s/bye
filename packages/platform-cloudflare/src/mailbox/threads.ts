@@ -1,4 +1,5 @@
 import {
+  type BubbleCondition,
   type Destination,
   type Disposition,
   normalizeAddress,
@@ -66,7 +67,12 @@ export interface MovePatch {
 
 export type BubbleChange =
   /** Schedule a Bubble Up; `resetSeen` also clears New For You (the explicit command). */
-  | { readonly _tag: "Scheduled"; readonly at: number; readonly resetSeen: boolean }
+  | {
+      readonly _tag: "Scheduled";
+      readonly at: number;
+      readonly condition: BubbleCondition;
+      readonly resetSeen: boolean;
+    }
   | { readonly _tag: "Pinned" }
   /** Resolve now; `surface` returns the thread to New For You. */
   | { readonly _tag: "Popped"; readonly surface: boolean }
@@ -318,12 +324,13 @@ export class ThreadLedger {
       case "Scheduled": {
         const generation = this.ctx.kernel.schedule("bubble", threadId, next.at, {});
         this.sql.run(
-          `UPDATE threads SET bubble_tag = 'Scheduled', bubble_at = ?, bubble_generation = ?${next.resetSeen ? ", new_for_you = 0, seen_revision = revision" : ""} WHERE thread_id = ?`,
+          `UPDATE threads SET bubble_tag = 'Scheduled', bubble_at = ?, bubble_generation = ?, bubble_condition = ?${next.resetSeen ? ", new_for_you = 0, seen_revision = revision" : ""} WHERE thread_id = ?`,
           next.at,
           generation,
+          next.condition,
           threadId,
         );
-        this.ctx.change("thread", "bubble", { threadId, at: next.at });
+        this.ctx.change("thread", "bubble", { threadId, at: next.at, condition: next.condition });
         return generation;
       }
       case "Pinned":

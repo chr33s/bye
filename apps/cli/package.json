@@ -2,7 +2,7 @@
   "name": "@bye/cli",
   "version": "0.2.0",
   "description": "bye mail and calendar from the terminal",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/chr33s/bye.git",
@@ -33,6 +33,7 @@
   },
   "devDependencies": {
     "@bye/domain": "workspace:*",
+    "@bye/mail-codec": "workspace:*",
     "@bye/native-shared": "workspace:*",
     "rolldown": "1.2.11"
   },

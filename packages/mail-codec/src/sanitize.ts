@@ -737,3 +737,76 @@ export const htmlToText = (html: string): string => {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 };
+
+/**
+ * Message HTML as text for reading (terminal and agent clients), unlike `htmlToText`'s one-line
+ * projection for snippets and search: entities are decoded, `<pre>` blocks keep their spacing and
+ * line breaks, and web/mail links whose text differs from the target show it as `text <url>`.
+ * The result is untrusted text: clients still strip control characters before display.
+ */
+export const htmlToReadableText = (html: string): string => {
+  // Flowing text collapses whitespace; preformatted text is kept exactly.
+  const segments: Array<{ text: string; pre: boolean }> = [];
+  const emit = (text: string, pre = false) => segments.push({ text, pre });
+  const skip: Array<string> = [];
+  let preDepth = 0;
+  let link: { href: string; label: string } | undefined;
+  for (const token of tokenizeHtml(html)) {
+    if (skip.length > 0) {
+      const top = skip[skip.length - 1]!;
+      if (token.type === "start" && token.name === top && !token.selfClosing) skip.push(top);
+      else if (token.type === "end" && token.name === top) skip.pop();
+      continue;
+    }
+    if (token.type === "text") {
+      const text = decodeHtmlEntities(token.text);
+      if (link) link.label += text;
+      if (preDepth > 0) emit(text, true);
+      else emit(text.replace(/\s+/g, " "));
+    } else if (token.type === "start") {
+      if (SKIP_TEXT.has(token.name) && !token.selfClosing) skip.push(token.name);
+      else if (token.name === "pre" && !token.selfClosing) {
+        preDepth++;
+        emit("\n");
+      } else if (token.name === "a" && !token.selfClosing) {
+        const href = token.attrs.find(([n]) => n === "href")?.[1] ?? "";
+        link = /^(https?:|mailto:)/i.test(href) ? { href, label: "" } : undefined;
+      } else if (token.name === "br") emit("\n", preDepth > 0);
+      else if (token.name === "li") emit("\n- ");
+      else if (token.name === "td" || token.name === "th") emit(" ");
+      else if (BLOCK_TAGS.has(token.name)) emit("\n");
+    } else if (token.type === "end") {
+      if (token.name === "pre" && preDepth > 0) {
+        preDepth--;
+        emit("\n");
+      } else if (token.name === "a" && link) {
+        if (link.label.replace(/\s+/g, " ").trim() !== link.href) emit(` <${link.href}>`);
+        link = undefined;
+      } else if (BLOCK_TAGS.has(token.name)) emit("\n");
+    }
+  }
+  // Tidy flowing lines only; preformatted lines keep their leading spaces.
+  const lines: Array<{ text: string; pre: boolean }> = [{ text: "", pre: false }];
+  for (const s of segments) {
+    const parts = s.text.split("\n");
+    parts.forEach((part, i) => {
+      if (i > 0) lines.push({ text: "", pre: s.pre });
+      const line = lines[lines.length - 1]!;
+      line.text += part;
+      line.pre ||= s.pre && part.length > 0;
+    });
+  }
+  return lines
+    .map((l) =>
+      (l.pre
+        ? l.text
+        : l.text
+            .replace(/ /g, " ")
+            .replace(/[ \t]+/g, " ")
+            .trim()
+      ).replace(/[ \t]+$/, ""),
+    )
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+};

@@ -65,10 +65,16 @@ export class MailboxDrafts {
     if (d.state !== "open") reject("conflict", "draft is being sent", { state: d.state });
     if (d.revision !== expectedRevision) return { _tag: "Conflict", current: d };
     const revision = d.revision + 1;
+    // The forwarded message is server-side provenance that clients never send back (not in the
+    // v1 draft contract), so a save keeps it.
+    const saved =
+      d.content.forwardOf !== undefined && content.forwardOf === undefined
+        ? { ...content, forwardOf: d.content.forwardOf }
+        : content;
     this.sql.run(
       "UPDATE drafts SET revision = ?, content = ?, identity_id = ?, updated_at = ? WHERE draft_id = ?",
       revision,
-      JSON.stringify(content),
+      JSON.stringify(saved),
       content.identityId ?? null,
       this.ctx.now(),
       draftId,

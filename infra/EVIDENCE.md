@@ -33,3 +33,29 @@ Recovery drills with local evidence:
 - state backup/restore (`infra/drills/state-drill.ts`; real-backend procedure in `infra/drills/state-drill-remote.md`);
 - data restore (`infra/drills/DATA_RESTORE.md`);
 - interrupted deploy (`infra/drills/FAILED_DEPLOY.md`).
+
+## Release requirement mapping
+
+Spec §13.2–13.6 layers release profiles, requirements and gates on these rows. Each P-item's evidence is recorded against the rows below; per-capability evidence is in [`PARITY.md`](./PARITY.md).
+
+| Requirement                                   | Rows | Local status                                                                                                                  |
+| --------------------------------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------- |
+| P0.1 Real Cloudflare deployment               | 6, 8 | Open                                                                                                                          |
+| P0.2 Personal outbound qualification          | 1, 3 | Open                                                                                                                          |
+| P0.3 Inbound SMTP retry                       | 2    | Local: fault switch and journal replay; Open: external SMTP                                                                   |
+| P0.4 Recovery                                 | 7, 8 | Local: drills above; Open: staging drill                                                                                      |
+| P0.5 Monitoring                               | 8    | Open                                                                                                                          |
+| P0.6a Server and web security                 | —    | Local: sanitizer, authorization and tenancy tests; Open: independent review                                                   |
+| P0.6b Native security                         | 5    | Local: XChaCha20-Poly1305 sealed drafts (`sealed-store.test.ts`); Open: signed-build devices                                  |
+| P0.7 Performance                              | 5    | Local: `pnpm evidence:bench`; Open: staging load                                                                              |
+| P0.8 Hosted service obligations               | —    | Open                                                                                                                          |
+| P0.9 Paid-hosted billing                      | 1    | Local: billing ledger and signed webhook; Open: payments UI and provider                                                      |
+| P0.10 MIT licensing                           | —    | Done: `LICENSE`, manifests, `THIRD_PARTY_NOTICES.md`                                                                          |
+| P1.1 E09 Bubble Up                            | —    | Local: conditional bubbles and send-and-pop (`mailbox.test.ts` E09)                                                           |
+| P1.2 C09 email/calendar integration           | —    | Local: web and native cover panel, native RSVP and create-event-from-message (`cover-panel.test.ts`, `mail-calendar.test.ts`) |
+| P1.3 X02 TUI parity                           | —    | Local: every P1.3 workflow (`apps/cli/test/tui.test.ts`); Open: accessibility audit                                           |
+| P1.4 Domains, forwarding, external identities | 4    | Open                                                                                                                          |
+| P1.5 World subscription delivery              | 1    | Open                                                                                                                          |
+| P1.6 Native release matrix                    | 5    | Open                                                                                                                          |
+| P2.1 C03 long recurrence rules                | —    | Done: COUNT ≤ 100,000 validated; COUNT rules expand to their last occurrence (`gaps.test.ts`)                                 |
+| P2.2 C05 resumable ICS import                 | —    | Done: per-command checkpoints (`calendar.hardening.test.ts`)                                                                  |

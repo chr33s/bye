@@ -11,13 +11,16 @@
     "./auth": "./src/auth/index.ts",
     "./instance": "./src/instance/index.ts",
     "./calendar-form": "./src/calendar-form.ts",
+    "./mail-calendar": "./src/mail-calendar.ts",
+    "./after-send": "./src/after-send.ts",
     "./views": "./src/views.ts",
     "./platform": "./src/ui/host.ts",
     "./routes": "./src/routes.ts",
     "./app": "./src/ui/App.tsx"
   },
   "dependencies": {
-    "@bye/domain": "workspace:*"
+    "@bye/domain": "workspace:*",
+    "@noble/ciphers": "2.4.0"
   },
   "devDependencies": {
     "@bye/contracts": "workspace:*"

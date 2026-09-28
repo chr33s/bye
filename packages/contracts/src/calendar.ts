@@ -246,6 +246,20 @@ export const OccurrencesQuery = Schema.Struct({
 export type OccurrencesQuery = typeof OccurrencesQuery.Type;
 export const decodeOccurrencesQuery = Schema.decodeUnknownEffect(OccurrencesQuery);
 
+export const CalPartstatSchema = Schema.Literals([
+  "NEEDS-ACTION",
+  "ACCEPTED",
+  "TENTATIVE",
+  "DECLINED",
+  "DELEGATED",
+]);
+
+/** The owner's side of an invitation (C04): who organizes it and the answer that applies. */
+export const InvitationStateWire = Schema.Struct({
+  organizer: Schema.Struct({ address: Schema.String, name: Schema.optional(Schema.String) }),
+  partstat: CalPartstatSchema,
+});
+
 export const OccurrenceWire = Schema.Struct({
   eventId: Schema.String,
   calendarId: Schema.String,
@@ -266,8 +280,31 @@ export const OccurrenceWire = Schema.Struct({
   /** Overlap layout for day/week grids (timed occurrences only). */
   column: Schema.optional(Schema.Int),
   columns: Schema.optional(Schema.Int),
+  /** Present only for the owner, on events someone else organizes. Added in v1.2. */
+  invitation: Schema.optional(InvitationStateWire),
 });
 export type OccurrenceWire = typeof OccurrenceWire.Type;
+
+/** An invitation a delivered message carried (C09): what a thread's RSVP actions answer. */
+export const MessageInvitationWire = Schema.Struct({
+  ...InvitationStateWire.fields,
+  eventId: Schema.String,
+  calendarId: Schema.String,
+  uid: Schema.String,
+  summary: Schema.String,
+  recurring: Schema.Boolean,
+  /** Set when the message concerns one occurrence; pass it to RespondInvitation. */
+  occurrenceKey: Schema.NullOr(Schema.String),
+  start: CalTimeSchema,
+  end: CalTimeSchema,
+  cancelled: Schema.Boolean,
+});
+export type MessageInvitationWire = typeof MessageInvitationWire.Type;
+
+export const MessageInvitationsResponse = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  invitations: Schema.Array(MessageInvitationWire),
+});
 
 export const OccurrencesResponse = Schema.Struct({
   schemaVersion: Schema.Literal(1),
@@ -347,6 +384,11 @@ export const CalendarReadQuery = Schema.Union([
   }),
   Schema.Struct({ type: Schema.Literal("Occurrences"), ...OccurrencesQuery.fields }),
   Schema.Struct({ type: Schema.Literal("Search"), query: Schema.String, limit: Schema.Int }),
+  Schema.Struct({
+    type: Schema.Literal("Invitations"),
+    mailboxId: Schema.String,
+    deliveryId: Schema.String,
+  }),
 ]);
 export type CalendarReadQuery = typeof CalendarReadQuery.Type;
 export const decodeCalendarReadQuery = Schema.decodeUnknownEffect(CalendarReadQuery);

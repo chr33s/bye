@@ -81,6 +81,9 @@ export const calParseRRule = (input: string): CalRRule => {
   const count = parts.has("COUNT") ? Number(parts.get("COUNT")) : undefined;
   if (count !== undefined && (!Number.isInteger(count) || count < 1))
     throw new CalRRuleError("invalid COUNT");
+  // Refused rather than accepted and silently cut short at expansion (C03).
+  if (count !== undefined && count > CAL_MAX_RRULE_COUNT)
+    throw new CalRRuleError(`COUNT above the supported ${CAL_MAX_RRULE_COUNT}`);
   const until = parts.get("UNTIL");
   if (until !== undefined && !/^\d{8}(T\d{6}Z?)?$/.test(until))
     throw new CalRRuleError("invalid UNTIL");
@@ -279,6 +282,16 @@ export interface CalOccurrenceStart {
   readonly startMs: number;
 }
 
+/**
+ * Largest supported COUNT (C03). Expansion walks COUNT rules from DTSTART, so the period bound for
+ * them scales with COUNT instead of the fixed `maxPeriods` default: every accepted occurrence stays
+ * reachable, however far in the future it falls.
+ */
+export const CAL_MAX_RRULE_COUNT = 100_000;
+
+/** Periods walked per COUNT occurrence: covers rules whose periods are mostly empty (Feb 29, BYMONTHDAY=31). */
+const PERIODS_PER_COUNT = 8;
+
 export interface CalExpandOptions {
   readonly from: number;
   readonly to: number;
@@ -347,7 +360,10 @@ export const calExpand = (
   const viewerZone = options.viewerZone ?? "UTC";
   const durationMs = options.durationMs ?? 0;
   const maxOccurrences = options.maxOccurrences ?? 5000;
-  const maxPeriods = options.maxPeriods ?? 20_000;
+  const maxPeriods = Math.max(
+    options.maxPeriods ?? 20_000,
+    set.rule?.count !== undefined ? set.rule.count * PERIODS_PER_COUNT : 0,
+  );
   const overlaps = (ms: number): boolean =>
     ms < options.to && ms + Math.max(durationMs, 1) > options.from;
   const exKeys = new Set((set.exdates ?? []).map(calTimeKey));

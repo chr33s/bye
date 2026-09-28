@@ -1,6 +1,7 @@
 {
   "name": "@bye/testing",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

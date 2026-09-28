@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ScrollView, Switch, Text, View } from "react-native";
 import type { ByeClient } from "../client.ts";
+import { calendarPanelEnabled } from "../mail-calendar.ts";
 import type { DeviceSessionWire } from "../wire.ts";
 import { Button } from "./Button.tsx";
 import { s } from "./theme.ts";
@@ -45,7 +46,10 @@ export const Settings = ({
     void load();
   }, [load]);
 
-  const remoteImages = (prefs.remoteImages ?? "off") !== "off";
+  // The route answers `{ preferences, notifications, away }`.
+  const values = (prefs.preferences ?? prefs) as Record<string, unknown>;
+  const remoteImages = (values.remoteImages ?? "off") !== "off";
+  const calendarPanel = calendarPanelEnabled(prefs);
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
       <Text style={s.h1} accessibilityRole="header">
@@ -59,6 +63,20 @@ export const Settings = ({
           onValueChange={(v) =>
             void client
               .setPreference(mailboxId, "remoteImages", v ? "proxy" : "off")
+              .then(load, (e: unknown) => setStatus(String(e)))
+          }
+        />
+      </View>
+      <View style={[s.row, { paddingHorizontal: 0 }]}>
+        <Text style={[s.text, { flex: 1 }]}>
+          Calendar panel in the Inbox (today's agenda and next event)
+        </Text>
+        <Switch
+          accessibilityLabel="Calendar panel in the Inbox"
+          value={calendarPanel}
+          onValueChange={(v) =>
+            void client
+              .setPreference(mailboxId, "calendarPanel", v)
               .then(load, (e: unknown) => setStatus(String(e)))
           }
         />

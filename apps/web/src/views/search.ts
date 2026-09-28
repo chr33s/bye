@@ -148,7 +148,7 @@ export const renderSearch = async (params: URLSearchParams, signal: AbortSignal)
       {
         type: "button",
         onclick: act(
-          "Read Together",
+          "Read All",
           needSelection(async () => {
             const batch = await mailCommand<{ batchId: string }>({
               _tag: "CreateBatch",

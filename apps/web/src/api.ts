@@ -46,7 +46,11 @@ export type Me = MeWire;
 
 export type Bubble =
   | { readonly _tag: "None" }
-  | { readonly _tag: "Scheduled"; readonly at: number }
+  | {
+      readonly _tag: "Scheduled";
+      readonly at: number;
+      readonly condition?: "always" | "if-no-reply";
+    }
   | { readonly _tag: "Pinned" };
 
 /** A mailbox view row (the MailThreadSummary contract; web tolerates older servers' missing fields). */

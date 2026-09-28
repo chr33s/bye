@@ -275,7 +275,7 @@ describe("attention piles", () => {
     expect(m.store.views.getThread(t.threadId).thread.attention.bubble._tag).toBe("None");
   });
 
-  it("[E09] send-and-pop schedules a bubble after acceptance; cancelled bubble cannot resurrect", () => {
+  it("[E09] send-and-bubble schedules a bubble after acceptance; cancelled bubble cannot resurrect", () => {
     const m = setup();
     m.allow("alice@example.com");
     const t = m.deliver({ messageIdHeader: "snp@example.com" });
@@ -301,6 +301,106 @@ describe("attention piles", () => {
     m.store.triage.clearBubble(t.threadId);
     m.clock.advance(90_000_000);
     expect(m.store.runDueJobs(m.clock.now()).ran).toBe(0);
+  });
+
+  const sendReply = (
+    m: ReturnType<typeof setup>,
+    threadId: string,
+    afterSend: Parameters<typeof m.store.sends.send>[1]["afterSend"],
+  ) => {
+    const draftId = m.store.drafts.createReplyDraft(
+      threadId,
+      "reply",
+      m.store.views.getThread(threadId).deliveries,
+    );
+    const sent = m.store.sends.send(draftId, {
+      expectedRevision: 1,
+      ...(afterSend ? { afterSend } : {}),
+      undoMs: 0,
+    });
+    if (sent._tag !== "Queued") throw new Error("expected queued");
+    m.store.runDueJobs(m.clock.now());
+    m.store.sends.claim(sent.sendJobIds[0]!);
+    return sent.sendJobIds[0]!;
+  };
+
+  it("[E09] if-no-reply bubble ignores automated and own mail, yields to a real reply", () => {
+    const m = setup();
+    m.allow("alice@example.com");
+    m.allow("mailer-daemon@example.com");
+    m.allow("me@bye.test");
+    const t = m.deliver({ messageIdHeader: "nr@example.com" });
+    const at = m.clock.now() + 86_400_000;
+    const job = sendReply(m, t.threadId, { _tag: "BubbleUp", at, condition: "if-no-reply" });
+    // Nothing happens before the provider accepts the message.
+    expect(m.store.views.getThread(t.threadId).thread.attention.bubble._tag).toBe("None");
+    m.store.sends.accepted(job, { providerId: "p" });
+    expect(m.store.views.getThread(t.threadId).thread.attention.bubble).toMatchObject({
+      _tag: "Scheduled",
+      at,
+      condition: "if-no-reply",
+    });
+    // An away reply, a bounce and the user's own copy from another client do not count.
+    m.deliver({ inReplyTo: ["nr@example.com"], automated: true, subject: "Out of office" });
+    m.deliver({
+      fromAddress: "mailer-daemon@example.com",
+      inReplyTo: ["nr@example.com"],
+      automated: true,
+    });
+    m.deliver({ fromAddress: "me@bye.test", inReplyTo: ["nr@example.com"] });
+    expect(m.store.views.getThread(t.threadId).thread.attention.bubble._tag).toBe("Scheduled");
+    // A real reply from a recipient suppresses the bubble; the timer then does nothing.
+    m.deliver({ inReplyTo: ["nr@example.com"], subject: "Re: Hello" });
+    expect(m.store.views.getThread(t.threadId).thread.attention.bubble._tag).toBe("None");
+    expect(m.store.views.getThread(t.threadId).thread.newForYou).toBe(true);
+    m.clock.advance(90_000_000);
+    expect(m.store.runDueJobs(m.clock.now()).ran).toBe(0);
+  });
+
+  it("[E09] if-no-reply bubble resurfaces on time when nobody answers", () => {
+    const m = setup();
+    m.allow("alice@example.com");
+    const t = m.deliver({ messageIdHeader: "nr2@example.com" });
+    m.store.views.markSeen(t.threadId, 99);
+    m.store.triage.bubbleUp(t.threadId, m.clock.now() + 1000, "if-no-reply");
+    m.deliver({ inReplyTo: ["nr2@example.com"], automated: true });
+    m.store.views.markSeen(t.threadId, 99);
+    m.clock.advance(2000);
+    expect(m.store.runDueJobs(m.clock.now()).ran).toBe(1);
+    expect(m.store.views.getThread(t.threadId).thread.newForYou).toBe(true);
+    expect(m.store.views.getThread(t.threadId).thread.attention.bubble._tag).toBe("None");
+  });
+
+  it("[E09] send-and-pop resolves the bubble on acceptance without resurfacing the thread", () => {
+    const m = setup();
+    m.allow("alice@example.com");
+    const t = m.deliver({ messageIdHeader: "pop@example.com" });
+    m.store.views.markSeen(t.threadId, 99);
+    m.store.triage.pinBubble(t.threadId);
+    const job = sendReply(m, t.threadId, { _tag: "ClearBubble" });
+    expect(m.store.views.getThread(t.threadId).thread.attention.bubble._tag).toBe("Pinned");
+    m.store.sends.accepted(job, { providerId: "p" });
+    const thread = m.store.views.getThread(t.threadId).thread;
+    expect(thread.attention.bubble._tag).toBe("None");
+    expect(thread.newForYou).toBe(false);
+    expect(m.store.views.listView({ view: "bubble-up" }).items).toHaveLength(0);
+  });
+
+  it("[E09] send jobs queued before bubble conditions existed keep an unconditional bubble", () => {
+    const m = setup();
+    m.allow("alice@example.com");
+    const t = m.deliver({ messageIdHeader: "n1@example.com" });
+    const at = m.clock.now() + 86_400_000;
+    // N−1 wire shape: no `condition` field.
+    const job = sendReply(m, t.threadId, { _tag: "BubbleUp", at });
+    m.store.sends.accepted(job, { providerId: "p" });
+    expect(m.store.views.getThread(t.threadId).thread.attention.bubble).toMatchObject({
+      _tag: "Scheduled",
+      condition: "always",
+    });
+    // Unconditional bubbles keep the §4.2 rule: any new reply surfaces the thread and cancels it.
+    m.deliver({ inReplyTo: ["n1@example.com"], automated: true });
+    expect(m.store.views.getThread(t.threadId).thread.attention.bubble._tag).toBe("None");
   });
 
   it("[E10] Read Together batches keep their order while new mail arrives", () => {

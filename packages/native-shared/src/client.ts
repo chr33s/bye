@@ -7,6 +7,7 @@ import type {
   MailSendResponse,
   MailViewName,
   MailViewPage,
+  MessageInvitationsResponse,
   OccurrenceWire,
 } from "@bye/contracts";
 import type {
@@ -18,6 +19,8 @@ import type {
   WeekTaskWire,
   WidgetWire,
 } from "./wire.ts";
+import type { AfterSend } from "./after-send.ts";
+import type { CalendarSearchHitWire, FromMessageBody } from "./mail-calendar.ts";
 
 // The one HTTP client for every first-party client (web, desktop, mobile, CLI/TUI) (X01, X02).
 // Same /v1 contracts as agents (§8). What differs per host is only how a request is credentialed:
@@ -324,11 +327,17 @@ export class ByeClient {
       `/v1/mailboxes/${encodeURIComponent(mailboxId)}/drafts/${encodeURIComponent(draftId)}`,
     );
 
-  send = (mailboxId: string, draftId: string, revision: number, commandId = this.newId()) =>
+  send = (
+    mailboxId: string,
+    draftId: string,
+    revision: number,
+    commandId = this.newId(),
+    afterSend?: AfterSend,
+  ) =>
     this.request<typeof MailSendResponse.Type>(
       "POST",
       `/v1/drafts/${encodeURIComponent(draftId)}/send`,
-      { commandId, mailboxId, revision },
+      { commandId, mailboxId, revision, ...(afterSend ? { afterSend } : {}) },
     );
 
   cancelSend = (mailboxId: string, sendJobId: string) =>
@@ -386,8 +395,12 @@ export class ByeClient {
     on: boolean,
   ) => this.command(mailboxId, { _tag: "SetAttention", threadId, flag, on });
 
-  bubbleUp = (mailboxId: string, threadId: string, at: number) =>
-    this.command(mailboxId, { _tag: "BubbleUp", threadId, at });
+  bubbleUp = (
+    mailboxId: string,
+    threadId: string,
+    at: number,
+    condition: "always" | "if-no-reply" = "always",
+  ) => this.command(mailboxId, { _tag: "BubbleUp", threadId, at, condition });
 
   trash = (mailboxId: string, threadIds: ReadonlyArray<string>) =>
     this.command(mailboxId, { _tag: "MoveToTrash", threadIds });
@@ -439,6 +452,53 @@ export class ByeClient {
 
   timer = (calendarId: string) =>
     this.request<TimerWire | null>("GET", `/v1/calendars/${encodeURIComponent(calendarId)}/timer`);
+
+  // ---- email integration (C09) ----
+
+  calendars = (calendarId: string) =>
+    this.request<{ items: ReadonlyArray<{ id?: string; calendarId?: string; name: string }> }>(
+      "GET",
+      `/v1/calendars/${encodeURIComponent(calendarId)}/calendars`,
+    );
+
+  calendarSearch = (calendarId: string, q: string, limit = 25) =>
+    this.request<{ items: ReadonlyArray<CalendarSearchHitWire> }>(
+      "GET",
+      `/v1/calendars/${encodeURIComponent(calendarId)}/search`,
+      undefined,
+      { query: { q, limit } },
+    );
+
+  /** Invitations a delivered message carried, with the owner's current answer (C09). */
+  messageInvitations = (calendarId: string, mailboxId: string, deliveryId: string) =>
+    this.request<typeof MessageInvitationsResponse.Type>(
+      "GET",
+      `/v1/calendars/${encodeURIComponent(calendarId)}/invitations`,
+      undefined,
+      { query: { mailboxId, deliveryId } },
+    );
+
+  /** Accept, tentatively accept or decline an invitation; the server replies to the organizer (iTIP). */
+  respondInvitation = (
+    calendarId: string,
+    eventId: string,
+    partstat: "ACCEPTED" | "TENTATIVE" | "DECLINED",
+    occurrenceKey?: string,
+  ) =>
+    this.calendarCommand(calendarId, {
+      type: "RespondInvitation",
+      eventId,
+      partstat,
+      ...(occurrenceKey ? { occurrenceKey } : {}),
+    });
+
+  /** Create an event with a backlink to a message; the server checks read access to its mailbox. */
+  createEventFromMessage = (calendarId: string, body: FromMessageBody) =>
+    this.request<{ eventId: string; uid: string }>(
+      "POST",
+      `/v1/calendars/${encodeURIComponent(calendarId)}/from-message`,
+      { schemaVersion: 1, commandId: this.newId(), ...body },
+    );
 
   widget = (calendarId: string, tz: string) =>
     this.request<WidgetWire>(

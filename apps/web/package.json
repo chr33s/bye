@@ -1,6 +1,7 @@
 {
   "name": "@bye/web",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "node --experimental-strip-types build.ts"

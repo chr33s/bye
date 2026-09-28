@@ -1084,3 +1084,48 @@ describe("CalendarStore planning", () => {
     ).toEqual([]);
   });
 });
+
+describe("whole-series edits made from one occurrence", () => {
+  it("[C03] moving one occurrence's time for the series shifts the series, keeping its first date", () => {
+    const { store, cmd, owner, calendarId } = setup();
+    const { eventId } = store.createEvent({
+      commandId: cmd(),
+      actor: owner,
+      calendarId,
+      series: {
+        start: calTimed(dt("2026-10-05T09:00"), "Europe/London"),
+        end: calTimed(dt("2026-10-05T09:30"), "Europe/London"),
+        rrule: "FREQ=WEEKLY",
+        data: { summary: "Sync" },
+      },
+    });
+    const occurrences = (from: string, to: string) =>
+      store.listOccurrences({ actor: owner, from: utc(from), to: utc(to) });
+    // Edited from the 2 Nov occurrence (after the clocks change): 09:00 → 10:15, end 09:30 → 10:45.
+    const nov = occurrences("2026-11-02T00:00:00", "2026-11-03T00:00:00")[0]!;
+    store.updateEvent({
+      commandId: cmd(),
+      actor: owner,
+      eventId,
+      expectedRevision: nov.revision,
+      scope: "series",
+      occurrenceKey: nov.key,
+      changes: {
+        start: calTimed(dt("2026-11-02T10:15"), "Europe/London"),
+        end: calTimed(dt("2026-11-02T10:45"), "Europe/London"),
+      },
+    });
+    const event = store.getEvent(owner, eventId);
+    expect(event.series.dtstart).toMatchObject({
+      local: { day: 5, month: 10, hour: 10, minute: 15 },
+    });
+    expect(event.series.dtend).toMatchObject({
+      local: { day: 5, month: 10, hour: 10, minute: 45 },
+    });
+    // Earlier occurrences still exist, at the new wall-clock time.
+    expect(occurrences("2026-10-05T00:00:00", "2026-10-06T00:00:00")).toHaveLength(1);
+    expect(occurrences("2026-10-12T00:00:00", "2026-10-13T00:00:00")[0]!.start).toMatchObject({
+      local: { hour: 10, minute: 15 },
+    });
+  });
+});

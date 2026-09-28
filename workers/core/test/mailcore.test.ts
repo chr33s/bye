@@ -738,6 +738,28 @@ describe("MailCore wiring", () => {
     expect(events.status).toBe(200);
     expect(JSON.stringify(events.body)).toContain("Planning");
 
+    // The thread can find the invitation its message carried, with the current answer.
+    const imbox = await api(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`);
+    const thread = await api(
+      h,
+      ana,
+      "GET",
+      `/v1/mailboxes/${ana.mailboxId}/threads/${imbox.body.items[0].threadId}`,
+    );
+    const invitationsPath = `/v1/calendars/${ana.calendarId}/invitations?mailboxId=${ana.mailboxId}&deliveryId=${thread.body.deliveries[0].deliveryId}`;
+    const found = await api(h, ana, "GET", invitationsPath);
+    expect(found.status).toBe(200);
+    expect(found.body.invitations).toEqual([
+      expect.objectContaining({
+        summary: "Planning",
+        occurrenceKey: null,
+        partstat: "NEEDS-ACTION",
+        organizer: expect.objectContaining({ address: "org@example.net" }),
+      }),
+    ]);
+    const bob = await signup(h, "bob@bye.test");
+    expect((await api(h, bob, "GET", invitationsPath)).status).toBe(403);
+
     // [C04] Accepting produces an iTIP REPLY sent through the mailbox as a calendar part.
     enablePersonalMail(h);
     await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
@@ -760,6 +782,9 @@ describe("MailCore wiring", () => {
       });
       expect(reply.status).toBe(200);
       await h.drain();
+      expect((await api(h, ana, "GET", invitationsPath)).body.invitations[0].partstat).toBe(
+        "ACCEPTED",
+      );
       vi.setSystemTime(Date.now() + 60_000);
       await h.namespaces.MAILBOXES.instance(ana.mailboxId).alarm();
       await h.drain();

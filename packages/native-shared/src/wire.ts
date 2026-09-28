@@ -28,6 +28,11 @@ export interface DeliveryWire {
     readonly status: "pending" | "clean" | "infected" | "failed" | "not-required" | "legacy";
     readonly signature?: string | null;
   };
+  /** Inbound routing facts; `hasCalendar` marks a message carrying an invitation (C09). */
+  readonly routing?: {
+    readonly hasCalendar?: boolean;
+    readonly calendarMethod?: string | null;
+  };
 }
 
 export interface ThreadDetailWire {

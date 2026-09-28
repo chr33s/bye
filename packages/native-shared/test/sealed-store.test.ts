@@ -30,6 +30,13 @@ const secure = (): SecureSessionStore & { data: Map<string, string> } => {
 
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 const key = new Uint8Array(32).fill(7);
+// Written by the s1 construction (HMAC-SHA256 keystream, encrypt-then-MAC) with `key`, storage
+// key "bye:drafts" and an all-0x01 nonce.
+const S1_PLAINTEXT = '["l1","l2"] — café';
+const S1_RECORD =
+  "s1.AQEBAQEBAQEBAQEBAQEBAVsQv-Q9R5wZKHePAaJ0GiIOUqWZUU0ZUw23dk4K6fB6Qi3uIGmxerwbXqoQaRgvQ95NrYR7";
+const flip = (sealed: string, at: number) =>
+  sealed.slice(0, at) + (sealed[at] === "A" ? "B" : "A") + sealed.slice(at + 1);
 
 describe("sealed draft storage", () => {
   it("HMAC-SHA256 matches RFC 4231 test case 2", () => {
@@ -43,13 +50,53 @@ describe("sealed draft storage", () => {
   it("round-trips unicode and rejects tampering, moved records and other keys", () => {
     const text = "Hi Bob — naïve café 🎉 ".repeat(20);
     const sealed = seal(key, "bye:drafts:a", text);
+    expect(sealed).toMatch(/^s2\./);
     expect(sealed).not.toContain("Bob");
     expect(open(key, "bye:drafts:a", sealed)).toBe(text);
     expect(open(key, "bye:drafts:b", sealed)).toBeNull();
     expect(open(new Uint8Array(32).fill(8), "bye:drafts:a", sealed)).toBeNull();
-    const flipped = sealed.slice(0, 20) + (sealed[20] === "A" ? "B" : "A") + sealed.slice(21);
-    expect(open(key, "bye:drafts:a", flipped)).toBeNull();
-    expect(seal(key, "k", "same")).not.toBe(seal(key, "k", "same"));
+    // Nonce, ciphertext and tag bytes are all authenticated.
+    for (const at of [5, 40, sealed.length - 3])
+      expect(open(key, "bye:drafts:a", flip(sealed, at))).toBeNull();
+    expect(open(key, "bye:drafts:a", sealed.slice(0, 30))).toBeNull();
+    expect(open(key, "bye:drafts:a", `s9.${sealed.slice(3)}`)).toBeNull();
+    expect(open(key, "k", seal(key, "k", ""))).toBe("");
+  });
+
+  it("uses a fresh 24-byte nonce for every record", () => {
+    const records = Array.from({ length: 200 }, () => seal(key, "k", "same"));
+    expect(new Set(records).size).toBe(records.length);
+    const nonces = records.map((r) => r.slice(3, 3 + 32)); // 24 bytes = 32 base64url chars
+    expect(new Set(nonces).size).toBe(records.length);
+    const fixed = seal(key, "k", "same", (n) => new Uint8Array(n).fill(9));
+    expect(fixed.slice(3, 35)).toBe("CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJ");
+  });
+
+  it("reads legacy s1 records and fails closed when they are altered", () => {
+    expect(open(key, "bye:drafts", S1_RECORD)).toBe(S1_PLAINTEXT);
+    expect(open(key, "bye:drafts:b", S1_RECORD)).toBeNull();
+    expect(open(new Uint8Array(32).fill(8), "bye:drafts", S1_RECORD)).toBeNull();
+    expect(open(key, "bye:drafts", flip(S1_RECORD, 40))).toBeNull();
+  });
+
+  it("migrates s1 records to s2 on read and leaves tampered ones untouched", async () => {
+    const kv = memory();
+    const store = sealedStore(kv, async () => key);
+    kv.data.set("bye:drafts", S1_RECORD);
+    expect(await store.getItem("bye:drafts")).toBe(S1_PLAINTEXT);
+    const migrated = kv.data.get("bye:drafts")!;
+    expect(migrated).toMatch(/^s2\./);
+    expect(open(key, "bye:drafts", migrated)).toBe(S1_PLAINTEXT);
+    expect(await store.getItem("bye:drafts")).toBe(S1_PLAINTEXT);
+    expect(kv.data.get("bye:drafts")).toBe(migrated);
+
+    const tampered = flip(S1_RECORD, 40);
+    kv.data.set("bye:drafts", tampered);
+    expect(await store.getItem("bye:drafts")).toBeNull();
+    expect(kv.data.get("bye:drafts")).toBe(tampered);
+    // A record moved under another storage key does not open there.
+    kv.data.set("bye:drafts:other", migrated);
+    expect(await store.getItem("bye:drafts:other")).toBeNull();
   });
 
   it("stores drafts as ciphertext with a key kept in the secure store", async () => {
@@ -79,7 +126,7 @@ describe("sealed draft storage", () => {
     kv.data.set("bye:drafts", '["l1"]');
     const store = sealedStore(kv, secureStoreKey(secure()));
     expect(await store.getItem("bye:drafts")).toBe('["l1"]');
-    expect(kv.data.get("bye:drafts")).toMatch(/^s1\./);
+    expect(kv.data.get("bye:drafts")).toMatch(/^s2\./);
     const broken: SecureSessionStore = {
       read: () => Promise.reject(new SecureStoreError("StorageUnavailable")),
       write: () => Promise.reject(new SecureStoreError("StorageUnavailable")),

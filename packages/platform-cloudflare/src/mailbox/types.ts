@@ -1,5 +1,6 @@
 import type {
   AttentionState,
+  BubbleCondition,
   Destination,
   Disposition,
   MailView,
@@ -128,7 +129,10 @@ export interface MailboxViewPage {
 export type MailboxAfterSend =
   | { readonly _tag: "None" }
   | { readonly _tag: "MarkDone" }
-  | { readonly _tag: "BubbleUp"; readonly at: number };
+  /** `condition` is absent on send jobs queued before E09 conditions existed: treat as `always`. */
+  | { readonly _tag: "BubbleUp"; readonly at: number; readonly condition?: BubbleCondition }
+  /** Send-and-pop: the reply resolves the thread's bubble without resurfacing it. */
+  | { readonly _tag: "ClearBubble" };
 
 export interface MailboxDraftContent {
   readonly to: ReadonlyArray<Address>;

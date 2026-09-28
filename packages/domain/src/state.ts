@@ -15,9 +15,17 @@ export const DISPOSITIONS: ReadonlyArray<Disposition> = [
   "trash",
 ];
 
+/** `if-no-reply` bubbles are cancelled by a qualifying reply; `always` by any new reply (E09). */
+export type BubbleCondition = "always" | "if-no-reply";
+
 export type BubbleState =
   | { readonly _tag: "None" }
-  | { readonly _tag: "Scheduled"; readonly at: number; readonly generation: number }
+  | {
+      readonly _tag: "Scheduled";
+      readonly at: number;
+      readonly generation: number;
+      readonly condition: BubbleCondition;
+    }
   | { readonly _tag: "Pinned" };
 
 export type AttentionState = {
