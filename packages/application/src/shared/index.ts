@@ -10,25 +10,25 @@ import { NotFound, requireMailbox, requireScope, type Unavailable } from "../ser
 /** Authority refusals travel as the one `Rejection` (mapped to HTTP by `publicError`). */
 export type SharedFailure = Rejection | NotFound | Unavailable | StepUpRequired;
 
-export interface SharedAddressShape {
+export interface SharedAddressRecord {
   readonly name?: string | undefined;
   readonly address: string;
 }
 
-export interface SharedMessageShape {
+export interface SharedMessageRecord {
   readonly messageRef: string;
-  readonly from: SharedAddressShape;
-  readonly to: ReadonlyArray<SharedAddressShape>;
-  readonly cc: ReadonlyArray<SharedAddressShape>;
+  readonly from: SharedAddressRecord;
+  readonly to: ReadonlyArray<SharedAddressRecord>;
+  readonly cc: ReadonlyArray<SharedAddressRecord>;
   readonly subject: string;
   readonly snippet: string;
   readonly contentKey: string;
   readonly sentAt: number;
 }
 
-export interface PublicThreadShape {
+export interface PublicThreadRecord {
   readonly subject: string;
-  readonly messages: ReadonlyArray<Omit<SharedMessageShape, "messageRef">>;
+  readonly messages: ReadonlyArray<Omit<SharedMessageRecord, "messageRef">>;
 }
 
 /** RPC surface of SharedSpaceDO instances, selected by space ID. */
@@ -42,7 +42,7 @@ export class SharedSpaces extends Context.Service<
         readonly sourceMailboxId: string;
         readonly sourceThreadId: string;
         readonly subject: string;
-        readonly messages: ReadonlyArray<SharedMessageShape>;
+        readonly messages: ReadonlyArray<SharedMessageRecord>;
         readonly grantees: ReadonlyArray<string>;
         readonly includeFuture: boolean;
       },
@@ -61,7 +61,7 @@ export class SharedSpaces extends Context.Service<
     readonly resolvePublicLink: (
       spaceId: string,
       token: string,
-    ) => Effect.Effect<PublicThreadShape, SharedFailure>;
+    ) => Effect.Effect<PublicThreadRecord, SharedFailure>;
   }
 >()("shared/SharedSpaces") {}
 
@@ -74,13 +74,13 @@ export class MailboxSelection extends Context.Service<
       threadId: string,
       messageRefs: ReadonlyArray<string>,
     ) => Effect.Effect<
-      { readonly subject: string; readonly messages: ReadonlyArray<SharedMessageShape> },
+      { readonly subject: string; readonly messages: ReadonlyArray<SharedMessageRecord> },
       SharedFailure
     >;
   }
 >()("shared/MailboxSelection") {}
 
-export interface WorldPublishShape {
+export interface WorldPublishRecord {
   readonly origin: "internal-send";
   readonly authenticatedUserId: string;
   readonly fromAddress: string;
@@ -102,6 +102,13 @@ export interface WorldPublished {
   readonly purged?: boolean;
 }
 
+/** Mutable working copy of a publish outcome while the handler assembles its reply. */
+interface PublishOutcome {
+  postId: string;
+  revision: number;
+  purged?: boolean;
+}
+
 /**
  * The World publish port. The adapter commits in the author's authority and owns every public side
  * effect (media copies, site, cache purge, fanout) durably — the use case never copies content.
@@ -111,7 +118,7 @@ export class WorldPublishing extends Context.Service<
   {
     readonly publish: (
       authorId: string,
-      op: WorldPublishShape,
+      op: WorldPublishRecord,
     ) => Effect.Effect<WorldPublished, SharedFailure>;
   }
 >()("shared/WorldPublishing") {}
@@ -140,13 +147,16 @@ export const shareThread = (input: {
     // Sharing copies content out of the mailbox: a write, never allowed to read-only credentials.
     const principal = yield* requireMailbox(input.sourceMailboxId, "draft");
     yield* requireStepUp("sharing");
+
     const selection = yield* (yield* MailboxSelection).selectMessages(
       input.sourceMailboxId,
       input.sourceThreadId,
       input.messageRefs,
     );
+
     if (selection.messages.length !== input.messageRefs.length)
       return yield* new NotFound({ resource: "message" });
+
     return yield* (yield* SharedSpaces).shareThread(input.spaceId, {
       actorId: principal.userId,
       sourceMailboxId: input.sourceMailboxId,
@@ -171,6 +181,7 @@ export const createPublicThreadLink = (
   Effect.gen(function* () {
     const principal = yield* requireScope("draft");
     yield* requireStepUp("sharing");
+
     const link = yield* (yield* SharedSpaces).createPublicLink(
       input.spaceId,
       principal.userId,
@@ -179,6 +190,7 @@ export const createPublicThreadLink = (
         ? { includeFuture: input.includeFuture }
         : { includeFuture: input.includeFuture, expiresAt: input.expiresAt },
     );
+
     return { linkId: link.linkId, url: `${publicOrigin}/s/${input.spaceId}/${link.token}` };
   });
 
@@ -200,16 +212,21 @@ export const publishWorldPost = (input: {
 }) =>
   Effect.gen(function* () {
     const principal = yield* requireScope("publish");
+
     const published = yield* (yield* WorldPublishing).publish(principal.userId, {
       origin: "internal-send",
       authenticatedUserId: principal.userId,
       ...input,
     });
-    return {
+
+    const result: PublishOutcome = {
       postId: published.postId,
       revision: published.revision,
-      ...(published.purged === undefined ? {} : { purged: published.purged }),
     };
+
+    if (published.purged !== undefined) result.purged = published.purged;
+
+    return result;
   }).pipe(Effect.withSpan("world.publish"));
 
 /** Publish an existing draft or unpublished post through the same pipeline (P01). */
@@ -217,6 +234,7 @@ export const publishExistingPost = (postId: string) =>
   Effect.gen(function* () {
     const principal = yield* requireScope("publish");
     const published = yield* (yield* WorldPostPublishing).publishExisting(principal.userId, postId);
+
     return {
       postId: published.postId,
       revision: published.revision,

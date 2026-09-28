@@ -27,11 +27,13 @@ describe("interrupted multipart upload", () => {
     const m = makeTestMailbox();
     m.store.uploads.setQuota(10_000);
     const base = m.store.uploads.quota().usedBytes;
+
     const u = m.store.uploads.reserveUpload({
       filename: "a.bin",
       contentType: "application/octet-stream",
       declaredSize: 8000,
     });
+
     m.store.uploads.recordUploadPart(u.uploadId, 1, 4000, "e1");
     expect(m.store.uploads.quota().usedBytes).toBe(base + 8000);
     m.store.uploads.abortUpload(u.uploadId);
@@ -54,11 +56,13 @@ describe("interrupted multipart upload", () => {
 
   it("a retried part replaces rather than double-counts; parts exceeding the declaration fail the upload", () => {
     const m = makeTestMailbox();
+
     const u = m.store.uploads.reserveUpload({
       filename: "a",
       contentType: "text/plain",
       declaredSize: 100,
     });
+
     m.store.uploads.recordUploadPart(u.uploadId, 1, 60, "e1");
     m.store.uploads.recordUploadPart(u.uploadId, 1, 60, "e1-retry");
     m.store.uploads.recordUploadPart(u.uploadId, 2, 40, "e2");
@@ -71,14 +75,17 @@ describe("interrupted multipart upload", () => {
 
   it("completion survives eviction between the last part and complete; replayed complete is idempotent", () => {
     const m = makeTestMailbox();
+
     const u = m.store.uploads.reserveUpload({
       filename: "a",
       contentType: "text/plain",
       declaredSize: 100,
     });
+
     m.store.uploads.recordUploadPart(u.uploadId, 1, 100, "e1");
     const fresh = evict(m);
     const id = cmd();
+
     const complete = () =>
       applyMailboxCommand(fresh, {
         _tag: "CompleteUpload",
@@ -86,6 +93,7 @@ describe("interrupted multipart upload", () => {
         uploadId: u.uploadId,
         actualSize: 100,
       }) as MailboxUpload;
+
     expect(complete().state).toBe("complete");
     expect(complete().state).toBe("complete");
     expect(fresh.kernel.pendingOutbox(100).filter((e) => e.topic === "scan")).toHaveLength(1);
@@ -94,11 +102,13 @@ describe("interrupted multipart upload", () => {
   it("unknown upload ids are not found (no probing another mailbox's uploads)", () => {
     const a = makeTestMailbox("mbx_a");
     const b = makeTestMailbox("mbx_b");
+
     const u = a.store.uploads.reserveUpload({
       filename: "x",
       contentType: "text/plain",
       declaredSize: 10,
     });
+
     expect(() => b.store.uploads.recordUploadPart(u.uploadId, 1, 10, "e")).toThrow(/upload/);
     expect(() => b.store.uploads.completeUpload(u.uploadId, 10)).toThrow(/upload/);
     expect(u.blobKey.startsWith("t/mbx_a/")).toBe(true);
@@ -113,6 +123,7 @@ describe("Durable Object eviction mid-flow", () => {
     const d = m.store.ingest.commitDelivery(deliveryFixture(m.clock, summaryFixture({})));
     const at = m.clock.now() + 3_600_000;
     const bubbleCmd = cmd();
+
     const bubble = (store: typeof m.store) =>
       applyMailboxCommand(store, {
         _tag: "BubbleUp",
@@ -120,7 +131,9 @@ describe("Durable Object eviction mid-flow", () => {
         threadId: d.threadId,
         at,
       }) as { generation: number };
+
     const { generation } = bubble(m.store);
+
     const { draftId } = m.store.drafts.createDraft({
       content: {
         to: [{ name: undefined, address: "bob@example.com" }],
@@ -131,7 +144,9 @@ describe("Durable Object eviction mid-flow", () => {
         attachments: [],
       },
     });
+
     const sendCmd = cmd();
+
     const send = (store: typeof m.store) =>
       applyMailboxCommand(store, {
         _tag: "Send",
@@ -140,6 +155,7 @@ describe("Durable Object eviction mid-flow", () => {
         expectedRevision: 1,
         sendAt: at,
       });
+
     const sent = send(m.store) as { _tag: string };
     expect(sent._tag).toBe("Queued");
 
@@ -188,10 +204,12 @@ describe("DST and deferred jobs", () => {
     );
     m.store.screener.screen([{ sender: "alice@example.com", decision: "allow" }]);
     const d = m.store.ingest.commitDelivery(deliveryFixture(m.clock, summaryFixture({})));
+
     const at = calZonedToInstant(
       { year: 2026, month: 3, day: 8, hour: 9, minute: 0, second: 0 },
       zone,
     );
+
     expect(at - m.clock.now()).toBe(20 * 3_600_000); // 21 wall-clock hours, one skipped.
     m.store.triage.bubbleUp(d.threadId, at);
     m.clock.current = at - 1;
@@ -206,6 +224,7 @@ describe("DST and deferred jobs", () => {
     const resolved = calZonedToInstantDetailed(local, zone);
     expect(resolved.resolution).toBe("fold-earlier");
     m.clock.current = resolved.instant - 86_400_000;
+
     const { draftId } = m.store.drafts.createDraft({
       content: {
         to: [{ name: undefined, address: "bob@example.com" }],
@@ -216,6 +235,7 @@ describe("DST and deferred jobs", () => {
         attachments: [],
       },
     });
+
     m.store.sends.send(draftId, { expectedRevision: 1, sendAt: resolved.instant });
     m.clock.current = resolved.instant;
     expect(m.store.runDueJobs(m.clock.now()).ran).toBe(1);
@@ -228,6 +248,7 @@ describe("DST and deferred jobs", () => {
       { year: 2026, month: 3, day: 8, hour: 2, minute: 30, second: 0 },
       zone,
     );
+
     expect(r.resolution).toBe("gap-shifted");
     expect(Number.isFinite(r.instant)).toBe(true);
   });
@@ -239,8 +260,10 @@ describe("DST and deferred jobs", () => {
       ...settings,
       quietHours: { start: "22:00", end: "07:00", timeZone: zone },
     });
+
     const at = (day: number, hour: number) =>
       calZonedToInstant({ year: 2026, month: 3, day, hour, minute: 0, second: 0 }, zone);
+
     expect(m.store.automation.inQuietHours(at(7, 23))).toBe(true);
     expect(m.store.automation.inQuietHours(at(8, 6))).toBe(true);
     expect(m.store.automation.inQuietHours(at(8, 7))).toBe(false);
@@ -250,29 +273,38 @@ describe("DST and deferred jobs", () => {
 describe("export under concurrent ingest", () => {
   it("every delivery present at export start appears exactly once across pages while mail keeps arriving", () => {
     const m = makeTestMailbox();
+
     const deliver = () => {
       m.clock.advance(1000);
+
       return m.store.ingest.commitDelivery(
         deliveryFixture(m.clock, summaryFixture({ fromAddress: "x@example.com" })),
       );
     };
+
     for (let i = 0; i < 450; i++) deliver();
+
     const initial = new Set(
       m.store.retention.exportManifestPage(null, 1000).deliveries.map((d) => d.deliveryId),
     );
+
     expect(initial.size).toBe(450);
     const seen: Array<string> = [];
     let cursor: string | null = null;
     let pages = 0;
+
     do {
       const page = m.store.retention.exportManifestPage(cursor, 200);
       seen.push(...page.deliveries.map((d) => d.deliveryId));
       cursor = page.nextCursor;
+
       // Ingest between pages (the Workflow checkpoints each page in its own step).
       for (let i = 0; i < 30; i++) deliver();
       pages++;
     } while (cursor && pages < 50);
+
     expect(new Set(seen).size).toBe(seen.length);
+
     for (const id of initial) expect(seen).toContain(id);
   });
 
@@ -280,15 +312,18 @@ describe("export under concurrent ingest", () => {
     const m = makeTestMailbox();
     m.store.screener.screen([{ sender: "x@example.com", decision: "allow" }]);
     const ids: Array<string> = [];
+
     for (let i = 0; i < 250; i++) {
       m.clock.advance(1000);
       m.store.ingest.commitDelivery(
         deliveryFixture(m.clock, summaryFixture({ fromAddress: "x@example.com" })),
       );
     }
+
     for (const d of m.store.retention.exportManifestPage(null, 1000).deliveries)
       ids.push(d.deliveryId);
     const first = m.store.retention.exportManifestPage(null, 200);
+
     // Move away one delivery from the already-exported page and one from the next page.
     for (const id of [ids[10]!, ids[220]!])
       m.store.transfers.redeliver({
@@ -328,20 +363,24 @@ describe("search shard migration", () => {
     next.setWatermark(7);
     const pages = [old.candidates("kumquat"), next.candidates("kumquat")];
     const authoritative = new Set(["d1", "d2"]);
+
     const hydrate = async (cs: ReadonlyArray<SearchCandidate>) =>
       cs.map((c) => (authoritative.has(c.refId) ? c.refId : undefined));
+
     const merged = await authorizeSearchResults(pages, hydrate, 50);
     expect(merged.results).toEqual(["d2", "d1"]);
     expect(merged.watermark).toBe(7);
 
     next.remove("d1", 2);
     authoritative.delete("d1");
+
     // The old shard still has d1 (migration not yet cleaned); rehydration drops it.
     const after = await authorizeSearchResults(
       [old.candidates("kumquat"), next.candidates("kumquat")],
       hydrate,
       50,
     );
+
     expect(after.results).toEqual(["d2"]);
     // A late, older index event replayed onto the new shard is stale after the tombstone.
     expect(next.upsert(doc("d1", 1, 1000, "migrating kumquat"))).toBe("stale");
@@ -351,19 +390,23 @@ describe("search shard migration", () => {
   it("merge order is stable across shards regardless of which shard answers first", async () => {
     const a = makeTestSearchShard();
     const b = makeTestSearchShard();
+
     for (let i = 0; i < 20; i++)
       (i % 2 ? a : b).upsert(doc(`d${String(i).padStart(2, "0")}`, 1, 1000 + (i % 5), "fig"));
     const hydrate = async (cs: ReadonlyArray<SearchCandidate>) => cs.map((c) => c.docId);
+
     const ab = await authorizeSearchResults(
       [a.candidates("fig"), b.candidates("fig")],
       hydrate,
       10,
     );
+
     const ba = await authorizeSearchResults(
       [b.candidates("fig"), a.candidates("fig")],
       hydrate,
       10,
     );
+
     expect(ab.results).toEqual(ba.results);
   });
 });

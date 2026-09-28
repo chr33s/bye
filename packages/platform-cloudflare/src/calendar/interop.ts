@@ -23,11 +23,13 @@ const IMPORT_CHECKPOINT_TTL_MS = 7 * 24 * 3600_000;
 const contentHash = (text: string): string => {
   let a = 0x811c9dc5;
   let b = 0x01000193 ^ text.length;
+
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
     a = Math.imul(a ^ c, 0x01000193) >>> 0;
     b = Math.imul(b ^ c, 0x5bd1e995) >>> 0;
   }
+
   return `${text.length.toString(36)}.${a.toString(36)}.${b.toString(36)}`;
 };
 
@@ -55,6 +57,7 @@ export abstract class CalendarInterop extends CalendarPlanner {
     options: { includeAttendees: boolean },
   ): Array<CalIcsEvent> {
     const out: Array<CalIcsEvent> = [];
+
     for (const calendarId of calendarIds) {
       for (const r of this.toRecords(
         this.sql.all<EventRow>(
@@ -65,6 +68,7 @@ export abstract class CalendarInterop extends CalendarPlanner {
         const cancelled = r.exceptions
           .filter((e) => e.cancelled)
           .map((e) => this.timeFromKey(r.series, e.recurrenceKey));
+
         const base: CalIcsEvent = {
           uid: r.uid,
           sequence: r.sequence,
@@ -74,8 +78,10 @@ export abstract class CalendarInterop extends CalendarPlanner {
           attendees: options.includeAttendees ? r.attendees : [],
           alarms: r.alarms,
         };
+
         out.push(base);
         const duration = calSeriesDuration(r.series);
+
         for (const e of r.exceptions.filter((x) => !x.cancelled)) {
           const recurrenceId = this.timeFromKey(r.series, e.recurrenceKey);
           const start = e.start ?? recurrenceId;
@@ -92,6 +98,7 @@ export abstract class CalendarInterop extends CalendarPlanner {
         }
       }
     }
+
     return out;
   }
 
@@ -99,6 +106,7 @@ export abstract class CalendarInterop extends CalendarPlanner {
   exportIcs(actor: string, calendarIds?: ReadonlyArray<string>): string {
     const readable = this.listCalendars(actor).map((c) => c.id);
     const ids = calendarIds ? calendarIds.filter((id) => readable.includes(id)) : readable;
+
     return calSerializeCalendar(this.eventsForExport(ids, { includeAttendees: true }), {
       now: this.clock.now(),
       method: "PUBLISH",
@@ -122,6 +130,7 @@ export abstract class CalendarInterop extends CalendarPlanner {
     maxItems?: number;
   }): { imported: number; updated: number; warnings: Array<string> } {
     const empty = { imported: 0, updated: 0, warnings: [] as Array<string> };
+
     if (this.hasReceipt(input.commandId))
       return this.command(input.commandId, "ImportIcs", () => empty);
     this.writableCalendar(input.calendarId);
@@ -129,12 +138,15 @@ export abstract class CalendarInterop extends CalendarPlanner {
       "DELETE FROM cal_import_checkpoints WHERE updated_at < ?",
       this.clock.now() - IMPORT_CHECKPOINT_TTL_MS,
     );
+
     const result = this.replaceFromIcs(input.calendarId, input.ics, input.maxItems ?? 5000, false, {
       commandId: input.commandId,
       hash: contentHash(input.ics),
     });
+
     return this.command(input.commandId, "ImportIcs", () => {
       this.sql.run("DELETE FROM cal_import_checkpoints WHERE command_id = ?", input.commandId);
+
       return result;
     });
   }
@@ -145,16 +157,19 @@ export abstract class CalendarInterop extends CalendarPlanner {
     maxItems: number,
     removeMissing: boolean,
     checkpoint?: ImportCheckpoint,
-  ): { imported: number; updated: number; warnings: Array<string> } {
+  ): IcsReplaceResult {
     const parsed = calParseCalendar(ics, { defaultZone: this.zone, maxItems });
     const warnings = [...parsed.warnings];
+
     if (parsed.truncated) warnings.push(`only the first ${maxItems} items were imported`);
+
     const resumed = checkpoint
       ? this.sql.one<CheckpointRow>(
           "SELECT * FROM cal_import_checkpoints WHERE command_id = ?",
           checkpoint.commandId,
         )
       : undefined;
+
     if (
       resumed &&
       (resumed.content_hash !== checkpoint!.hash || resumed.calendar_id !== calendarId)
@@ -166,14 +181,17 @@ export abstract class CalendarInterop extends CalendarPlanner {
     const eventWarnings: Array<string> = resumed ? json<Array<string>>(resumed.warnings, []) : [];
     const seen = new Set<string>();
     const overrides = new Map<string, Array<CalIcsEvent>>();
+
     for (const o of parsed.events) {
       if (!o.recurrenceId) continue;
       const list = overrides.get(o.uid) ?? [];
       list.push(o);
       overrides.set(o.uid, list);
     }
+
     const upsert = (e: CalIcsEvent): void => {
       seen.add(e.uid);
+
       // RECURRENCE-IDs may use UTC or another zone: key them in the series' own wall clock.
       const exceptions: Array<CalException> = (overrides.get(e.uid) ?? []).map((o) => ({
         recurrenceKey: calRecurrenceKey(o.recurrenceId!, e.series.dtstart),
@@ -182,11 +200,13 @@ export abstract class CalendarInterop extends CalendarPlanner {
         end: o.series.dtend,
         data: o.series.data,
       }));
+
       const existing = this.sql.one<EventRow>(
         "SELECT * FROM cal_events WHERE calendar_id = ? AND uid = ?",
         calendarId,
         e.uid,
       );
+
       const base = {
         calendarId,
         uid: e.uid,
@@ -202,11 +222,13 @@ export abstract class CalendarInterop extends CalendarPlanner {
         privateNote: undefined,
         sourceRef: undefined,
       };
+
       try {
         // A savepoint per event: a rejected event leaves no partial rows behind.
         this.sql.tx(() => {
           if (existing) {
             const prior = this.toRecord(existing);
+
             if (bool(existing.deleted))
               this.sql.run("UPDATE cal_events SET deleted = 0 WHERE id = ?", existing.id);
             this.writeEvent(
@@ -223,20 +245,25 @@ export abstract class CalendarInterop extends CalendarPlanner {
             this.writeEvent({ ...base, id: this.clock.id("evt") }, true);
           }
         });
+
         if (existing) updated++;
         else imported++;
       } catch (error) {
         eventWarnings.push(`${e.uid}: ${error instanceof Error ? error.message : "invalid event"}`);
       }
     };
+
     const masters = parsed.events.filter((x) => !x.recurrenceId);
     const start = resumed ? Number(resumed.next_index) : 0;
+
     // Resumed batches were written by an earlier attempt: their UIDs still count as present.
     for (const e of masters.slice(0, start)) seen.add(e.uid);
+
     for (let i = start; i < masters.length; i += IMPORT_BATCH) {
       const batch = masters.slice(i, i + IMPORT_BATCH);
       this.sql.tx(() => {
         batch.forEach(upsert);
+
         if (checkpoint)
           this.sql.run(
             `INSERT INTO cal_import_checkpoints
@@ -256,7 +283,9 @@ export abstract class CalendarInterop extends CalendarPlanner {
           );
       });
     }
+
     warnings.push(...eventWarnings);
+
     if (removeMissing) {
       const gone = this.sql
         .all<{ id: string; uid: string }>(
@@ -264,11 +293,13 @@ export abstract class CalendarInterop extends CalendarPlanner {
           calendarId,
         )
         .filter((row) => !seen.has(row.uid));
+
       for (let i = 0; i < gone.length; i += IMPORT_BATCH) {
         const batch = gone.slice(i, i + IMPORT_BATCH);
         this.sql.tx(() => batch.forEach((row) => this.removeEventRow(row.id)));
       }
     }
+
     return { imported, updated, warnings };
   }
 
@@ -301,6 +332,7 @@ export abstract class CalendarInterop extends CalendarPlanner {
       );
       this.kernel.schedule(SUBSCRIPTION_JOB, id, this.clock.now(), { calendarId: id });
       this.kernel.change("calendar", "created", { calendarId: id });
+
       return { calendarId: id };
     });
   }
@@ -319,7 +351,9 @@ export abstract class CalendarInterop extends CalendarPlanner {
       "SELECT url, etag, last_modified, item_limit FROM cal_subscriptions WHERE calendar_id = ?",
       calendarId,
     );
+
     if (!r) return undefined;
+
     return {
       url: r.url,
       etag: r.etag ?? undefined,
@@ -340,18 +374,23 @@ export abstract class CalendarInterop extends CalendarPlanner {
   }): { imported: number; updated: number; warnings: Array<string> } {
     const commandId = `subscription:${input.fetchId}`;
     const empty = { imported: 0, updated: 0, warnings: [] as Array<string> };
+
     if (this.hasReceipt(commandId))
       return this.command(commandId, "ApplySubscriptionFetch", () => empty);
+
     const sub = this.sql.one<{ refresh_ms: number; item_limit: number }>(
       "SELECT refresh_ms, item_limit FROM cal_subscriptions WHERE calendar_id = ?",
       input.calendarId,
     );
+
     if (!sub) throw calendarError("not_found", "subscription not found");
+
     // Contents are replaced in bounded batches before the bookkeeping transaction (see importIcs).
     const result =
       input.status === "ok" && input.body !== undefined
         ? this.replaceFromIcs(input.calendarId, input.body, Number(sub.item_limit), true)
         : empty;
+
     return this.command(commandId, "ApplySubscriptionFetch", () => {
       this.sql.run(
         "UPDATE cal_subscriptions SET etag = COALESCE(?, etag), last_modified = COALESCE(?, last_modified), last_fetched_at = ?, last_status = ? WHERE calendar_id = ?",
@@ -361,10 +400,12 @@ export abstract class CalendarInterop extends CalendarPlanner {
         input.status === "error" ? `error: ${input.error ?? "unknown"}` : input.status,
         input.calendarId,
       );
+
       const backoff =
         input.status === "error"
           ? Math.min(Number(sub.refresh_ms) * 4, 24 * 3_600_000)
           : Number(sub.refresh_ms);
+
       this.kernel.schedule(SUBSCRIPTION_JOB, input.calendarId, this.clock.now() + backoff, {
         calendarId: input.calendarId,
       });
@@ -372,6 +413,7 @@ export abstract class CalendarInterop extends CalendarPlanner {
         calendarId: input.calendarId,
         status: input.status,
       });
+
       return result;
     });
   }
@@ -395,6 +437,7 @@ export abstract class CalendarInterop extends CalendarPlanner {
         this.clock.now(),
       );
       this.kernel.change("feed", "created", { label: input.label });
+
       return null;
     });
   }
@@ -407,6 +450,7 @@ export abstract class CalendarInterop extends CalendarPlanner {
         input.tokenHash,
       );
       this.kernel.change("feed", "revoked", {});
+
       return null;
     });
   }
@@ -447,11 +491,20 @@ export abstract class CalendarInterop extends CalendarPlanner {
       "SELECT calendar_ids, revoked_at FROM cal_feed_tokens WHERE token_hash = ?",
       tokenHash,
     );
+
     if (!token || token.revoked_at !== null) return undefined;
     const ids = json<Array<string>>(token.calendar_ids, []).filter((id) => this.calendar(id));
+
     return calSerializeCalendar(this.eventsForExport(ids, { includeAttendees: false }), {
       now: this.clock.now(),
       method: "PUBLISH",
     });
   }
+}
+
+/** Counts and warnings from replacing a calendar's contents from ICS. */
+export interface IcsReplaceResult {
+  imported: number;
+  updated: number;
+  warnings: Array<string>;
 }

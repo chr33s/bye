@@ -13,6 +13,7 @@ describe("exact dependency pins (§7.1)", () => {
   it("rejects ranges, dist-tags, and mismatched Effect family pins", () => {
     for (const ok of ["4.0.0-rc.117", "2.0.0-beta.79", "1.2.3", "workspace:*"])
       expect(isExactSpecifier(ok), ok).toBe(true);
+
     for (const bad of [
       "^1.2.3",
       "~1.2.3",
@@ -26,6 +27,7 @@ describe("exact dependency pins (§7.1)", () => {
     ]) {
       expect(isExactSpecifier(bad), bad).toBe(false);
     }
+
     const issues = checkManifest(
       "x",
       {
@@ -37,6 +39,7 @@ describe("exact dependency pins (§7.1)", () => {
       },
       false,
     );
+
     expect(issues.map((i) => i.message)).toEqual([
       "effect must be 4.0.0-rc.117",
       "alchemy@latest is not an exact pin",
@@ -47,6 +50,7 @@ describe("exact dependency pins (§7.1)", () => {
   it("detects a second resolved effect version or drifting @effect/* family in the lockfile", () => {
     const lock =
       "packages:\n\n  effect@4.0.0-rc.117:\n    resolution: {}\n\n  effect@4.0.0-rc.116:\n    resolution: {}\n\n  '@effect/sql-d1@4.0.0-rc.116':\n    resolution: {}\n";
+
     const messages = checkLockfile("lock", lock).map((i) => i.message);
     expect(messages[0]).toMatch(/expected exactly effect@4.0.0-rc.117/);
     expect(messages[1]).toMatch(/@effect\/sql-d1 resolves to 4.0.0-rc.116/);
@@ -109,6 +113,7 @@ describe("platform import boundaries (§7.5)", () => {
 describe("shared policy source walker", () => {
   it("skips vendored/generated trees and dot-entries, tolerates dangling symlinks, and sorts", () => {
     const dir = mkdtempSync(join(tmpdir(), "bye-walk-"));
+
     try {
       for (const f of [
         "src/b.ts",
@@ -122,6 +127,7 @@ describe("shared policy source walker", () => {
         mkdirSync(join(dir, f, ".."), { recursive: true });
         writeFileSync(join(dir, f), "");
       }
+
       symlinkSync(join(dir, "gone"), join(dir, "src", "dangling"));
       const rel = (xs: ReadonlyArray<string>) => xs.map((x) => relative(dir, x));
       expect(rel(sourceFiles(["src", "missing"], { ext: /\.ts$/, root: dir }))).toEqual([

@@ -18,6 +18,7 @@ import {
 } from "../policies/check-config.ts";
 
 const CI = readFileSync(join(import.meta.dirname, "../../.github/workflows/ci.yml"), "utf8");
+
 const DRIFT = readFileSync(join(import.meta.dirname, "../../.github/workflows/drift.yml"), "utf8");
 
 describe("deploy config gate (§15.5, §15.8)", () => {
@@ -44,6 +45,7 @@ describe("deploy config gate (§15.5, §15.8)", () => {
       { name: "APP_DOMAIN", secret: false, optional: true },
     ]);
     const declared = declaredConfig().map((c) => c.name);
+
     for (const name of [
       "APP_DOMAIN",
       "PUBLIC_DOMAIN",
@@ -129,9 +131,11 @@ describe("deploy config gate (§15.5, §15.8)", () => {
   it("every web build step gets the public build inputs (sitekey, origins, stage)", () => {
     for (const workflow of [CI, DRIFT]) {
       expect(workflow).toMatch(/^\s+TURNSTILE_SITEKEY: \$\{\{ vars\.TURNSTILE_SITEKEY \}\}/m);
+
       for (const name of ["STAGE", "APP_ORIGIN", "MAIL_RENDER_ORIGIN"])
         expect(workflow).toMatch(new RegExp(`^\\s+${name}:`, "m"));
     }
+
     // The verify job's standalone build step maps them explicitly (it has no deploy env).
     const verifyBuild = CI.slice(CI.indexOf("- name: Build web client"));
     expect(verifyBuild.slice(0, verifyBuild.indexOf("run: pnpm build:web"))).toMatch(
@@ -162,11 +166,13 @@ describe("deploy config gate (§15.5, §15.8)", () => {
 
   it("personal mail has no external provider: no key or endpoint is declared or mapped", () => {
     const names = declaredConfig().map((c) => c.name);
+
     for (const gone of ["PERSONAL_MAIL_API_KEY", "PERSONAL_MAIL_ENDPOINT"]) {
       expect(names).not.toContain(gone);
       expect(CI).not.toMatch(new RegExp(`^\\s+${gone}:`, "m"));
       expect(DRIFT).not.toMatch(new RegExp(`^\\s+${gone}:`, "m"));
     }
+
     // The DKIM key is a secret; previews pin it empty.
     expect(declaredConfig().find((c) => c.name === "MAIL_DKIM_PRIVATE_KEY")).toMatchObject({
       secret: true,
@@ -197,6 +203,7 @@ describe("deploy config gate (§15.5, §15.8)", () => {
   it("state credentials are tiered: prod state only in prod jobs; previews never share hosts", () => {
     const job = (name: string) =>
       new RegExp(`\\n  ${name}:[\\s\\S]*?(?=\\n  [a-z-]+:\\n|$)`).exec(CI)?.[0] ?? "";
+
     // The shared deploy env (preview/steady, where PR code runs) never references prod secrets.
     expect(job("preview")).not.toMatch(/(secrets|vars)\.PROD_/);
     expect(job("steady")).not.toMatch(/(secrets|vars)\.PROD_/);
@@ -218,13 +225,16 @@ describe("deploy config gate (§15.5, §15.8)", () => {
   it("PR-executed preview jobs resolve only the secrets a preview needs", () => {
     const job = (name: string) =>
       new RegExp(`\\n  ${name}:[\\s\\S]*?(?=\\n  [a-z-]+:\\n|$)`).exec(CI)?.[0] ?? "";
+
     expect(job("preview")).toContain("SESSION_KEY");
     expect(previewSecretOverreach(job("preview"))).toEqual([]);
     // preview-destroy reuses the same env anchor.
     expect(job("preview-destroy")).toMatch(/env: \*deploy-env/);
+
     // Every required secret still reaches the preview (check-config must pass there).
     for (const c of requiredConfig().filter((c) => c.secret))
       expect(job("preview")).toContain(`${c.name}: \${{ secrets.${c.name} }}`);
+
     // The blanked names stay mapped (explicitly empty), so `unmappedInCi` holds.
     for (const name of ["CF_DNS_API_TOKEN", "ARC_SIGNING_KEY", "BILLING_API_KEY", "OPS_TOKEN"])
       expect(job("preview")).toMatch(new RegExp(`\\n\\s+${name}: ""\\n`));
@@ -242,6 +252,7 @@ describe("deploy config gate (§15.5, §15.8)", () => {
       DRIFT,
       readFileSync(join(import.meta.dirname, "../../.github/workflows/scanner-image.yml"), "utf8"),
     ];
+
     for (const text of wf)
       for (const [, ref] of text.matchAll(/uses:\s*(\S+)/g))
         expect(ref, ref).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);

@@ -1,3 +1,4 @@
+import type { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   type BillingProvider,
@@ -17,14 +18,18 @@ import { MemoryD1, TestClock } from "@bye/testing";
 import { Rejection } from "@bye/platform-cloudflare";
 
 const SECRET = "whsec_test_0123456789abcdef0123456789";
+
 const DAY = 86_400_000;
-const code = (e: unknown) => (e instanceof Rejection ? e.code : String(e));
+
+const code = <Caught>(e: Caught) => (e instanceof Rejection ? e.code : String(e));
 
 const fakeProvider = () => {
   const calls: Array<{ op: string; input: unknown }> = [];
+
   const provider: BillingProvider = {
     createCheckout: async (request) => {
       calls.push({ op: "checkout", input: request });
+
       return {
         providerSessionId: `ps_${request.sessionId}`,
         url: `https://pay.test/c/${request.sessionId}`,
@@ -33,6 +38,7 @@ const fakeProvider = () => {
     changePlan: async (input) => void calls.push({ op: "change", input }),
     cancel: async (input) => void calls.push({ op: "cancel", input }),
   };
+
   return { provider, calls };
 };
 
@@ -43,25 +49,31 @@ const setup = async (withProvider = true) => {
   const commerce = new ControlCommerce(d1, clock, withProvider ? provider : null, "secret");
   const billing = new ControlBilling(d1, clock, commerce);
   const dir = new ControlDirectory(d1, clock);
+
   const auth = new ControlAuth(d1, clock, {
     rp: { rpId: "bye.test", origins: [], requireUserVerification: true },
     totpKeys: { current: 1, keys: { 1: new Uint8Array(32) } },
     recoveryPepper: "p",
   });
+
   const alice = await dir.provisionPersonalAccount({
     address: "alice@bye.test",
     displayName: "Alice",
   });
-  const send = async (event: Record<string, unknown>) => {
+
+  const send = async (event: Record<string, Schema.Json>) => {
     const body = JSON.stringify({ created: clock.now(), ...event });
+
     return billing.handleWebhook(body, await signBillingPayload(body, SECRET, clock.now()), SECRET);
   };
+
   return { d1, clock, commerce, billing, dir, auth, alice, calls, send };
 };
 
 describe("[A02] commerce: checkout, plan changes, referrals, short addresses", () => {
   it("checkout sessions are created through the provider; only the signed webhook completes them", async () => {
     const { commerce, alice, calls, send } = await setup();
+
     const c = await commerce.createCheckout({
       purpose: "subscription",
       plan: "personal",
@@ -71,6 +83,7 @@ describe("[A02] commerce: checkout, plan changes, referrals, short addresses", (
       userId: alice.userId,
       returnUrl: "https://app.bye.test/settings/billing",
     });
+
     expect(c.url).toContain("pay.test");
     const req = calls[0]!.input as { successUrl: string; amountCents: number };
     expect(req.amountCents).toBeGreaterThan(0);
@@ -111,6 +124,7 @@ describe("[A02] commerce: checkout, plan changes, referrals, short addresses", (
           .catch((e) => e),
       ),
     ).toBe("bad_request");
+
     const c = await commerce.createCheckout({
       purpose: "short-address",
       plan: "short-address",
@@ -121,6 +135,7 @@ describe("[A02] commerce: checkout, plan changes, referrals, short addresses", (
       address: "ab@bye.test",
       returnUrl: "https://x",
     });
+
     expect(await commerce.shortAddressPaid("ab@bye.test", c.sessionId)).toBe(false);
     await send({ id: "evt_s1", orgId: "", type: "checkout.completed", sessionId: c.sessionId });
     expect(await commerce.shortAddressPaid("ab@bye.test", c.sessionId)).toBe(true);
@@ -151,11 +166,13 @@ describe("[A02] commerce: checkout, plan changes, referrals, short addresses", (
   it("checkout and plan change bind the plan to the org's kind and price seats only per seat", async () => {
     const { commerce, alice, calls, d1, clock } = await setup();
     const orgs = new ControlOrganizations(d1, clock);
+
     const domainOrg = await orgs.createOrganization(alice.userId, {
       name: "Acme",
       kind: "domain",
       seatLimit: 5,
     });
+
     const checkout = (orgId: string, plan: string, seats: number) =>
       commerce
         .createCheckout({
@@ -171,11 +188,13 @@ describe("[A02] commerce: checkout, plan changes, referrals, short addresses", (
           () => "ok",
           (e) => code(e),
         );
+
     const change = (orgId: string, plan: string, seats: number) =>
       commerce.requestPlanChange(orgId, alice.userId, { plan, interval: "annual", seats }).then(
         () => "ok",
         (e) => code(e),
       );
+
     // A domain org cannot buy the flat personal plan with 1000 seats (or at all).
     expect(await checkout(domainOrg, "personal", 1000)).toBe("bad_request");
     expect(await checkout(domainOrg, "family", 1)).toBe("bad_request");
@@ -304,6 +323,7 @@ describe("[A01/A02] entitlement enforcement in principal construction", () => {
 
   it("entitlementState: trial, grace, lapsed", () => {
     const now = Date.UTC(2026, 0, 1);
+
     const base = {
       org_id: "o",
       plan: "personal",
@@ -313,6 +333,7 @@ describe("[A01/A02] entitlement enforcement in principal construction", () => {
       short_address: 0,
       updated_at: now,
     };
+
     expect(
       entitlementState(
         { ...base, status: "trialing", trial_ends_at: now + DAY, period_end: null },
@@ -426,12 +447,14 @@ describe("[§10] support access: user-granted, time-boxed, read-only, audited", 
     expect(p.userId).toBe(alice.userId);
     await support.revoke(alice.userId, g.id);
     expect(code(await auth.authenticate(s.token).catch((e) => e))).toBe("unauthenticated");
+
     const audit = await d1
       .prepare(
         "SELECT action FROM audit_log WHERE actor_id = ? AND action LIKE 'support.%' ORDER BY created_at",
       )
       .bind(alice.userId)
       .all<{ action: string }>();
+
     expect(audit.results.map((r) => r.action)).toEqual(
       expect.arrayContaining([
         "support.grant",
@@ -452,11 +475,13 @@ describe("[§10] sending policy", () => {
   it("ramps new accounts, honours suppressions and suspensions", async () => {
     const { d1, clock, alice } = await setup();
     const policy = new SendingPolicy(d1, clock);
+
     const ok = await policy.check({
       userId: alice.userId,
       identity: "alice@bye.test",
       recipients: ["a@x.test", "b@x.test"],
     });
+
     expect(ok).toMatchObject({ allowed: true, remaining: 48 });
     await policy.record({ userId: alice.userId, identity: "alice@bye.test", recipients: 49 });
     expect(
@@ -510,6 +535,7 @@ describe("[§10] sending policy", () => {
     const policy = new SendingPolicy(d1, clock);
     await policy.record({ userId: alice.userId, identity: "alice@bye.test", recipients: 100 });
     let suspended = false;
+
     for (let i = 0; i < 3 && !suspended; i++)
       suspended = (
         await policy.recordOutcome({
@@ -555,6 +581,7 @@ describe("[§10] sending policy", () => {
 
   it("one-round-trip check keeps the per-scope windows, order and remaining budget", async () => {
     const { d1, clock, alice } = await setup();
+
     const policy = new SendingPolicy(d1, clock, {
       identityPerDay: 1000,
       domainPerDay: 20_000,
@@ -563,6 +590,7 @@ describe("[§10] sending policy", () => {
       maxComplaintRate: 0.003,
       maxBounceRate: 0.08,
     });
+
     clock.advance(40 * DAY); // established account: 2000/day user budget
     // Nine sends two hours ago count toward the daily scopes but not the platform's hourly window.
     await policy.record({ userId: alice.userId, identity: "alice@bye.test", recipients: 9 });
@@ -575,12 +603,14 @@ describe("[§10] sending policy", () => {
       }),
     ).toMatchObject({ allowed: true, remaining: 8 });
     await policy.record({ userId: alice.userId, identity: "alice@bye.test", recipients: 9 });
+
     // The hour now holds 9: two more exceeds the platform's hourly 10.
     const over = await policy.check({
       userId: alice.userId,
       identity: "alice@bye.test",
       recipients: ["a@x.test", "b@x.test"],
     });
+
     expect(over).toMatchObject({ allowed: false, reason: "budget", scope: "platform" });
     expect(over.allowed === false && over.retryAfterMs! > 0 && over.retryAfterMs! <= 3600_000).toBe(
       true,
@@ -598,9 +628,11 @@ describe("[§10] sending policy", () => {
     // Lifting audits exactly once; a second lift changes nothing.
     expect(await policy.lift("platform", "*", "op")).toBe(true);
     expect(await policy.lift("platform", "*", "op")).toBe(false);
+
     const lifts = await d1
       .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'sending.lift'")
       .first<{ n: number }>();
+
     expect(lifts?.n).toBe(1);
   });
 });
@@ -609,11 +641,13 @@ describe("[O03/O04] shared registry", () => {
   it("records spaces, shared threads (future replies) and extension mailboxes", async () => {
     const { d1, clock, alice } = await setup();
     const orgs = new ControlOrganizations(d1, clock);
+
     const orgId = await orgs.createOrganization(alice.userId, {
       name: "Acme",
       kind: "domain",
       seatLimit: 3,
     });
+
     const reg = new ControlSharedRegistry(d1, clock);
     await reg.registerSpace("spc_1", orgId, "team", alice.userId);
     await reg.registerSpace("spc_1", orgId, "team", alice.userId);
@@ -638,11 +672,13 @@ describe("[O03/O04] shared registry", () => {
     expect(await reg.sharedThreadsFor("mbx_1", "thr_1")).toEqual([
       { spaceId: "spc_1", sharedThreadId: "sth_1", includeFuture: true },
     ]);
+
     const ext = await orgs.createExtensionMailbox(
       orgId,
       await orgs.verifiedActor(orgId, alice.userId),
       [alice.userId],
     );
+
     await reg.registerExtension(ext, `ext_${ext}`, "Support@acme.test");
     expect(await reg.extensionFor(ext)).toEqual({
       spaceId: `ext_${ext}`,
@@ -654,11 +690,13 @@ describe("[O03/O04] shared registry", () => {
   it("org creation starts a trial entitlement sized to the seat limit; seat limits are bounded", async () => {
     const { d1, clock, alice, dir } = await setup();
     const orgs = new ControlOrganizations(d1, clock);
+
     const orgId = await orgs.createOrganization(alice.userId, {
       name: "Fam",
       kind: "family",
       seatLimit: 3,
     });
+
     expect(await orgs.seats(orgId)).toEqual({ limit: 3, used: 1, entitled: 3 });
     expect(
       code(

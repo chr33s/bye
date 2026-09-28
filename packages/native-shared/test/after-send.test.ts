@@ -8,10 +8,13 @@ describe("after-send choices", () => {
 
   it("[E09] maps each choice to the contract shape the server accepts", () => {
     const decode = Schema.decodeUnknownSync(MailAfterSend);
+
     for (const { value } of AFTER_SEND_CHOICES) {
       const after = afterSendFor(value, now);
+
       if (after) expect(decode(after)).toEqual(after);
     }
+
     expect(afterSendFor("none", now)).toBeUndefined();
     expect(afterSendFor("follow-up-if-no-reply", now)).toEqual({
       _tag: "BubbleUp",

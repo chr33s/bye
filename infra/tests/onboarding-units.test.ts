@@ -13,11 +13,15 @@ import { runHealthChecks, withTimeout } from "../onboarding/health.ts";
 import type { Fetch } from "../onboarding/oauth.ts";
 import { releaseMigrations, resolveRelease } from "../onboarding/release.ts";
 import { handler, isLoopbackHost, localOperatorAuth, signSession } from "../onboarding/server.ts";
-import { OnboardingError, type OnboardingService } from "../onboarding/service.ts";
+import { OnboardingError } from "../onboarding/service.ts";
+import type { JsonValue } from "../state/core.ts";
 
 const ORIGIN = "https://onboard.test";
+
 const SESSION = "s".repeat(43);
+
 const SECRET = Buffer.alloc(32, 7);
+
 /** The cookie this server issues for SESSION. */
 const SIGNED = signSession(SECRET, SESSION);
 
@@ -45,8 +49,10 @@ describe("onboarding server", () => {
       method,
       url: path,
       headers: { host: "onboard.test", ...headers },
-    }) as unknown as IncomingMessage;
+    }) as IncomingMessage;
+
     const out = { status: 0, headers: {} as Record<string, string>, body: "" };
+
     const res = {
       writeHead: (status: number, h: Record<string, string>) => {
         out.status = status;
@@ -55,15 +61,18 @@ describe("onboarding server", () => {
       end: (chunk?: string) => {
         out.body = chunk ?? "";
       },
-    } as unknown as ServerResponse;
+    } as ServerResponse;
+
     await handler({
-      service: service as unknown as OnboardingService,
+      service: service as never,
       origin: ORIGIN,
       operator: () => operator,
       sessionSecret: SECRET,
     })(req, res);
+
     return out;
   };
+
   const post = (path: string, headers: Record<string, string> = {}) =>
     call("POST", path, { origin: ORIGIN, "content-type": "application/json", ...headers }, "{}");
 
@@ -83,9 +92,11 @@ describe("onboarding server", () => {
     expect(fresh.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
 
     const issued = cookie.split(";")[0]!.split("=")[1]!;
+
     const again = await post("/api/authorize", {
       cookie: `theme=dark; __Host-bye-onboarding=${issued}`,
     });
+
     expect(again.headers["set-cookie"]).toBeUndefined();
     // The service sees the session id, never the MAC.
     expect(JSON.parse(again.body)).toEqual({ url: issued.split(".")[0] });
@@ -135,6 +146,7 @@ describe("onboarding server", () => {
 
   it("OB01: state changes need a same-origin JSON request (CSRF)", async () => {
     service.startAuthorization.mockClear();
+
     const refused = [
       await post("/api/authorize", { origin: "https://evil.test" }),
       await post("/api/authorize", { origin: "https://onboard.test.evil.test" }),
@@ -142,6 +154,7 @@ describe("onboarding server", () => {
       await post("/api/authorize", { "content-type": "text/plain" }),
       await post("/api/authorize", { "content-type": "application/x-www-form-urlencoded" }),
     ];
+
     for (const r of refused) expect(r.status).toBe(403);
     expect(service.startAuthorization).not.toHaveBeenCalled();
 
@@ -156,12 +169,14 @@ describe("onboarding server", () => {
     expect((await post("/api/nope")).status).toBe(404);
     expect((await call("PUT", "/api/status")).status).toBe(405);
     expect((await call("DELETE", "/")).status).toBe(405);
+
     const invalid = await call(
       "POST",
       "/api/bind",
       { origin: ORIGIN, "content-type": "application/json" },
       "{not json",
     );
+
     expect(invalid.status).toBe(400);
     const missing = await post("/api/bind");
     expect(missing.status).toBe(400);
@@ -196,15 +211,18 @@ describe("onboarding server: host check and local-operator mode", () => {
     status: vi.fn(async (op: string) => ({ operator: op })),
     recoveryKit: vi.fn(async () => ({ kit: "secrets" })),
   };
+
   const local = localOperatorAuth();
+
   const make = (withLocal = true) =>
     handler({
-      service: service as unknown as OnboardingService,
+      service: service as never,
       origin: ORIGIN,
       operator: () => "local-operator",
       sessionSecret: SECRET,
-      ...(withLocal ? { local } : {}),
+      local: withLocal ? local : undefined,
     });
+
   const run = async (
     h: ReturnType<typeof handler>,
     method: string,
@@ -216,8 +234,10 @@ describe("onboarding server: host check and local-operator mode", () => {
       method,
       url: path,
       headers: { host: "onboard.test", ...headers },
-    }) as unknown as IncomingMessage;
+    }) as IncomingMessage;
+
     const out = { status: 0, headers: {} as Record<string, string>, body: "" };
+
     const res = {
       writeHead: (status: number, h2: Record<string, string>) => {
         out.status = status;
@@ -226,10 +246,13 @@ describe("onboarding server: host check and local-operator mode", () => {
       end: (chunk?: string) => {
         out.body = chunk ?? "";
       },
-    } as unknown as ServerResponse;
+    } as ServerResponse;
+
     await h(req, res);
+
     return out;
   };
+
   const jsonPost = { origin: ORIGIN, "content-type": "application/json" };
 
   it("refuses a Host other than the configured origin's (DNS rebinding), in every mode", async () => {
@@ -238,9 +261,11 @@ describe("onboarding server: host check and local-operator mode", () => {
         host: "attacker.test",
         authorization: `Bearer ${local.token}`,
       });
+
       expect(rebound.status).toBe(421);
       expect((await run(h, "GET", "/api/status", { host: "" })).status).toBe(421);
     }
+
     expect(service.status).not.toHaveBeenCalled();
   });
 
@@ -271,6 +296,7 @@ describe("onboarding server: host check and local-operator mode", () => {
       },
       "{}",
     );
+
     expect(bearer.status).toBe(200);
     expect(service.recoveryKit).toHaveBeenCalledWith("local-operator");
   });
@@ -294,6 +320,7 @@ describe("onboarding server: host check and local-operator mode", () => {
   it("local mode binds loopback only", () => {
     for (const host of ["127.0.0.1", "localhost", "::1", "[::1]", "127.1.2.3"])
       expect(isLoopbackHost(host)).toBe(true);
+
     for (const host of [
       "0.0.0.0",
       "::",
@@ -312,20 +339,27 @@ describe("onboarding health checks", () => {
     site: "https://site.test",
     render: "https://render.test",
   };
-  const json = (v: unknown, status = 200) =>
+
+  const json = <T>(v: T, status = 200) =>
     new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
 
   it("OB06: each discovery and isolation check names what failed", async () => {
     const fetcher: Fetch = async (url) => {
       const u = new URL(url);
+
       if (u.pathname === "/.well-known/bye-instance")
         return json({ schema: "bye.instance/1", baseUrl: "https://other.test" });
+
       if (u.pathname === "/.well-known/oauth-authorization-server")
         return json({ issuer: urls.app });
+
       if (u.origin === urls.render) return json({ ok: true });
+
       if (u.origin === urls.site) return new Response("down", { status: 502 });
+
       return json({}, 404);
     };
+
     const results = await runHealthChecks(urls, "probe", fetcher, { request: 100, async: 10 });
     const byName = Object.fromEntries(results.map((r) => [r.name, r]));
     expect(byName["instance.document"]).toMatchObject({
@@ -343,12 +377,15 @@ describe("onboarding health checks", () => {
 
   it("OB06: a hung endpoint times out instead of stalling, and redirects are not followed", async () => {
     const seen: Array<RequestInit | undefined> = [];
+
     const hung: Fetch = (_url, init) => {
       seen.push(init);
+
       return new Promise((_, reject) =>
         init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)),
       );
     };
+
     const results = await runHealthChecks(urls, "probe", hung, { request: 20, async: 10 });
     expect(results.slice(0, 4).map((r) => [r.name, r.ok, r.detail])).toEqual([
       ["instance.document", false, "timed out"],
@@ -368,8 +405,10 @@ describe("onboarding health checks", () => {
 describe("onboarding release pinning", () => {
   const dir = mkdtempSync(join(tmpdir(), "bye-release-"));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
   const git = (...args: Array<string>) =>
     execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: "pipe" }).trim();
+
   git("init", "-q");
   git("config", "user.email", "release@example.com");
   git("config", "user.name", "release");
@@ -442,12 +481,14 @@ describe("Cloudflare Access JWT verification (operator identity)", () => {
   const other = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const jwk = { ...publicKey.export({ format: "jwk" }), kid: "k1", alg: "RS256", use: "sig" };
   const NOW = 1_800_000_000_000;
-  const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
+  const b64 = (v: JsonValue) => Buffer.from(JSON.stringify(v)).toString("base64url");
+
   const jwt = (
-    claims: Record<string, unknown>,
+    claims: Record<string, JsonValue>,
     opts: { kid?: string; alg?: string; key?: KeyObject } = {},
   ) => {
     const h = b64({ alg: opts.alg ?? "RS256", kid: opts.kid ?? "k1", typ: "JWT" });
+
     const p = b64({
       iss: TEAM,
       aud: [AUD],
@@ -456,17 +497,22 @@ describe("Cloudflare Access JWT verification (operator identity)", () => {
       iat: NOW / 1000,
       ...claims,
     });
+
     const sig = cryptoSign("RSA-SHA256", Buffer.from(`${h}.${p}`), opts.key ?? privateKey);
+
     return `${h}.${p}.${Buffer.from(sig).toString("base64url")}`;
   };
+
   const make = () => {
     const certs = vi.fn(async (_url: string) => Response.json({ keys: [jwk] }));
+
     const verify = accessVerifier({
       teamDomain: "team.cloudflareaccess.com",
       audience: AUD,
-      fetch: certs as unknown as Fetch,
+      fetch: certs as Fetch,
       now: () => NOW,
     });
+
     return { certs, verify };
   };
 
@@ -484,6 +530,7 @@ describe("Cloudflare Access JWT verification (operator identity)", () => {
     const valid = jwt({});
     const [h, p] = valid.split(".");
     const forgedClaims = `${h}.${b64({ iss: TEAM, aud: [AUD], email: "admin@example.com", exp: NOW / 1000 + 300 })}.${valid.split(".")[2]}`;
+
     for (const token of [
       jwt({}, { key: other.privateKey }),
       forgedClaims,
@@ -508,9 +555,10 @@ describe("Cloudflare Access JWT verification (operator identity)", () => {
       audience: AUD,
       fetch: (async () => {
         throw new Error("offline");
-      }) as unknown as Fetch,
+      }) as Fetch,
       now: () => NOW,
     });
+
     expect(await verify(jwt({}))).toBeNull();
   });
 });

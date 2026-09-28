@@ -24,7 +24,9 @@ export interface DrillReport {
 }
 
 const TOKEN = "drill-state-token-0123456789abcdef";
+
 const ADMIN = "drill-admin-token-0123456789abcdef";
+
 const KEY = `v1:${"ab".repeat(32)}`;
 
 export const runStateDrill = async (): Promise<DrillReport> => {
@@ -37,6 +39,7 @@ export const runStateDrill = async (): Promise<DrillReport> => {
     output: { file: script, format: "esm" },
     logLevel: "silent",
   });
+
   const mf = new Miniflare({
     modules: true,
     scriptPath: script,
@@ -46,30 +49,38 @@ export const runStateDrill = async (): Promise<DrillReport> => {
     durableObjects: { STATE: { className: "StateStoreObject", useSQLite: true } },
     r2Buckets: ["BACKUPS"],
   });
+
   try {
     await mf.ready;
     const origin = "https://state.drill";
+
     // Bridge Node's fetch shapes to Miniflare's own (undici) Request/Response types.
     const serve = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = new Request(input, init);
+
       const body =
         request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
+
       const response = await mf.dispatchFetch(request.url, {
         method: request.method,
         headers: Object.fromEntries(request.headers),
-        ...(body === undefined ? {} : { body }),
+        body,
       });
+
       return new Response(
         response.status === 204 || response.status === 304 ? null : await response.text(),
         { status: response.status, headers: Object.fromEntries(response.headers) },
       );
     };
+
     const client = makeHttpStateStore({ url: origin, authToken: TOKEN, id: "drill" }).pipe(
       Effect.provide(FetchHttpClient.layer),
       Effect.provideService(FetchHttpClient.Fetch, serve as typeof fetch),
     );
+
     const store = await Effect.runPromise(client);
     const fixtures: Array<{ stack: string; stage: string; fqn: string; value: unknown }> = [];
+
     for (const stack of ["MailboxPlatform", "ByeFoundation"]) {
       for (const stage of ["staging", "prod"]) {
         for (let i = 0; i < 5; i++)
@@ -81,12 +92,13 @@ export const runStateDrill = async (): Promise<DrillReport> => {
           });
       }
     }
+
     for (const f of fixtures)
       await Effect.runPromise(
         store.set({ stack: f.stack, stage: f.stage, fqn: f.fqn, value: f.value as never }),
       );
 
-    const admin = (path: string, body?: unknown) =>
+    const admin = <T>(path: string, body?: T) =>
       serve(`${origin}/state/admin/${path}`, {
         method: "POST",
         headers: {
@@ -94,8 +106,9 @@ export const runStateDrill = async (): Promise<DrillReport> => {
           "x-bye-admin-token": ADMIN,
           "content-type": "application/json",
         },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        body: body === undefined ? undefined : JSON.stringify(body),
       });
+
     const snapshotKey = ((await (await admin("snapshot")).json()) as { key: string }).key;
 
     // Disaster: every stack deleted.
@@ -105,15 +118,18 @@ export const runStateDrill = async (): Promise<DrillReport> => {
         headers: { authorization: `Bearer ${TOKEN}` },
       });
     }
+
     const restored = (
       (await (await admin("restore", { key: snapshotKey })).json()) as { restored: number }
     ).restored;
 
     const mismatches: Array<string> = [];
+
     for (const f of fixtures) {
       const got = await Effect.runPromise(
         store.get({ stack: f.stack, stage: f.stage, fqn: f.fqn }),
       );
+
       if (JSON.stringify(got) !== JSON.stringify(f.value))
         mismatches.push(`${f.stack}/${f.stage}/${f.fqn}`);
     }
@@ -124,8 +140,10 @@ export const runStateDrill = async (): Promise<DrillReport> => {
         headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
         body: JSON.stringify({ holder, ttlMs: 60_000 }),
       });
+
     const first = await lock("ci-run-1");
     const second = await lock("ci-run-2");
+
     return {
       written: fixtures.length,
       snapshotKey,

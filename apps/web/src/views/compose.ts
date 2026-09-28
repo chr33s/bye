@@ -1,3 +1,4 @@
+import { Match, Predicate } from "effect";
 import { pushDraft, syncedState } from "@bye/native-shared/drafts";
 import {
   AFTER_SEND_CHOICES,
@@ -62,8 +63,10 @@ export const uploadFile = async (
     contentType: file.type || "application/octet-stream",
     declaredSize: file.size,
   });
+
   try {
     let done = 0;
+
     for (const range of partRanges(file.size, reserved.partSize)) {
       await apiRaw(
         "PUT",
@@ -74,10 +77,12 @@ export const uploadFile = async (
       done += range.end - range.start;
       onProgress(done);
     }
+
     await api("POST", `/v1/uploads/${encodeURIComponent(reserved.uploadId)}/complete`, {
       mailboxId: mb(),
       commandId: newCommandId(),
     });
+
     return reserved.uploadId;
   } catch (error) {
     await api("POST", `/v1/uploads/${encodeURIComponent(reserved.uploadId)}/abort`, {
@@ -104,11 +109,14 @@ const toolbarButton = (label: string, command: string, value?: string) =>
 export const renderCompose = async (params: URLSearchParams): Promise<void> => {
   // Local drafts are scoped to the signed-in account and mailbox (a browser can be shared).
   const owner = { userId: state.me?.userId ?? "", mailboxId: mb() };
+
   const drafts = owner.userId
     ? await loadLocalDrafts(owner).catch(degrade([] as Array<LocalDraft>))
     : [];
+
   const threadId = params.get("thread");
   const serverDraftId = params.get("draft");
+
   let draft: LocalDraft = drafts.find(
     (d) =>
       (serverDraftId ? d.draftId === serverDraftId : d.threadId === threadId) &&
@@ -128,6 +136,7 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
     updatedAt: Date.now(),
     state: "local",
   };
+
   if (serverDraftId && draft.baseRevision === 0) {
     try {
       const server = await api<{
@@ -141,9 +150,11 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
           html?: string;
         };
       }>("GET", `/v1/mailboxes/${mb()}/drafts/${encodeURIComponent(serverDraftId)}`);
+
       const join = (xs: Array<Recipient>) =>
         xs.map((x) => (x.name ? `${x.name} <${x.address}>` : x.address)).join(", ");
-      draft = {
+
+      const synced = {
         ...draft,
         baseRevision: server.revision,
         to: join(server.content.to),
@@ -151,9 +162,10 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
         bcc: join(server.content.bcc),
         subject: server.content.subject,
         text: server.content.text,
-        ...(server.content.html ? { html: server.content.html } : {}),
-        state: "synced",
+        state: "synced" as const,
       };
+
+      draft = server.content.html ? { ...synced, html: server.content.html } : synced;
     } catch {
       // offline: keep the local copy
     }
@@ -165,7 +177,9 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
       `/v1/mailboxes/${mb()}/contacts?limit=500`,
     ).catch(degrade([])),
   ]);
+
   const groups: Record<string, Array<Recipient>> = {};
+
   for (const c of contacts)
     for (const g of c.groups ?? [])
       (groups[g] ??= []).push(...c.emails.map((address) => ({ name: c.name, address })));
@@ -177,7 +191,9 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
       ? "This draft changed on another device; your copy is kept below."
       : "",
   );
+
   const suggestions = h("datalist", { id: "recipient-suggestions" });
+
   const recipientInput = (name: "to" | "cc" | "bcc") => {
     const input = h("input", {
       name,
@@ -186,9 +202,11 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
       list: "recipient-suggestions",
       "aria-describedby": `${name}-help`,
     });
+
     input.addEventListener("input", () => {
       update({ [name]: input.value });
       const last = input.value.split(/[,;]/).pop()?.trim() ?? "";
+
       if (last.length >= 2) {
         void list<{ address: string; name?: string }>(
           `/v1/mailboxes/${mb()}/contacts/suggest?prefix=${encodeURIComponent(last)}`,
@@ -212,16 +230,20 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
           .catch(bestEffort);
       }
     });
+
     return input;
   };
+
   const toInput = recipientInput("to");
   const ccInput = recipientInput("cc");
   const bccInput = recipientInput("bcc");
+
   const subject = h("input", {
     name: "subject",
     value: draft.subject,
     oninput: (e) => update({ subject: (e.target as HTMLInputElement).value }),
   });
+
   const identity = h(
     "select",
     { "aria-label": "From", onchange: () => update({ identityId: identity.value }) },
@@ -244,7 +266,9 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
         ),
       ),
   );
+
   const rich = { on: draft.html !== undefined || remember.get("composer") === "rich" };
+
   const editor = h("div", {
     class: "editor",
     contenteditable: "true",
@@ -252,6 +276,7 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
     "aria-multiline": "true",
     "aria-label": "Message",
   });
+
   // Restoring saved rich text: parse into a detached document, then import only sanitized nodes.
   // Saved HTML references inline images as `cid:<uploadId>`; they're shown again from the local
   // copies kept with the draft (object URLs never survive a reload).
@@ -263,8 +288,10 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
   } else {
     editor.textContent = draft.text;
   }
+
   const plain = h("textarea", { name: "text", rows: 14, "aria-label": "Message" }, draft.text);
   const bodyHost = h("div", {});
+
   const toolbar = h(
     "div",
     { class: "bulk", role: "toolbar", "aria-label": "Formatting" },
@@ -282,14 +309,17 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
         "aria-label": "Link",
         onclick: () => {
           const url = prompt("Link address (https://…)");
+
           if (url && /^https?:\/\//i.test(url)) document.execCommand("createLink", false, url);
         },
       },
       "Link",
     ),
   );
+
   const renderBody = () => bodyHost.replaceChildren(...(rich.on ? [toolbar, editor] : [plain]));
   renderBody();
+
   const modeToggle = h(
     "button",
     {
@@ -306,6 +336,7 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
   );
 
   const attachments = h("ul", { class: "attachments", "aria-label": "Attachments" });
+
   const renderAttachments = () =>
     attachments.replaceChildren(
       ...(draft.attachments ?? []).map((a) =>
@@ -330,31 +361,41 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
         ),
       ),
     );
+
   renderAttachments();
   const fileInput = h("input", { type: "file", multiple: true, "aria-label": "Attach files" });
+
   const imageInput = h("input", {
     type: "file",
     accept: "image/png,image/jpeg,image/gif,image/webp",
     "aria-label": "Insert inline image",
   });
+
   const addFiles = (inline: boolean) => async (event: Event) => {
     const files = [...((event.target as HTMLInputElement).files ?? [])];
+
     for (const file of files) {
       announce(`Uploading ${file.name}…`);
+
       const uploadId = await uploadFile(file, (done) =>
         announce(`Uploading ${file.name}: ${Math.round((done / file.size) * 100)}%`),
-      ).catch((e: unknown) => {
-        announce(`Upload failed: ${errorMessage(e)}`);
+      ).catch((cause: unknown) => {
+        announce(`Upload failed: ${errorMessage(cause)}`);
+
         return null;
       });
+
       if (!uploadId) continue;
+
       if (file.size >= LARGE_FILE_BYTES && !inline) {
         const link = await mailCommand<{ linkId: string; token: string }>({
           _tag: "CreateFileLink",
           uploadId,
         });
+
         const url = `${location.origin}/v1/files/${encodeURIComponent(mb())}/${encodeURIComponent(link.token)}`;
         update({ fileLinks: [...(draft.fileLinks ?? []), link.linkId] });
+
         if (rich.on)
           editor.append(
             h("p", {}, h("a", { href: url }, `${file.name} (${formatSize(file.size)})`)),
@@ -363,13 +404,16 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
         announce(`${file.name} will be shared as a download link`);
         continue;
       }
-      update({
-        attachments: [
-          ...(draft.attachments ?? []),
-          { uploadId, filename: file.name, size: file.size, ...(inline ? { inline: true } : {}) },
-        ],
-        ...(inline ? { inlineImages: { ...draft.inlineImages, [uploadId]: file } } : {}),
-      });
+
+      const base = { uploadId, filename: file.name, size: file.size };
+      const attachments = [...(draft.attachments ?? []), inline ? { ...base, inline: true } : base];
+
+      update(
+        inline
+          ? { attachments, inlineImages: { ...draft.inlineImages, [uploadId]: file } }
+          : { attachments },
+      );
+
       if (inline) {
         if (!rich.on) modeToggle.click();
         editor.append(
@@ -377,11 +421,14 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
         );
         update({ html: editorHtml() });
       }
+
       renderAttachments();
       announce(`${file.name} attached`);
     }
+
     (event.target as HTMLInputElement).value = "";
   };
+
   fileInput.addEventListener("change", addFiles(false));
   imageInput.addEventListener("change", addFiles(true));
 
@@ -390,6 +437,7 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
   const snippetText = h("input", { placeholder: "text", "aria-label": "Snippet text" });
 
   let timer: number | undefined;
+
   const update = (patch: Partial<LocalDraft>) => {
     draft = {
       ...draft,
@@ -400,61 +448,76 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
     clearTimeout(timer);
     timer = window.setTimeout(() => void autosave(), 800);
   };
+
   // Saved in the same cid: form that is sent, never with local object URLs.
   const editorHtml = () => {
     const clone = editor.cloneNode(true) as HTMLElement;
     clone
       .querySelectorAll("img[data-cid]")
       .forEach((img) => img.setAttribute("src", `cid:${img.getAttribute("data-cid")}`));
+
     return clone.innerHTML;
   };
+
   editor.addEventListener("input", () => update({ html: editorHtml() }));
   plain.addEventListener("input", () => {
     const expanded = expandSnippets(plain.value, snippets);
+
     if (expanded !== plain.value) plain.value = expanded;
     update({ text: plain.value });
   });
 
   const bodyContent = () => {
     if (!rich.on) return { text: plain.value };
+
     // Inline images reference their uploads by content ID, never the local object URL.
     return composeBody(editorHtml());
   };
+
   const content = () => {
     const to = parseRecipients(toInput.value, groups);
     const cc = parseRecipients(ccInput.value, groups);
     const bcc = parseRecipients(bccInput.value, groups);
     const invalid = [...to.invalid, ...cc.invalid, ...bcc.invalid];
+
     if (invalid.length) throw new Error(`Check these recipients: ${invalid.join(", ")}`);
     const body = bodyContent();
+
     return {
       to: to.recipients,
       cc: cc.recipients,
       bcc: bcc.recipients,
       subject: subject.value,
       text: body.text,
-      ...("html" in body ? { html: body.html } : {}),
+      html: "html" in body ? body.html : undefined,
       // An inline image deleted from the editor is dropped, not sent as a stray attachment.
       attachments: (draft.attachments ?? [])
         .filter((a) => !a.inline || ("html" in body && body.html.includes(`cid:${a.uploadId}`)))
         .map((a) => a.uploadId),
-      ...(draft.fileLinks?.length ? { fileLinks: draft.fileLinks } : {}),
-      ...(identity.value ? { identityId: identity.value } : {}),
+      fileLinks: draft.fileLinks?.length ? draft.fileLinks : undefined,
+      identityId: identity.value || undefined,
     };
   };
+
   const autosave = async (): Promise<boolean> => {
     await saveLocalDraft(draft).catch(bestEffort);
+
     if (!navigator.onLine) {
       status.textContent = "Saved on this device (offline)";
+
       return false;
     }
+
     let c;
+
     try {
       c = content();
     } catch (error) {
       status.textContent = errorMessage(error);
+
       return false;
     }
+
     // The same push/sync core as the native composer: a conflict keeps both copies, and a draft
     // queued to send stays queued after an autosave.
     const pushed = await pushDraft(
@@ -467,59 +530,68 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
       },
       c,
     );
-    switch (pushed._tag) {
-      case "Offline":
-        status.textContent = "Saved on this device; will sync when online";
-        return false;
-      case "Conflict": {
-        const join = (xs: ReadonlyArray<Recipient>) => xs.map((x) => x.address).join(", ");
-        draft = resolveConflict(draft, {
-          revision: pushed.revision,
-          to: join(pushed.content.to),
-          cc: join(pushed.content.cc),
-          bcc: join(pushed.content.bcc),
-          subject: pushed.content.subject,
-          text: pushed.content.text,
-        });
-        await saveLocalDraft(draft).catch(bestEffort);
-        status.textContent = "This draft changed elsewhere. Both versions are kept.";
-        return false;
-      }
-      case "Synced":
-        draft = {
-          ...draft,
-          draftId: pushed.draftId,
-          baseRevision: pushed.revision,
-          state: syncedState(draft.state),
-        };
-        await saveLocalDraft(draft).catch(bestEffort);
-        status.textContent = "Draft saved";
-        return true;
-    }
+
+    return Match.value(pushed).pipe(
+      Match.tagsExhaustive({
+        Offline: () => {
+          status.textContent = "Saved on this device; will sync when online";
+
+          return false;
+        },
+        Conflict: async (conflict) => {
+          const join = (xs: ReadonlyArray<Recipient>) => xs.map((x) => x.address).join(", ");
+          draft = resolveConflict(draft, {
+            revision: conflict.revision,
+            to: join(conflict.content.to),
+            cc: join(conflict.content.cc),
+            bcc: join(conflict.content.bcc),
+            subject: conflict.content.subject,
+            text: conflict.content.text,
+          });
+          await saveLocalDraft(draft).catch(bestEffort);
+          status.textContent = "This draft changed elsewhere. Both versions are kept.";
+
+          return false;
+        },
+        Synced: async (synced) => {
+          draft = {
+            ...draft,
+            draftId: synced.draftId,
+            baseRevision: synced.revision,
+            state: syncedState(draft.state),
+          };
+          await saveLocalDraft(draft).catch(bestEffort);
+          status.textContent = "Draft saved";
+
+          return true;
+        },
+      }),
+    );
   };
 
   const sendLater = h("input", { type: "datetime-local", "aria-label": "Send later at" });
+
   const individually = h("input", {
     type: "checkbox",
     "aria-label": "Send individually to each recipient",
   });
+
   const afterSendParam = params.get("afterSend");
+
   const afterSend = h(
     "select",
     { "aria-label": "After sending" },
     ...AFTER_SEND_CHOICES.filter((c) => threadId || !c.replyOnly).map((c) =>
-      h(
-        "option",
-        { value: c.value, ...(afterSendParam === c.value ? { selected: true } : {}) },
-        c.label,
-      ),
+      h("option", { value: c.value, selected: afterSendParam === c.value }, c.label),
     ),
   );
+
   const outcomes = h("div", { "aria-live": "polite" });
 
   const watchOutcomes = async (sendJobIds: ReadonlyArray<string>) => {
     for (let attempt = 0; attempt < 20; attempt++) {
       await new Promise((r) => setTimeout(r, 3_000));
+
       const jobs = await Promise.all(
         sendJobIds.map((id) =>
           api<{
@@ -529,6 +601,7 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
           }>("GET", `/v1/mailboxes/${mb()}/send-jobs/${encodeURIComponent(id)}`).catch(bestEffort),
         ),
       );
+
       outcomes.replaceChildren(
         h(
           "ul",
@@ -545,6 +618,7 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
           ),
         ),
       );
+
       if (
         jobs.every((j) => j && ["accepted", "rejected", "cancelled", "unknown"].includes(j.state))
       )
@@ -555,17 +629,21 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
   const send = async (event: Event) => {
     event.preventDefault();
     const synced = await autosave();
+
     if (!synced || !draft.draftId) {
       if (!navigator.onLine) {
         draft = { ...draft, state: "queued-send" };
         await saveLocalDraft(draft).catch(bestEffort);
         status.textContent = "Queued on this device — not sent yet";
       }
+
       return;
     }
+
     const at = sendLater.value ? Date.parse(sendLater.value) : undefined;
     const after = afterSendFor(afterSend.value as AfterSendChoice, Date.now());
     let job;
+
     try {
       job = await api<
         | { _tag: "Queued"; sendJobIds: Array<string>; dueAt: number }
@@ -574,19 +652,23 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
         commandId: newCommandId(),
         mailboxId: mb(),
         revision: draft.baseRevision,
-        ...(at ? { sendAt: at } : {}),
-        ...(individually.checked ? { individually: true } : {}),
-        ...(after ? { afterSend: after } : {}),
+        sendAt: at || undefined,
+        individually: individually.checked || undefined,
+        afterSend: after || undefined,
       });
     } catch (error) {
       status.textContent =
         error instanceof ApiRequestError ? `Couldn't send: ${error.message}` : String(error);
+
       return;
     }
-    if (job._tag === "Conflict") {
+
+    if (Predicate.isTagged(job, "Conflict")) {
       status.textContent = "This draft changed on another device; review it before sending.";
+
       return;
     }
+
     const sendJobIds = job.sendJobIds;
     // Sent: the server owns it now, so no local copy lingers on this device.
     await deleteLocalDraft(draft.localId).catch(bestEffort);
@@ -605,7 +687,9 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
                 }),
               ),
             );
-            const cancelled = results.every((r) => r._tag === "Cancelled");
+
+            const cancelled = results.every((r) => Predicate.isTagged(r, "Cancelled"));
+
             // Undone: the draft is editable again, so keep it on this device as before.
             if (cancelled) await saveLocalDraft(draft).catch(bestEffort);
             status.textContent = cancelled
@@ -617,6 +701,7 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
       ),
     );
     const back = params.get("return");
+
     if (back && back.startsWith("#/")) setTimeout(() => (location.hash = back), 1_500);
     else void watchOutcomes(sendJobIds);
   };
@@ -652,6 +737,7 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
           type: "button",
           onclick: () => {
             const sig = identities.find((i) => i.identityId === identity.value)?.signature ?? "";
+
             if (rich.on) editor.append(h("p", {}, "-- "), h("p", {}, sig));
             else plain.value = withSignature(plain.value, sig);
             update(rich.on ? { html: editor.innerHTML } : { text: plain.value });
@@ -708,5 +794,6 @@ export const renderCompose = async (params: URLSearchParams): Promise<void> => {
     status,
     outcomes,
   );
+
   show(form);
 };

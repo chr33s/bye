@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import {
   domainOf,
   normalizeAddress,
@@ -24,6 +25,7 @@ import type { MailboxViews } from "./views.ts";
 // never enrolled anywhere; forward-without-copy trashes only a thread this delivery created.
 
 const MAX_REFERENCES = 50;
+
 const FALLBACK_WINDOW_MS = 30 * 24 * 3600 * 1000;
 
 /** The routing outcome for one delivery, fixed before any row is written. */
@@ -58,6 +60,11 @@ const withRules = (
   redeliverTo: rules.redeliverTo,
 });
 
+type AttachmentAccessResult = {
+  readonly allowed: boolean;
+  readonly status: MailboxScanStatus;
+};
+
 export class MailboxIngest {
   constructor(
     private readonly ctx: MailboxContext,
@@ -80,8 +87,10 @@ export class MailboxIngest {
   needsOrganizerCheck(summary: MessageSummary, ingestionId: string): boolean {
     if (!summary.hasCalendar || summary.calendarMethod?.toUpperCase() !== "REPLY") return false;
     const from = normalizeAddress(summary.from.address);
+
     if (this.ledger.policy("address", from) || this.ledger.policy("domain", domainOf(from)))
       return false;
+
     return (
       this.sql.one("SELECT 1 AS x FROM deliveries WHERE ingestion_id = ? LIMIT 1", ingestionId) ===
       undefined
@@ -94,11 +103,13 @@ export class MailboxIngest {
    */
   commitDelivery(input: MailboxDeliveryInput): MailboxDeliveryResult {
     const recipient = normalizeAddress(input.recipient);
+
     const out = this.sql.tx(() =>
       this.ctx.kernel.consume(`ingest:${input.ingestionId}`, recipient, () =>
         this.applyDelivery({ ...input, recipient }),
       ),
     );
+
     return { ...out.result, replayed: out.replayed };
   }
 
@@ -109,6 +120,7 @@ export class MailboxIngest {
    */
   private isQualifyingReply(s: MessageSummary, from: string): boolean {
     if (s.automated) return false;
+
     return (
       this.sql.one<{ n: number }>("SELECT 1 AS n FROM identities WHERE address = ?", from) ===
       undefined
@@ -119,9 +131,11 @@ export class MailboxIngest {
     const s = input.summary;
     const from = normalizeAddress(s.from.address);
     const referenced = this.findReferencedThread([...s.inReplyTo, ...s.references]);
+
     // Threading membership: the sender already wrote, or was addressed, in the referenced thread.
     const participant =
       referenced !== undefined && this.appearsInThread(referenced.thread_id, from);
+
     const decision = this.decide(input, from, referenced, participant);
     const active = decision.disposition === "active";
 
@@ -133,11 +147,13 @@ export class MailboxIngest {
       (input.authorizedTransfer === true || participant) &&
       referenced.disposition === decision.disposition &&
       decision.disposition !== "trash";
+
     const joined = mayJoin
       ? referenced
       : active
         ? this.fallbackThread(from, s.subject, input.receivedAt)
         : undefined;
+
     const threadId =
       joined?.thread_id ??
       this.ledger.open({
@@ -149,6 +165,7 @@ export class MailboxIngest {
         bundleKey: decision.bundle ? from : null,
         at: input.receivedAt,
       });
+
     const current = this.ledger.row(threadId)!;
     const unfollowed = bool(current.unfollowed);
     const becomesNew = active && !unfollowed;
@@ -183,6 +200,7 @@ export class MailboxIngest {
       scanStatus: s.attachments.length > 0 ? "pending" : "not-required",
       attachments: s.attachments,
     });
+
     if (s.attachments.length > 0)
       this.ctx.kernel.emit("scan-message", this.ctx.mailboxId, {
         deliveryId,
@@ -198,18 +216,26 @@ export class MailboxIngest {
       (current.bubble_condition !== "if-no-reply" || this.isQualifyingReply(s, from))
     )
       this.ledger.setBubble(threadId, { _tag: "Invalidated" });
+
     const seq = this.ctx.change("thread", "delivered", {
       threadId,
       deliveryId,
       disposition: decision.disposition,
     });
+
     this.ledger.recordArrival(threadId, { at: input.receivedAt, becomesNew, active, seq });
+
     for (const label of decision.labels) this.organize.assignLabelByName(threadId, label);
 
     if (active && !decision.quarantine) {
       if (decision.workflowBoardId) this.organize.enrollInBoard(decision.workflowBoardId, threadId);
+
       // Sender-specific redelivery rules copy the message to another authorized mailbox (E22).
-      if (decision.redeliverTo && input.safety._tag === "Clean" && !input.authorizedTransfer) {
+      if (
+        decision.redeliverTo &&
+        Predicate.isTagged(input.safety, "Clean") &&
+        !input.authorizedTransfer
+      ) {
         this.transfers.emitTransfer(
           deliveryId,
           decision.redeliverTo,
@@ -217,6 +243,7 @@ export class MailboxIngest {
           this.deliverySummary(deliveryId),
         );
       }
+
       this.organize.enrollByAddress(
         threadId,
         [...s.to, ...s.cc].map((a) => normalizeAddress(a.address)).concat(input.recipient),
@@ -224,11 +251,13 @@ export class MailboxIngest {
       // Shared-resource propagation (O03 extension mailboxes, O04 future replies): consumers look up
       // registrations and append idempotently by event; unregistered mailboxes are a no-op.
       this.ctx.kernel.emit("shared.delivery", this.ctx.mailboxId, { deliveryId, threadId });
+
       if (s.hasCalendar)
         this.ctx.kernel.emit("calendar.invitation", this.ctx.mailboxId, {
           deliveryId,
           messageKey: input.messageKey,
         });
+
       if (
         this.automation.shouldNotify({ threadId, from, notifyPolicy: decision.notify, unfollowed })
       )
@@ -240,6 +269,7 @@ export class MailboxIngest {
         summary: s,
         deliveredAt: input.receivedAt,
       });
+
       const fwd = this.automation.maybeForward({
         from,
         recipient: input.recipient,
@@ -248,8 +278,10 @@ export class MailboxIngest {
         hops: input.forwardHops ?? 0,
         bytes: input.rawSize,
       });
+
       if (fwd.discardLocal && !joined) this.ledger.move(threadId, "trash", { newForYou: false });
     }
+
     return {
       deliveryId,
       threadId,
@@ -266,8 +298,9 @@ export class MailboxIngest {
     referenced: ThreadRow | undefined,
     participant: boolean,
   ): Decision {
-    if (input.authorizedTransfer && input.safety._tag === "Clean")
+    if (input.authorizedTransfer && Predicate.isTagged(input.safety, "Clean"))
       return withRules(TRANSFER, this.organize.evaluateRules(input.summary, input.recipient));
+
     // A reply only skips the Screener when the thread is one we took part in AND the sender was
     // already a participant of it. Message-ID is untrusted: guessing one never grants entry (§4.1).
     const knownThread =
@@ -275,7 +308,9 @@ export class MailboxIngest {
       referenced.disposition === "active" &&
       participant &&
       this.weSentInto(referenced.thread_id);
+
     const method = input.summary.calendarMethod?.toUpperCase();
+
     const routed = route({
       safety: input.safety,
       exact: this.ledger.policy("address", from),
@@ -284,7 +319,9 @@ export class MailboxIngest {
       // iTIP REPLYs to events the owner organizes skip the Screener; REQUESTs never do (C04).
       knownThread: knownThread || (input.calendarOrganizerReply === true && method === "REPLY"),
     });
+
     const decision: Decision = { ...routed, workflowBoardId: undefined, redeliverTo: undefined };
+
     return routed.disposition === "active"
       ? withRules(decision, this.organize.evaluateRules(input.summary, input.recipient))
       : decision;
@@ -306,34 +343,42 @@ export class MailboxIngest {
       threadId,
     )) {
       if (normalizeAddress(d.from_address) === sender) return true;
+
       for (const a of [
         ...json<Array<Address>>(d.to_json, []),
         ...json<Array<Address>>(d.cc_json, []),
       ])
         if (normalizeAddress(a.address) === sender) return true;
     }
+
     return false;
   }
 
   private findReferencedThread(ids: ReadonlyArray<string>): ThreadRow | undefined {
     const refs = [...new Set(ids.filter((x) => x.length > 0))].slice(-MAX_REFERENCES);
+
     if (refs.length === 0) return undefined;
+
     const row = this.sql.one<{ thread_id: string }>(
       `SELECT thread_id FROM deliveries WHERE message_id_header IN (${placeholders(refs.length)}) ORDER BY date DESC LIMIT 1`,
       ...refs,
     );
+
     return row ? this.ledger.row(this.ledger.resolve(row.thread_id)) : undefined;
   }
 
   /** Conservative fallback: same sender, same normalized subject, reply prefix, recent activity. */
   private fallbackThread(from: string, subject: string, at: number): ThreadRow | undefined {
     const normalized = this.ctx.codec.normalizeSubject(subject);
+
     if (normalized.length === 0 || normalized === subject.trim().toLowerCase()) return undefined;
+
     const candidates = this.sql.all<ThreadRow>(
       "SELECT * FROM threads WHERE sender = ? AND disposition = 'active' AND merged_into IS NULL AND last_activity_at >= ? ORDER BY last_activity_at DESC LIMIT 20",
       from,
       at - FALLBACK_WINDOW_MS,
     );
+
     return candidates.find((t) => this.ctx.codec.normalizeSubject(t.subject) === normalized);
   }
 
@@ -342,7 +387,9 @@ export class MailboxIngest {
     const row =
       this.sql.one<DeliveryRow>("SELECT * FROM deliveries WHERE delivery_id = ?", deliveryId) ??
       reject("not_found", "delivery");
+
     const d = this.views.deliveries([row])[0]!;
+
     return {
       from: d.from,
       to: d.to,
@@ -380,6 +427,7 @@ export class MailboxIngest {
         "SELECT thread_id, scan_status FROM deliveries WHERE delivery_id = ?",
         deliveryId,
       );
+
       if (!d || d.scan_status === "infected") return;
       this.sql.run(
         "UPDATE deliveries SET scan_status = ?, scan_signature = ?, scan_attempts = scan_attempts + 1 WHERE delivery_id = ?",
@@ -387,6 +435,7 @@ export class MailboxIngest {
         signature ?? null,
         deliveryId,
       );
+
       if (outcome === "infected")
         this.ledger.move(d.thread_id, "spam", { quarantined: true, newForYou: false }, null);
       this.ctx.change("delivery", "scanned", {
@@ -398,16 +447,15 @@ export class MailboxIngest {
   }
 
   /** Whether a delivery's attachments may be downloaded, previewed, forwarded or redelivered. */
-  attachmentAccess(deliveryId: string): {
-    readonly allowed: boolean;
-    readonly status: MailboxScanStatus;
-  } {
+  attachmentAccess(deliveryId: string): AttachmentAccessResult {
     const status =
       this.sql.one<{ scan_status: MailboxScanStatus | null }>(
         "SELECT scan_status FROM deliveries WHERE delivery_id = ?",
         deliveryId,
       ) ?? reject("not_found", "delivery");
+
     const s = status.scan_status ?? "legacy";
+
     return { allowed: s === "clean" || s === "not-required" || s === "legacy", status: s };
   }
 

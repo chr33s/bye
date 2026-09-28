@@ -52,16 +52,20 @@ export const planSync = (
   const upload: Array<string> = [];
   let unchanged = 0;
   const localNames = new Set<string>();
+
   for (const f of local) {
     if (!isMirrorFile(f.name)) continue;
     localNames.add(f.name);
     const r = remote[f.name];
+
     if (r && r.size === f.size && r.etag.replace(/"/g, "") === f.md5) unchanged++;
     else upload.push(f.name);
   }
+
   const prune =
     run.succeeded && hasCoreDatabases(localNames)
       ? Object.keys(remote).filter((n) => /\.cdiff(\.sign)?$/.test(n) && !localNames.has(n))
       : [];
+
   return { upload: upload.sort(), unchanged, prune: prune.sort() };
 };

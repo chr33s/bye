@@ -19,12 +19,15 @@ const attachment = {
 describe("MailboxStore whole-message scan state", () => {
   it("[E20] deliveries with attachments start pending and emit exactly one scan event; plain mail needs none", () => {
     const { store, clock } = makeTestMailbox();
+
     const withFile = store.ingest.commitDelivery(
       deliveryFixture(clock, summaryFixture({ attachments: [attachment] })),
     );
+
     const plain = store.ingest.commitDelivery(
       deliveryFixture(clock, summaryFixture({ subject: "plain" })),
     );
+
     expect(store.views.delivery(withFile.deliveryId)?.scan.status).toBe("pending");
     expect(store.ingest.attachmentAccess(withFile.deliveryId)).toEqual({
       allowed: false,
@@ -39,9 +42,11 @@ describe("MailboxStore whole-message scan state", () => {
 
   it("[E24] an infected verdict quarantines the thread and a late or replayed verdict never downgrades it", () => {
     const { store, clock } = makeTestMailbox();
+
     const d = store.ingest.commitDelivery(
       deliveryFixture(clock, summaryFixture({ attachments: [attachment] })),
     );
+
     store.ingest.recordDeliveryScan(d.deliveryId, "infected", "Eicar-Test-Signature");
     store.ingest.recordDeliveryScan(d.deliveryId, "clean");
     const thread = store.views.getThread(d.threadId).thread;
@@ -56,9 +61,11 @@ describe("MailboxStore whole-message scan state", () => {
 
   it("[E20] pending scans are listed for reconciliation once they are old enough", () => {
     const { store, clock } = makeTestMailbox();
+
     const d = store.ingest.commitDelivery(
       deliveryFixture(clock, summaryFixture({ attachments: [attachment] })),
     );
+
     expect(store.ingest.pendingScans(clock.now() - 60_000, 10)).toEqual([]);
     clock.advance(20 * 60_000);
     expect(
@@ -70,9 +77,11 @@ describe("MailboxStore whole-message scan state", () => {
 
   it("[E20] the expand-only migration marks pre-existing deliveries legacy (accessible, not rescanned)", () => {
     const { storage, store, clock } = makeTestMailbox();
+
     const d = store.ingest.commitDelivery(
       deliveryFixture(clock, summaryFixture({ attachments: [attachment] })),
     );
+
     // Simulate a row written by the v1 schema, before scanning existed.
     storage.sql.exec(
       "UPDATE deliveries SET scan_status = 'legacy' WHERE delivery_id = ?",

@@ -27,6 +27,7 @@ describe("worker binding contract (§15.4)", () => {
       "SESSION_KEY",
       "MAIL_DKIM_PRIVATE_KEY",
     ];
+
     for (const name of privateNames) expect(Object.keys(publicEnvBase)).not.toContain(name);
   });
 

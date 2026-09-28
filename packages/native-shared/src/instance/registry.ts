@@ -7,6 +7,7 @@ import { sameCredentialDestinations, type ValidatedInstance } from "./discovery.
 // account emails never identify an instance.
 
 export const HOSTED_INSTANCE_URL = "https://app.bye.software";
+
 const REGISTRY_KEY = "bye:instances";
 
 interface RegistryState {
@@ -36,16 +37,19 @@ export class InstanceRegistry {
   private serial<T>(run: () => Promise<T>): Promise<T> {
     const next = this.queue.then(run, run);
     this.queue = next.catch(() => undefined);
+
     return next;
   }
 
   private async read(): Promise<RegistryState> {
     try {
       const s = JSON.parse((await this.kv.getItem(REGISTRY_KEY)) ?? "null") as RegistryState | null;
+
       if (s && s.v === 1 && Array.isArray(s.instances)) return s;
     } catch {
       // unreadable configuration: start empty rather than guess
     }
+
     return { v: 1, instances: [], selected: null };
   }
 
@@ -64,6 +68,7 @@ export class InstanceRegistry {
   /** The selected instance; never substitutes another one (no fallback to hosted). */
   async selected(): Promise<ValidatedInstance | null> {
     const s = await this.read();
+
     return s.instances.find((i) => i.key === s.selected) ?? null;
   }
 
@@ -76,12 +81,14 @@ export class InstanceRegistry {
     return this.serial(async () => {
       const s = await this.read();
       const invalidated: Array<string> = [];
+
       for (const other of s.instances) {
         if (other.baseUrl === instance.baseUrl) {
           if (other.key !== instance.key || !sameCredentialDestinations(other, instance))
             invalidated.push(other.key);
         } else if (other.issuer === instance.issuer) {
           const { baseUrl: _a, key: _b, ...rest } = other;
+
           if (
             !sameCredentialDestinations(
               { ...rest, baseUrl: instance.baseUrl, key: instance.key },
@@ -91,12 +98,16 @@ export class InstanceRegistry {
             throw new InstanceConflictError(other.key);
         }
       }
+
       const instances = [...s.instances.filter((i) => i.baseUrl !== instance.baseUrl), instance];
+
       const selected =
         options.select || (s.selected !== null && invalidated.includes(s.selected))
           ? instance.key
           : s.selected;
+
       await this.write({ v: 1, instances, selected });
+
       return { invalidated };
     });
   }
@@ -104,6 +115,7 @@ export class InstanceRegistry {
   select(key: string): Promise<void> {
     return this.serial(async () => {
       const s = await this.read();
+
       if (!s.instances.some((i) => i.key === key)) throw new Error("unknown instance");
       await this.write({ ...s, selected: key });
     });
@@ -141,6 +153,7 @@ interface WriteState {
 
 // Handles for the same account share one queue, including handles created only to clear it.
 const scopeWrites = new WeakMap<KeyValueStore, Map<string, WriteState>>();
+
 const instanceWrites = new WeakMap<KeyValueStore, Map<string, WriteState>>();
 
 const writesFor = (
@@ -149,15 +162,19 @@ const writesFor = (
   key: string,
 ): WriteState => {
   let entries = states.get(kv);
+
   if (!entries) {
     entries = new Map();
     states.set(kv, entries);
   }
+
   let state = entries.get(key);
+
   if (!state) {
     state = { queue: Promise.resolve(), generation: 0 };
     entries.set(key, state);
   }
+
   return state;
 };
 
@@ -167,6 +184,7 @@ const serialWrite = <T>(state: WriteState, run: () => Promise<T>): Promise<T> =>
     () => undefined,
     () => undefined,
   );
+
   return next;
 };
 
@@ -185,8 +203,10 @@ export const scopedStore = (
   const instanceState = instanceKey ? writesFor(instanceWrites, kv, instanceKey) : null;
   const generation = state.generation;
   const instanceGeneration = instanceState?.generation;
+
   const current = () =>
     generation === state.generation && instanceGeneration === instanceState?.generation;
+
   const keys = async (): Promise<Array<string>> => {
     try {
       return JSON.parse((await kv.getItem(index)) ?? "[]") as Array<string>;
@@ -194,18 +214,22 @@ export const scopedStore = (
       return [];
     }
   };
+
   return {
     scope,
     getItem: async (key) => {
       if (instanceState) await instanceState.queue;
+
       return serialWrite(state, async () => (current() ? kv.getItem(prefix + key) : null));
     },
     setItem: async (key, value) => {
       if (!current()) return;
+
       if (instanceKey) await rememberScope(kv, instanceKey, scope, instanceGeneration);
       await serialWrite(state, async () => {
         if (!current()) return;
         const known = await keys();
+
         if (!known.includes(key)) await kv.setItem(index, JSON.stringify([...known, key]));
         await kv.setItem(prefix + key, value);
       });
@@ -217,6 +241,7 @@ export const scopedStore = (
     clear: () => {
       if (!current()) return Promise.resolve();
       state.generation++;
+
       return serialWrite(state, async () => {
         for (const key of await keys()) await kv.removeItem(prefix + key);
         await kv.removeItem(index);
@@ -235,10 +260,12 @@ export const rememberScope = (
   generation = writesFor(instanceWrites, kv, instanceKey).generation,
 ): Promise<void> => {
   const state = writesFor(instanceWrites, kv, instanceKey);
+
   return serialWrite(state, async () => {
     if (generation !== state.generation) return;
     const key = INSTANCE_SCOPES_KEY(instanceKey);
     const known = JSON.parse((await kv.getItem(key)) ?? "[]") as Array<string>;
+
     if (!known.includes(scope)) await kv.setItem(key, JSON.stringify([...known, scope]));
   });
 };
@@ -246,14 +273,17 @@ export const rememberScope = (
 export const clearInstanceState = (kv: KeyValueStore, instanceKey: string): Promise<void> => {
   const state = writesFor(instanceWrites, kv, instanceKey);
   state.generation++;
+
   return serialWrite(state, async () => {
     const key = INSTANCE_SCOPES_KEY(instanceKey);
     let known: Array<string> = [];
+
     try {
       known = JSON.parse((await kv.getItem(key)) ?? "[]") as Array<string>;
     } catch {
       known = [];
     }
+
     for (const scope of known) await scopedStore(kv, scope).clear();
     await kv.removeItem(key);
   });

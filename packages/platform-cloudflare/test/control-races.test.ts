@@ -10,6 +10,7 @@ import {
   ControlDirectory,
   ControlLifecycle,
   ControlOrganizations,
+  type D1BatchResult,
   type D1StatementLike,
   hotp,
   parseSecretRing,
@@ -31,8 +32,11 @@ import { MAX_PENDING_INVITATIONS } from "../src/control/orgs.ts";
 // between its read and its write, so racing calls interleave there exactly as Workers requests do.
 
 const DAY = 86_400_000;
+
 const SECRET = "whsec_test_0123456789abcdef0123456789";
-const code = (e: unknown) => (e instanceof Rejection ? e.code : String(e));
+
+const code = <Caught>(e: Caught) => (e instanceof Rejection ? e.code : String(e));
+
 const RP = { rpId: "bye.test", origins: ["https://app.bye.test"], requireUserVerification: true };
 
 /** MemoryD1 that fails like D1 does when a statement binds more than 100 parameters. */
@@ -40,27 +44,33 @@ class CappedD1 extends MemoryD1 {
   maxBound = 0;
   override prepare(query: string): D1StatementLike {
     const inner = super.prepare(query);
+
     const wrap = (s: D1StatementLike): D1StatementLike =>
       ({
         bind: (...values) => {
           this.maxBound = Math.max(this.maxBound, values.length);
+
           if (values.length > 100) throw new Error("D1_ERROR: too many SQL variables");
+
           return wrap(s.bind(...values));
         },
         first: () => s.first(),
         all: () => s.all(),
         run: () => s.run(),
-        execSync: () => (s as unknown as { execSync(): unknown }).execSync(),
+        execSync: () => (s as D1StatementLike & { execSync(): D1BatchResult }).execSync(),
       }) as D1StatementLike;
+
     return wrap(inner);
   }
   static cappedMigrated(): CappedD1 {
     const d1 = new CappedD1();
     const dir = join(import.meta.dirname, "../../../infra/migrations/d1");
+
     for (const file of readdirSync(dir)
       .filter((f) => f.endsWith(".sql"))
       .sort())
       d1.db.exec(readFileSync(join(dir, file), "utf8"));
+
     return d1;
   }
 }
@@ -68,8 +78,10 @@ class CappedD1 extends MemoryD1 {
 const accounts = async (d1: MemoryD1, clock: TestClock, ...names: Array<string>) => {
   const dir = new ControlDirectory(d1, clock);
   const out = [];
+
   for (const n of names)
     out.push(await dir.provisionPersonalAccount({ address: `${n}@bye.test`, displayName: n }));
+
   return out;
 };
 
@@ -78,6 +90,7 @@ describe("[§10] sending budget reservation", () => {
     const d1 = CappedD1.cappedMigrated();
     const clock = new TestClock();
     const [alice] = await accounts(d1, clock, "alice");
+
     const policy = new SendingPolicy(d1, clock, {
       identityPerDay: 10_000,
       domainPerDay: 10_000,
@@ -86,14 +99,17 @@ describe("[§10] sending budget reservation", () => {
       maxComplaintRate: 1,
       maxBounceRate: 1,
     });
+
     await policy.suppress("r7@x.test", "manual", "op");
     await policy.suppress("r149@x.test", "manual", "op");
     const recipients = Array.from({ length: 150 }, (_, i) => `r${i}@x.test`);
+
     const verdict = await policy.check({
       userId: alice!.userId,
       identity: "alice@bye.test",
       recipients,
     });
+
     expect(d1.maxBound).toBeLessThanOrEqual(100);
     expect(verdict).toMatchObject({ allowed: false, reason: "budget" }); // 148 > new-account 50
     expect([...verdict.suppressed].sort()).toEqual(["r149@x.test", "r7@x.test"]);
@@ -105,27 +121,34 @@ describe("[§10] sending budget reservation", () => {
     const [alice] = await accounts(d1, clock, "alice");
     const policy = new SendingPolicy(d1, clock); // new account: 50/day
     const ten = Array.from({ length: 10 }, (_, i) => `r${i}@x.test`);
+
     const verdicts = await Promise.all(
       Array.from({ length: 8 }, () =>
         policy.reserve({ userId: alice!.userId, identity: "alice@bye.test", recipients: ten }),
       ),
     );
+
     const allowed = verdicts.filter((v) => v.allowed);
     expect(allowed.length).toBeLessThanOrEqual(5);
     expect(allowed.length).toBeGreaterThan(0);
+
     for (const v of allowed) expect(v).toMatchObject({ reserved: 10 });
+
     const used = await d1
       .prepare("SELECT SUM(sent) AS n FROM sending_counters WHERE scope = 'user' AND key = ?")
       .bind(alice!.userId)
       .first<{ n: number }>();
+
     // Refused reservations were compensated: only admitted sends remain counted.
     expect(Number(used?.n)).toBe(allowed.length * 10);
     // A released reservation frees its budget again.
     await policy.release({ userId: alice!.userId, identity: "alice@bye.test", recipients: 10 });
+
     const after = await d1
       .prepare("SELECT SUM(sent) AS n FROM sending_counters WHERE scope = 'user' AND key = ?")
       .bind(alice!.userId)
       .first<{ n: number }>();
+
     expect(Number(after?.n)).toBe((allowed.length - 1) * 10);
   });
 });
@@ -137,16 +160,19 @@ describe("[A02] billing webhooks", () => {
     const commerce = new ControlCommerce(d1, clock, null, "secret");
     const billing = new ControlBilling(d1, clock, commerce);
     const [alice, bob] = await accounts(d1, clock, "alice", "bob");
+
     return { d1, clock, commerce, billing, alice: alice!, bob: bob! };
   };
 
   it("an empty or short signing secret verifies nothing", async () => {
     const body = "{}";
+
     for (const secret of ["", "short-secret"]) {
       // (WebCrypto cannot sign with an empty key; any signature must fail for it.)
       const sig = await signBillingPayload(body, secret || "x", Date.now());
       expect(await verifyBillingSignature(body, sig, secret, Date.now())).toBe(false);
     }
+
     const sig = await signBillingPayload(body, SECRET, Date.now());
     expect(await verifyBillingSignature(body, sig, SECRET, Date.now())).toBe(true);
   });
@@ -195,6 +221,7 @@ describe("[A02] billing webhooks", () => {
     const { billing, commerce, alice, bob, clock } = await setup();
     const ref = await commerce.referralCode(alice.userId);
     expect(await commerce.redeemReferral(bob.userId, ref)).toBe(true);
+
     const activation = (id: string) =>
       billing.apply({
         id,
@@ -206,6 +233,7 @@ describe("[A02] billing webhooks", () => {
         seats: 1,
         periodEnd: clock.now() + 400 * DAY,
       });
+
     await Promise.all([activation("a1"), activation("a2")]);
     expect((await billing.entitlement(bob.organizationId))?.credits_cents).toBe(1000);
     expect((await billing.entitlement(alice.organizationId))?.credits_cents).toBe(1000);
@@ -219,21 +247,26 @@ describe("[A03] credential compare-and-set", () => {
     const keys = { current: 1, keys: { 1: crypto.getRandomValues(new Uint8Array(32)) } };
     const auth = new ControlAuth(d1, clock, { rp: RP, totpKeys: keys, recoveryPepper });
     const [alice] = await accounts(d1, clock, "alice");
+
     return { d1, clock, auth, keys, alice: alice! };
   };
 
   it("two concurrent rotations of one session issue exactly one successor", async () => {
     const { auth, alice, d1 } = await setup();
     const s = await auth.issueSession(alice.userId, "laptop");
+
     const results = await Promise.allSettled([
       auth.rotateSession(s.token),
       auth.rotateSession(s.token),
     ]);
+
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+
     const live = await d1
       .prepare("SELECT COUNT(*) AS n FROM sessions WHERE user_id = ? AND revoked_at IS NULL")
       .bind(alice.userId)
       .first<{ n: number }>();
+
     expect(live?.n).toBe(1);
   });
 
@@ -245,10 +278,13 @@ describe("[A03] credential compare-and-set", () => {
     clock.advance(30_000);
     const a = await auth.issueSession(alice.userId, "a");
     const b = await auth.issueSession(alice.userId, "b");
+
     const wrong = async (sessionId: string) => {
       const good = await current();
+
       return auth.stepUpWithTotp(sessionId, good === "000000" ? "111111" : "000000");
     };
+
     for (let i = 1; i < TOTP_MAX_FAILURES; i++)
       await expect(wrong(i % 2 ? a.session.id : b.session.id)).rejects.toSatisfy(
         (e) => code(e) === "unauthenticated",
@@ -258,9 +294,11 @@ describe("[A03] credential compare-and-set", () => {
     await expect(auth.stepUpWithTotp(b.session.id, await current())).rejects.toSatisfy(
       (e) => code(e) === "rate_limited",
     );
+
     const audits = await d1
       .prepare("SELECT action FROM audit_log WHERE action LIKE 'totp.%' ORDER BY created_at")
       .all<{ action: string }>();
+
     expect(audits.results.map((r) => r.action)).toContain("totp.lockout");
     clock.advance(TOTP_LOCKOUT_MS + 30_000);
     await auth.stepUpWithTotp(b.session.id, await current());
@@ -270,7 +308,9 @@ describe("[A03] credential compare-and-set", () => {
     const { d1, clock, keys } = await setup();
     const users = await accounts(d1, clock, "u1", "u2", "u3", "u4", "u5");
     const v1 = new ControlAuth(d1, clock, { rp: RP, totpKeys: keys, recoveryPepper: "p" });
+
     for (const u of users) await v1.enrollTotp(u!.userId);
+
     const v2 = new ControlAuth(d1, clock, {
       rp: RP,
       totpKeys: {
@@ -279,38 +319,47 @@ describe("[A03] credential compare-and-set", () => {
       },
       recoveryPepper: "p",
     });
+
     expect(await v2.rotateTotpKeys(2, 1)).toBe(2); // bounded: one page
     expect(await v2.rotateTotpKeys(2)).toBe(3);
     expect(await v2.rotateTotpKeys(2)).toBe(0);
+
     const left = await d1
       .prepare("SELECT COUNT(*) AS n FROM totp_secrets WHERE key_version != 2")
       .first<{ n: number }>();
+
     expect(left?.n).toBe(0);
   });
 
   it("recovery codes keep working across a SESSION_KEY rotation and record their pepper version", async () => {
     const { d1, clock, auth, keys, alice } = await setup("old-pepper");
     const [c1, c2] = await auth.generateRecoveryCodes(alice.userId);
+
     const ring = (recoveryPepper: string) =>
       new ControlAuth(d1, clock, { rp: RP, totpKeys: keys, recoveryPepper });
+
     const rotated = ring("v2:new-pepper,v1:old-pepper");
     await rotated.recoverWithCode("alice@bye.test", c1!, "phone");
     // New codes are made under v2.
     const fresh = await rotated.generateRecoveryCodes(alice.userId);
+
     const versions = await d1
       .prepare("SELECT DISTINCT pepper_version AS v FROM recovery_codes WHERE user_id = ?")
       .bind(alice.userId)
       .all<{ v: number }>();
+
     expect(versions.results.map((r) => r.v)).toEqual([2]);
     await ring("v2:new-pepper").recoverWithCode("alice@bye.test", fresh[0]!, "tablet");
     // A code whose pepper has left the ring is a tagged configuration error, not "bad code".
     const other = await setup("old-pepper");
     const [code1] = await other.auth.generateRecoveryCodes(other.alice.userId);
+
     const retired = new ControlAuth(other.d1, other.clock, {
       rp: RP,
       totpKeys: other.keys,
       recoveryPepper: "v2:new-pepper",
     });
+
     await expect(retired.recoverWithCode("alice@bye.test", code1!, "x")).rejects.toBeInstanceOf(
       UnknownKeyVersion,
     );
@@ -325,6 +374,7 @@ describe("[A03] device refresh rotation", () => {
     const [ana] = await accounts(d1, clock, "ana");
     const devices = new ControlDeviceAuth(d1, clock);
     const verifier = "v".repeat(43);
+
     const params = {
       responseType: "code" as const,
       clientId: "bye-desktop",
@@ -334,19 +384,24 @@ describe("[A03] device refresh rotation", () => {
       state: "s".repeat(32),
       deviceName: "laptop",
     };
+
     const tokens = await devices.exchangeCode({
       code: await devices.issueCode(ana!.userId, params),
       codeVerifier: verifier,
       redirectUri: params.redirectUri,
       clientId: "bye-desktop",
     });
+
     const refresh = () =>
       devices.refresh({ refreshToken: tokens.refresh_token, clientId: "bye-desktop" });
+
     const results = await Promise.allSettled([refresh(), refresh()]);
     expect(results.filter((r) => r.status === "fulfilled").length).toBeLessThanOrEqual(1);
+
     const rows = await d1
       .prepare("SELECT COUNT(*) AS n FROM device_refresh_tokens")
       .first<{ n: number }>();
+
     expect(rows?.n).toBeLessThanOrEqual(2);
   });
 });
@@ -356,6 +411,7 @@ describe("[O02] organization invariants hold in SQL", () => {
     const d1 = MemoryD1.migrated();
     const clock = new TestClock();
     const orgs = new ControlOrganizations(d1, clock);
+
     const [owner, second, carol, dave] = await accounts(
       d1,
       clock,
@@ -364,11 +420,13 @@ describe("[O02] organization invariants hold in SQL", () => {
       "carol",
       "dave",
     );
+
     const orgId = await orgs.createOrganization(owner!.userId, {
       name: "Acme",
       kind: "domain",
       seatLimit: 3,
     });
+
     const join = async (u: { userId: string }, address: string, role: "admin" | "member") => {
       const { token } = await orgs.invite(
         orgId,
@@ -376,8 +434,10 @@ describe("[O02] organization invariants hold in SQL", () => {
         address,
         role,
       );
+
       return orgs.acceptInvitation(token, u.userId);
     };
+
     return { d1, orgs, orgId, owner: owner!, second: second!, carol: carol!, dave: dave!, join };
   };
 
@@ -386,17 +446,21 @@ describe("[O02] organization invariants hold in SQL", () => {
     await join(second, "second@bye.test", "admin");
     const actor = { userId: owner.userId, role: "owner" as const };
     await orgs.setRole(orgId, actor, second.userId, "owner");
+
     const results = await Promise.allSettled([
       orgs.setRole(orgId, actor, owner.userId, "admin"),
       orgs.setRole(orgId, { userId: second.userId, role: "owner" }, second.userId, "admin"),
     ]);
+
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+
     const owners = await d1
       .prepare(
         "SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND role = 'owner' AND status = 'active'",
       )
       .bind(orgId)
       .first<{ n: number }>();
+
     expect(owners?.n).toBe(1);
     // Suspending / removing the last owner is refused by the same SQL guard.
     const last = results[0]!.status === "fulfilled" ? second : owner;
@@ -411,10 +475,12 @@ describe("[O02] organization invariants hold in SQL", () => {
     const actor = { userId: owner.userId, role: "owner" as const };
     const a = await orgs.invite(orgId, actor, "carol@bye.test", "member");
     const b = await orgs.invite(orgId, actor, "dave@bye.test", "member");
+
     const results = await Promise.allSettled([
       orgs.acceptInvitation(a.token, carol.userId),
       orgs.acceptInvitation(b.token, dave.userId),
     ]);
+
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect((await orgs.seats(orgId)).used).toBe(3);
   });
@@ -427,13 +493,16 @@ describe("[O02] organization invariants hold in SQL", () => {
     await expect(orgs.invite(orgId, actor, "Carol@bye.test", "admin")).rejects.toSatisfy(
       (e) => code(e) === "conflict",
     );
+
     const racing = await Promise.allSettled([
       orgs.invite(orgId, actor, "zed@bye.test", "member"),
       orgs.invite(orgId, actor, "zed@bye.test", "member"),
     ]);
+
     expect(racing.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     // Once accepted it is no longer pending.
     await orgs.acceptInvitation(first.token, carol.userId);
+
     // Outstanding invitations per org are bounded.
     for (let i = 1; i < MAX_PENDING_INVITATIONS; i++)
       await orgs.invite(orgId, actor, `bulk${i}@example.test`, "member");
@@ -474,10 +543,12 @@ describe("[A03] abandoned signups", () => {
     expect(await dir.releaseAbandonedSignups(clock.now() - DAY)).toBe(0);
     clock.advance(DAY + 1);
     expect(await dir.releaseAbandonedSignups(clock.now() - DAY)).toBe(1);
+
     const user = await d1
       .prepare("SELECT status, primary_address FROM users WHERE id = ?")
       .bind(abandoned!.userId)
       .first<{ status: string; primary_address: string }>();
+
     expect(user?.status).toBe("closed");
     expect(user?.primary_address).not.toBe("squat@bye.test");
     expect(
@@ -485,11 +556,13 @@ describe("[A03] abandoned signups", () => {
         .prepare("SELECT 1 AS r FROM address_routes WHERE address = 'squat@bye.test'")
         .first(),
     ).toBeNull();
+
     // The address can be claimed again; the real account is untouched.
     const again = await dir.provisionPersonalAccount({
       address: "squat@bye.test",
       displayName: "",
     });
+
     expect(again.userId).not.toBe(abandoned!.userId);
     expect(
       (
@@ -520,11 +593,13 @@ describe("[§10] SESSION_KEY key ring", () => {
       .bind(alice!.userId, clock.now() + 30 * DAY, clock.now() + 30 * DAY, clock.now())
       .run();
     const before = new ControlLifecycle(d1, clock, "old-key");
+
     const { verificationToken } = await before.requestForwarding(
       alice!.userId,
       "old@bye.test",
       "me@elsewhere.test",
     );
+
     await new ControlLifecycle(d1, clock, "v2:new-key,v1:old-key").confirmForwarding(
       "old@bye.test",
       verificationToken,

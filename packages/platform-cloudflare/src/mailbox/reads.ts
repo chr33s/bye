@@ -1,3 +1,4 @@
+import { Match } from "effect";
 import { SEND_JOB_STATES, type SendJobState } from "@bye/domain";
 import { type RpcResult, toRpcSync } from "../durable/rpc.ts";
 import { reject } from "./context.ts";
@@ -63,105 +64,150 @@ const visibleJob = (j: MailboxSendJob): MailboxSendJob =>
 const isSendJobState = (state: string): state is SendJobState =>
   (SEND_JOB_STATES as ReadonlyArray<string>).includes(state);
 
-export const applyMailboxRead = (store: MailboxStore, q: MailboxReadQuery): unknown => {
+export const applyMailboxRead = (store: MailboxStore, q: MailboxReadQuery) => {
   const { organize: o, automation: a } = store;
-  switch (q._tag) {
-    case "Policies":
-      return { items: store.ledger.listPolicies() };
-    case "PolicyHistory":
-      return { items: store.ledger.policyHistory(q.subject) };
-    case "RecentSearches":
-      return { items: a.recentSearches() };
-    case "RecordSearch":
-      a.recordSearch(q.query);
-      return null;
-    case "SendJob":
-      return visibleJob(store.sends.job(q.sendJobId) ?? reject("not_found", "send job"));
-    case "SendJobs":
-      // An unknown state filter matches nothing rather than everything.
-      return {
-        items:
-          q.state === undefined || isSendJobState(q.state)
-            ? store.sends.jobs(q.state, 200).map(visibleJob)
-            : [],
-      };
-    case "FocusQueue":
-      return { items: store.views.focusQueue() };
-    case "Batch":
-      return { items: store.views.batch(q.batchId) };
-    case "Labels":
-      return { items: o.listLabels() };
-    case "Rules":
-      return { items: o.listRules() };
-    case "Boards":
-      return { items: o.listBoards() };
-    case "Board":
-      return o.board(q.boardId);
-    case "Collections":
-      return { items: o.listCollections() };
-    case "CollectionTimeline":
-      if (!o.collection(q.collectionId)) reject("not_found", "collection");
-      return {
-        collection: o.collection(q.collectionId),
-        items: o.collectionTimeline(q.collectionId),
-      };
-    case "Notes":
-      return {
-        items: o.notes({
-          ...(q.threadId ? { threadId: q.threadId } : {}),
-          ...(q.kind ? { kind: q.kind } : {}),
-        }),
-      };
-    case "Clips":
-      return { items: o.clips(q.query) };
-    case "Contacts":
-      return { items: q.query ? o.searchContacts(q.query) : o.exportContacts() };
-    case "Contact":
-      return o.contact(q.contactId) ?? reject("not_found", "contact");
-    case "SuggestRecipients":
-      return { items: o.suggestRecipients(q.prefix, Math.min(q.limit ?? 10, 50)) };
-    case "SenderHistory":
-      return { items: o.senderHistory(q.address, Math.min(q.limit ?? 50, 200)) };
-    case "RecipientHistory":
-      return { items: o.recipientHistory(q.address, Math.min(q.limit ?? 50, 200)) };
-    case "ExportContacts":
-      return { items: o.exportContacts() };
-    case "Attachments":
-      return {
-        items: store.uploads
-          .attachments({
-            ...(q.contentTypePrefix ? { contentTypePrefix: q.contentTypePrefix } : {}),
-            ...(q.from ? { from: q.from } : {}),
-            ...(q.minSize !== undefined ? { minSize: q.minSize } : {}),
-            limit: Math.min(q.limit ?? 100, 500),
-          })
-          .map((x) => ({ ...x, scan: store.ingest.attachmentAccess(x.deliveryId).status })),
-      };
-    case "Uploads":
-      return { items: store.uploads.uploads(Math.min(q.limit ?? 100, 500)) };
-    case "Upload":
-      return store.uploads.upload(q.uploadId) ?? reject("not_found", "upload");
-    case "FileLinks":
-      return { items: store.uploads.fileLinks() };
-    case "Identities":
-      return { items: store.identities.identities() };
-    case "ForwardingDestinations":
-      return { items: a.forwardingDestinations() };
-    case "Preferences":
-      return {
-        preferences: a.preferences(),
-        notifications: a.notificationSettings(),
-        away: a.away(),
-      };
-    case "Drafts":
-      return { items: store.drafts.drafts() };
-    case "ScreenerSenders":
-      return { items: store.screener.screenerSenders() };
-    case "Bundle":
-      return { items: store.views.bundle(q.bundleKey) };
-    case "Quota":
-      return store.uploads.quota();
-  }
+
+  return Match.value(q).pipe(
+    Match.tagsExhaustive({
+      Policies: () => {
+        return { items: store.ledger.listPolicies() };
+      },
+      PolicyHistory: (q) => {
+        return { items: store.ledger.policyHistory(q.subject) };
+      },
+      RecentSearches: () => {
+        return { items: a.recentSearches() };
+      },
+      RecordSearch: (q) => {
+        a.recordSearch(q.query);
+
+        return null;
+      },
+      SendJob: (q) => {
+        return visibleJob(store.sends.job(q.sendJobId) ?? reject("not_found", "send job"));
+      },
+      SendJobs: (q) => {
+        // An unknown state filter matches nothing rather than everything.
+        return {
+          items:
+            q.state === undefined || isSendJobState(q.state)
+              ? store.sends.jobs(q.state, 200).map(visibleJob)
+              : [],
+        };
+      },
+      FocusQueue: () => {
+        return { items: store.views.focusQueue() };
+      },
+      Batch: (q) => {
+        return { items: store.views.batch(q.batchId) };
+      },
+      Labels: () => {
+        return { items: o.listLabels() };
+      },
+      Rules: () => {
+        return { items: o.listRules() };
+      },
+      Boards: () => {
+        return { items: o.listBoards() };
+      },
+      Board: (q) => {
+        return o.board(q.boardId);
+      },
+      Collections: () => {
+        return { items: o.listCollections() };
+      },
+      CollectionTimeline: (q) => {
+        if (!o.collection(q.collectionId)) reject("not_found", "collection");
+
+        return {
+          collection: o.collection(q.collectionId),
+          items: o.collectionTimeline(q.collectionId),
+        };
+      },
+      Notes: (q) => {
+        let noteFilter: Parameters<typeof o.notes>[0] = {};
+
+        if (q.threadId) noteFilter = { ...noteFilter, threadId: q.threadId };
+
+        if (q.kind) noteFilter = { ...noteFilter, kind: q.kind };
+
+        return { items: o.notes(noteFilter) };
+      },
+      Clips: (q) => {
+        return { items: o.clips(q.query) };
+      },
+      Contacts: (q) => {
+        return { items: q.query ? o.searchContacts(q.query) : o.exportContacts() };
+      },
+      Contact: (q) => {
+        return o.contact(q.contactId) ?? reject("not_found", "contact");
+      },
+      SuggestRecipients: (q) => {
+        return { items: o.suggestRecipients(q.prefix, Math.min(q.limit ?? 10, 50)) };
+      },
+      SenderHistory: (q) => {
+        return { items: o.senderHistory(q.address, Math.min(q.limit ?? 50, 200)) };
+      },
+      RecipientHistory: (q) => {
+        return { items: o.recipientHistory(q.address, Math.min(q.limit ?? 50, 200)) };
+      },
+      ExportContacts: () => {
+        return { items: o.exportContacts() };
+      },
+      Attachments: (q) => {
+        let attachmentFilter: Parameters<typeof store.uploads.attachments>[0] = {
+          limit: Math.min(q.limit ?? 100, 500),
+        };
+
+        if (q.contentTypePrefix)
+          attachmentFilter = { ...attachmentFilter, contentTypePrefix: q.contentTypePrefix };
+
+        if (q.from) attachmentFilter = { ...attachmentFilter, from: q.from };
+
+        if (q.minSize !== undefined) attachmentFilter = { ...attachmentFilter, minSize: q.minSize };
+
+        return {
+          items: store.uploads
+            .attachments(attachmentFilter)
+            .map((x) => ({ ...x, scan: store.ingest.attachmentAccess(x.deliveryId).status })),
+        };
+      },
+      Uploads: (q) => {
+        return { items: store.uploads.uploads(Math.min(q.limit ?? 100, 500)) };
+      },
+      Upload: (q) => {
+        return store.uploads.upload(q.uploadId) ?? reject("not_found", "upload");
+      },
+      FileLinks: () => {
+        return { items: store.uploads.fileLinks() };
+      },
+      Identities: () => {
+        return { items: store.identities.identities() };
+      },
+      ForwardingDestinations: () => {
+        return { items: a.forwardingDestinations() };
+      },
+      Preferences: () => {
+        return {
+          preferences: a.preferences(),
+          notifications: a.notificationSettings(),
+          away: a.away(),
+        };
+      },
+      Drafts: () => {
+        return { items: store.drafts.drafts() };
+      },
+      ScreenerSenders: () => {
+        return { items: store.screener.screenerSenders() };
+      },
+      Bundle: (q) => {
+        return { items: store.views.bundle(q.bundleKey) };
+      },
+      Quota: () => {
+        return store.uploads.quota();
+      },
+    }),
+  );
 };
 
 /** RPC-safe wrapper: expected rejections travel as data; anything else stays a defect. */

@@ -4,7 +4,7 @@ import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import { FORWARD_HOP_HEADER, FORWARD_MAX_HOPS, handleInbound } from "../src/inbound.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, inboundMessage, makeHarness, rfc822 } from "./harness.ts";
+import { type Harness, inboundMessage, makeHarness, rfc822, executionContext } from "./harness.ts";
 
 // Direct tests for behavior the gap analysis lists as implemented but untested: /v1/spaces HTTP
 // routes, cache purge on unpublish, the closure-forwarding hop guard, and the read-scope refusal
@@ -16,10 +16,7 @@ import { type Harness, inboundMessage, makeHarness, rfc822 } from "./harness.ts"
   }
 };
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 interface Account {
   readonly userId: string;
@@ -32,38 +29,48 @@ const signup = async (h: Harness, address: string): Promise<Account> => {
   const account = await new ControlDirectory(h.env.DIRECTORY, kernelClock).provisionPersonalAccount(
     { address, displayName: address.split("@")[0]! },
   );
+
   const session = await new ControlAuth(
     h.env.DIRECTORY,
     kernelClock,
     await authConfig(h.env),
   ).issueSession(account.userId, "test", true);
+
   return { ...account, cookie: `__Host-session=${session.token}` };
 };
 
-const call = async (
+const call = async <JsonValue>(
   h: Harness,
   a: Account | null,
   method: string,
   path: string,
-  json?: unknown,
+  json?: JsonValue,
   headers: Record<string, string> = {},
 ) => {
+  const hdrs = new Headers();
+
+  if (a) hdrs.set("cookie", a.cookie);
+
+  if (method !== "GET") hdrs.set("origin", h.env.APP_ORIGIN);
+
+  if (json !== undefined) hdrs.set("content-type", "application/json");
+
+  for (const [k, v] of Object.entries(headers)) hdrs.set(k, v);
+
   const response = await handleFetch(
-    new Request(`${h.env.APP_ORIGIN}${path}`, {
-      method,
-      headers: {
-        ...(a ? { cookie: a.cookie } : {}),
-        ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-        ...(json !== undefined ? { "content-type": "application/json" } : {}),
-        ...headers,
-      },
-      ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
-    }),
+    new Request(
+      `${h.env.APP_ORIGIN}${path}`,
+      json !== undefined
+        ? { method, headers: hdrs, body: JSON.stringify(json) }
+        : { method, headers: hdrs },
+    ),
     h.env,
     ctx,
   );
+
   const text = await response.text();
   const type = response.headers.get("content-type") ?? "";
+
   return {
     status: response.status,
     body: type.includes("json") && text ? JSON.parse(text) : null,
@@ -71,6 +78,7 @@ const call = async (
 };
 
 let n = 0;
+
 const cmdId = () => `cmd_gu_${(++n).toString(36).padStart(16, "0")}`;
 
 describe("gap-analysis untested rows", () => {
@@ -88,17 +96,21 @@ describe("gap-analysis untested rows", () => {
   it("[O03/O04] /v1/spaces routes: create, list, members, comments, collections and grants", async () => {
     const ana = await signup(h, "ana@bye.test");
     const bob = await signup(h, "bob@bye.test");
+
     // Bob joins Ana's organization so he can be a space member.
     const org = await call(h, ana, "POST", "/v1/orgs", {
       kind: "domain",
       name: "Acme",
       seatLimit: 5,
     });
+
     const orgId = (org.body.orgId ?? org.body.id) as string;
+
     const invite = await call(h, ana, "POST", `/v1/orgs/${orgId}/invitations`, {
       address: "bob@bye.test",
       role: "member",
     });
+
     expect(
       (await call(h, bob, "POST", "/v1/invitations/accept", { token: invite.body.token })).status,
     ).toBe(200);
@@ -112,6 +124,7 @@ describe("gap-analysis untested rows", () => {
       ((await call(h, a, "GET", "/v1/spaces")).body.items as Array<{ id: string }>).map(
         (s) => s.id,
       );
+
     expect(await ids(ana)).toContain(spaceId);
     expect(await ids(bob)).not.toContain(spaceId);
     expect((await call(h, bob, "GET", `/v1/spaces/${spaceId}/members`)).status).toBe(403);
@@ -166,14 +179,17 @@ describe("gap-analysis untested rows", () => {
       h.env,
     );
     await h.drain();
+
     const thread = (await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`)).body
       .items[0];
+
     const detail = await call(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${thread.threadId}`,
     );
+
     const shared = await call(h, ana, "POST", "/v1/shared-threads", {
       spaceId,
       mailboxId: ana.mailboxId,
@@ -182,6 +198,7 @@ describe("gap-analysis untested rows", () => {
       grantees: [],
       includeFuture: false,
     });
+
     expect(shared.status).toBe(201);
     const sth = shared.body as string;
     await h.drain();
@@ -214,10 +231,12 @@ describe("gap-analysis untested rows", () => {
     expect(
       (await call(h, ana, "POST", `/v1/spaces/${spaceId}/collections`, { name: " " })).status,
     ).toBe(400);
+
     const col = await call(h, ana, "POST", `/v1/spaces/${spaceId}/collections`, {
       name: "Q4",
       shareWithMembers: true,
     });
+
     expect(col.status).toBe(201);
     const collectionId = col.body.collectionId as string;
     expect(
@@ -240,18 +259,21 @@ describe("gap-analysis untested rows", () => {
       resourceId: sth,
       grantee: bob.userId,
     });
+
     expect(grant.status).toBe(201);
     const grantId = grant.body.grantId as string;
     await h.drain();
     expect(
       JSON.stringify((await call(h, bob, "GET", `/v1/spaces/${spaceId}/threads`)).body.items),
     ).toContain("Roadmap");
+
     const listed = await call(
       h,
       ana,
       "GET",
       `/v1/spaces/${spaceId}/grants?kind=thread&resourceId=${sth}`,
     );
+
     expect(JSON.stringify(listed.body.items)).toContain(grantId);
     expect(
       (await call(h, bob, "DELETE", `/v1/spaces/${spaceId}/grants/${grantId}`)).status,
@@ -259,12 +281,14 @@ describe("gap-analysis untested rows", () => {
     expect((await call(h, ana, "DELETE", `/v1/spaces/${spaceId}/grants/${grantId}`)).status).toBe(
       200,
     );
+
     const after = await call(
       h,
       ana,
       "GET",
       `/v1/spaces/${spaceId}/grants?kind=thread&resourceId=${sth}`,
     );
+
     expect(JSON.stringify(after.body.items)).not.toContain(grantId);
 
     // Removing Bob ends his access.
@@ -278,12 +302,14 @@ describe("gap-analysis untested rows", () => {
     const purged: Array<{ url: string; files: Array<string>; auth: string | null }> = [];
     vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
       const url = String(input);
+
       if (url.includes("/purge_cache"))
         purged.push({
           url,
           files: (JSON.parse(init?.body as string) as { files: Array<string> }).files,
           auth: new Headers(init?.headers).get("authorization"),
         });
+
       return new Response(JSON.stringify({ success: true, result: {} }), {
         headers: { "content-type": "application/json" },
       });
@@ -293,11 +319,13 @@ describe("gap-analysis untested rows", () => {
       CF_PUBLIC_ZONE_ID: "zone123",
     });
     const ana = await signup(h, "ana@bye.test");
+
     const draft = await call(h, ana, "POST", "/v1/world/drafts", {
       title: "Bye now",
       html: "<p>body</p>",
       text: "body",
     });
+
     const postId = draft.body.postId as string;
     expect((await call(h, ana, "POST", `/v1/world/posts/${postId}/publish`, {})).status).toBe(200);
     purged.length = 0;
@@ -305,11 +333,13 @@ describe("gap-analysis untested rows", () => {
       200,
     );
     expect(purged.length).toBeGreaterThan(0);
+
     for (const p of purged) {
       expect(p.url).toContain("/zones/zone123/purge_cache");
       expect(p.auth).toBe("Bearer purge-token");
       expect(p.files.length).toBeLessThanOrEqual(30);
     }
+
     const files = purged.flatMap((p) => p.files);
     expect(files.some((f) => f.includes("/@ana/bye-now"))).toBe(true);
     expect(files.every((f) => f.startsWith("https://"))).toBe(true);
@@ -331,6 +361,7 @@ describe("gap-analysis untested rows", () => {
         Date.now(),
       )
       .run();
+
     const raw = rfc822({
       from: "sam@example.net",
       to: "gone@bye.test",
@@ -338,10 +369,12 @@ describe("gap-analysis untested rows", () => {
       body: "x",
       messageId: "loop@example.net",
     });
+
     const attempt = async (hops: number | null) => {
       const base = inboundMessage("sam@example.net", "gone@bye.test", raw);
       const seen: Array<{ to: string; headers: Headers | undefined }> = [];
       const rejects: Array<string> = [];
+
       const outcome = await handleInbound(
         {
           ...base,
@@ -352,8 +385,10 @@ describe("gap-analysis untested rows", () => {
         } as never,
         h.env,
       );
+
       return { outcome, seen, rejects };
     };
+
     const first = await attempt(null);
     expect(first.outcome).toEqual({ _tag: "Forwarded" });
     expect(first.seen[0]?.to).toBe("ana@example.net");
@@ -369,10 +404,13 @@ describe("gap-analysis untested rows", () => {
   it("[§8] recent searches are recorded only by screen-scoped credentials; read-only tokens cannot mutate them", async () => {
     const ana = await signup(h, "ana@bye.test");
     const auth = new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env));
+
     const bearer = async (scopes: Array<"read" | "screen">) =>
       `Bearer ${(await auth.createApiToken(ana.userId, { kind: "agent", label: scopes.join(), scopes })).token}`;
+
     const ro = { authorization: await bearer(["read"]) };
     const rw = { authorization: await bearer(["read", "screen"]) };
+
     const recent = async () =>
       (await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/searches/recent`)).body
         .items as Array<string>;
@@ -390,6 +428,7 @@ describe("gap-analysis untested rows", () => {
       ).status,
     ).toBe(200);
     expect(await recent()).toEqual([]);
+
     // Clearing the history is a triage-level command: a read-only token is refused.
     const refused = await call(
       h,
@@ -399,6 +438,7 @@ describe("gap-analysis untested rows", () => {
       { _tag: "ClearRecentSearches", commandId: cmdId() },
       ro,
     );
+
     expect(refused.status).toBe(403);
     expect(refused.body.error.message).toMatch(/missing scope/);
 

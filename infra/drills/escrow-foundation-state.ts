@@ -17,14 +17,18 @@ const MAGIC = Buffer.from("BYEESC1\u0000");
 
 export const packDirectory = (dir: string): Buffer => {
   const files: Array<{ path: string; data: string }> = [];
+
   const walk = (d: string) => {
     for (const name of readdirSync(d).sort()) {
       const p = join(d, name);
+
       if (statSync(p).isDirectory()) walk(p);
       else files.push({ path: relative(dir, p), data: readFileSync(p, "base64") });
     }
   };
+
   walk(dir);
+
   return gzipSync(Buffer.from(JSON.stringify({ version: 1, files })));
 };
 
@@ -32,6 +36,7 @@ export const unpackTo = (packed: Buffer, out: string): number => {
   const { files } = JSON.parse(new TextDecoder().decode(gunzipSync(packed))) as {
     files: Array<{ path: string; data: string }>;
   };
+
   for (const f of files) {
     if (f.path.includes("..") || f.path.startsWith("/"))
       throw new Error(`unsafe path in escrow: ${f.path}`);
@@ -39,11 +44,13 @@ export const unpackTo = (packed: Buffer, out: string): number => {
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, Buffer.from(f.data, "base64"));
   }
+
   return files.length;
 };
 
 const keyFrom = (hex: string): Buffer => {
   if (!/^[0-9a-f]{64}$/i.test(hex)) throw new Error("BYE_ESCROW_KEY must be 64 hex characters");
+
   return Buffer.from(hex, "hex");
 };
 
@@ -52,6 +59,7 @@ export const seal = (plain: Buffer, hexKey: string): Buffer => {
   const cipher = createCipheriv("aes-256-gcm", keyFrom(hexKey), iv);
   cipher.setAAD(MAGIC);
   const body = Buffer.concat([cipher.update(plain), cipher.final()]);
+
   return Buffer.concat([MAGIC, iv, cipher.getAuthTag(), body]);
 };
 
@@ -63,6 +71,7 @@ export const open = (sealed: Buffer, hexKey: string): Buffer => {
   const decipher = createDecipheriv("aes-256-gcm", keyFrom(hexKey), iv);
   decipher.setAAD(MAGIC);
   decipher.setAuthTag(tag);
+
   return Buffer.concat([decipher.update(sealed.subarray(MAGIC.length + 28)), decipher.final()]);
 };
 
@@ -82,20 +91,25 @@ export const uploadEscrow = async (
 ): Promise<string> => {
   const key = escrowKeyName(sealed);
   const url = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(env.accountId)}/r2/buckets/${encodeURIComponent(env.bucket)}/objects/${key.split("/").map(encodeURIComponent).join("/")}`;
+
   const res = await fetcher(url, {
     method: "PUT",
     headers: { authorization: `Bearer ${env.token}`, "content-type": "application/octet-stream" },
     body: sealed,
   });
+
   if (res.status >= 300) throw new Error(`escrow upload failed: HTTP ${res.status}`);
+
   return key;
 };
 
 if (import.meta.main) {
   const [cmd, a, b] = process.argv.slice(2);
   const key = process.env.BYE_ESCROW_KEY ?? "";
+
   if (cmd === "upload") {
     const sealed = seal(packDirectory(a ?? ".alchemy"), key);
+
     const name = await uploadEscrow(
       sealed,
       {
@@ -105,6 +119,7 @@ if (import.meta.main) {
       },
       (url, init) => fetch(url, { ...init, body: new Uint8Array(init.body) }),
     );
+
     console.log(`escrow: uploaded ${name} (${sealed.length} bytes)`);
   } else if (cmd === "restore" && a && b) {
     console.log(`escrow: restored ${unpackTo(open(readFileSync(a), key), b)} file(s) into ${b}`);

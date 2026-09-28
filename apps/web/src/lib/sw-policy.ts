@@ -6,18 +6,19 @@
  * the unhashed development names.
  */
 declare const __BYE_SHELL_BUILD__: string | undefined;
+
 declare const __BYE_SHELL_ASSETS__: ReadonlyArray<string> | undefined;
 
-const BUILD = typeof __BYE_SHELL_BUILD__ === "string" ? __BYE_SHELL_BUILD__ : "dev";
+const BUILD = typeof __BYE_SHELL_BUILD__ === "undefined" ? "dev" : __BYE_SHELL_BUILD__;
 
 /** One cache per build: activating a new worker deletes every older shell cache. */
 export const SHELL = `bye-shell-${BUILD}`;
 
 /** The offline app shell: static assets only, never API routes or message content. */
 export const ASSETS: ReadonlyArray<string> =
-  typeof __BYE_SHELL_ASSETS__ === "object" && __BYE_SHELL_ASSETS__ !== null
-    ? __BYE_SHELL_ASSETS__
-    : ["/", "/index.html", "/app.js", "/styles.css", "/manifest.webmanifest", "/icon.svg"];
+  typeof __BYE_SHELL_ASSETS__ === "undefined" || __BYE_SHELL_ASSETS__ === null
+    ? ["/", "/index.html", "/app.js", "/styles.css", "/manifest.webmanifest", "/icon.svg"]
+    : __BYE_SHELL_ASSETS__;
 
 /**
  * Worker-handled paths (the Worker's `runWorkerFirst` list plus well-known documents). Every one is
@@ -42,6 +43,7 @@ export const PASS_THROUGH: ReadonlyArray<string> = [
  */
 export const servesFromShell = (method: string, url: string, origin: string): boolean => {
   const parsed = new URL(url);
+
   return (
     method === "GET" &&
     parsed.origin === origin &&

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { decodeCharset, parseMailDate, type Warning } from "@bye/mail-codec";
 
 const b = (...bytes: Array<number>) => new Uint8Array(bytes);
+
 const iso = (ms: number | undefined) => (ms === undefined ? undefined : new Date(ms).toISOString());
 
 describe("decodeCharset", () => {

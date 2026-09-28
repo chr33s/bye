@@ -12,7 +12,7 @@ import {
   type OccurrenceWire,
   RejectionCode,
 } from "@bye/contracts";
-import { NotFound, requireMailbox, requireScope } from "../services.ts";
+import { NotFound, requireMailbox, requireScope, type RequestPayload } from "../services.ts";
 
 // Calendar use cases (C01–C10). Authorization is two-layered (§3.2): the credential scope is
 // checked here from the verified Principal; calendar grants and owner-only privacy for
@@ -68,6 +68,7 @@ export interface CalendarCommandResults {
     readonly warnings: ReadonlyArray<string>;
   };
 }
+
 export interface CalendarReadResults {
   readonly Calendars: ReadonlyArray<CalendarListItem>;
   readonly Occurrences: ReadonlyArray<OccurrenceWire>;
@@ -75,6 +76,7 @@ export interface CalendarReadResults {
   readonly Feed: string | undefined;
   readonly Subscription: CalendarSubscriptionInfo | undefined;
 }
+
 type ResultOf<M, K> = K extends keyof M ? M[K] : unknown;
 
 /**
@@ -146,52 +148,65 @@ export class LocationSearch extends Context.Service<
 
 const invalid = (message: string) => new CalendarFailure({ code: "bad_request", message });
 
-export const calendarExecuteCommand = (spaceId: string, body: unknown) =>
+export const calendarExecuteCommand = (spaceId: string, body: RequestPayload) =>
   Effect.gen(function* () {
     const principal = yield* requireScope("calendar");
+
     const envelope = yield* decodeCalendarCommandEnvelope(body).pipe(
       Effect.mapError((e) => invalid(String(e))),
     );
+
     // Inviting attendees mails them from the owner's address (iTIP), so it
     // needs send authority, not just the calendar scope.
     const command = envelope.command as {
       readonly attendees?: ReadonlyArray<unknown>;
       readonly changes?: { readonly attendees?: ReadonlyArray<unknown> };
     };
+
     const attendees = command.attendees ?? command.changes?.attendees;
+
     if (attendees !== undefined && attendees.length > 0) yield* requireScope("send");
     const repository = yield* CalendarRepository;
+
     return yield* repository.execute(spaceId, principal.userId, envelope.command);
   }).pipe(Effect.withSpan("calendar.command"));
 
 /** Read models (views, week tasks, habits, timer, day context, widget, feed tokens, changes). */
-export const calendarReadQuery = (spaceId: string, query: unknown) =>
+export const calendarReadQuery = (spaceId: string, query: RequestPayload) =>
   Effect.gen(function* () {
     const principal = yield* requireScope("read");
+
     const decoded = yield* decodeCalendarReadQuery(query).pipe(
       Effect.mapError((e) => invalid(String(e))),
     );
+
     const repository = yield* CalendarRepository;
+
     return yield* repository.read(spaceId, principal.userId, decoded);
   }).pipe(Effect.withSpan("calendar.read"));
 
 /** Occurrences in a bounded window, with overlap columns for day/week grids (C01). */
-export const calendarListOccurrences = (spaceId: string, query: unknown) =>
+export const calendarListOccurrences = (spaceId: string, query: RequestPayload) =>
   Effect.gen(function* () {
     const principal = yield* requireScope("read");
+
     const decoded = yield* decodeOccurrencesQuery(query).pipe(
       Effect.mapError((e) => invalid(String(e))),
     );
+
     const repository = yield* CalendarRepository;
+
     return yield* repository.read(spaceId, principal.userId, { type: "Occurrences", ...decoded });
   }).pipe(Effect.withSpan("calendar.occurrences"));
 
 export const calendarSearch = (spaceId: string, query: string, limit = 25) =>
   Effect.gen(function* () {
     const principal = yield* requireScope("read");
+
     if (query.length === 0 || query.length > 256)
       return yield* invalid("query must be 1-256 characters");
     const repository = yield* CalendarRepository;
+
     return yield* repository.read(spaceId, principal.userId, {
       type: "Search",
       query,
@@ -212,6 +227,7 @@ export const calendarListVisible = Effect.gen(function* () {
   const shared = yield* (yield* CalendarDiscovery).sharedSpaces(principal.userId);
   const repository = yield* CalendarRepository;
   const spaces = [...new Set([...principal.calendarIds, ...shared])].slice(0, VISIBLE_SPACES_MAX);
+
   const perSpace = yield* Effect.forEach(
     spaces,
     (spaceId) =>
@@ -223,18 +239,21 @@ export const calendarListVisible = Effect.gen(function* () {
       ),
     { concurrency: 8 },
   );
+
   return perSpace.flat();
 }).pipe(Effect.withSpan("calendar.listVisible"));
 
 /** C09: requires read access to the source mailbox as well as calendar scope. */
-export const calendarCreateEventFromMessage = (spaceId: string, body: unknown) =>
+export const calendarCreateEventFromMessage = (spaceId: string, body: RequestPayload) =>
   Effect.gen(function* () {
     const request = yield* Schema.decodeUnknownEffect(CreateEventFromMessageRequest)(body).pipe(
       Effect.mapError((e) => invalid(String(e))),
     );
+
     yield* requireMailbox(request.message.mailboxId, "read");
     const principal = yield* requireScope("calendar");
     const repository = yield* CalendarRepository;
+
     return yield* repository.execute(spaceId, principal.userId, {
       type: "CreateEventFromMessage",
       commandId: request.commandId,
@@ -250,11 +269,12 @@ export const calendarCreateEventFromMessage = (spaceId: string, body: unknown) =
 export const calendarHashToken = (token: string) => Effect.promise(() => sha256Hex(token));
 
 /** Create a revocable private feed URL token. The raw token is returned exactly once. */
-export const calendarCreateFeedToken = (spaceId: string, body: unknown) =>
+export const calendarCreateFeedToken = (spaceId: string, body: RequestPayload) =>
   Effect.gen(function* () {
     const request = yield* Schema.decodeUnknownEffect(CreateFeedTokenRequest)(body).pipe(
       Effect.mapError((e) => invalid(String(e))),
     );
+
     const principal = yield* requireScope("calendar");
     const token = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
     const tokenHash = yield* calendarHashToken(token);
@@ -266,6 +286,7 @@ export const calendarCreateFeedToken = (spaceId: string, body: unknown) =>
       calendarIds: request.calendarIds,
       label: request.label,
     });
+
     return { token };
   }).pipe(Effect.withSpan("calendar.feedToken"));
 
@@ -274,11 +295,14 @@ export const calendarServeFeed = (spaceId: string, token: string) =>
   Effect.gen(function* () {
     if (!/^[A-Za-z0-9_-]{32,64}$/.test(token)) return yield* new NotFound({ resource: "feed" });
     const repository = yield* CalendarRepository;
+
     const ics = yield* repository.read(spaceId, null, {
       type: "Feed",
       tokenHash: yield* calendarHashToken(token),
     });
+
     if (ics === undefined) return yield* new NotFound({ resource: "feed" });
+
     return ics;
   }).pipe(Effect.withSpan("calendar.feed"));
 
@@ -293,7 +317,9 @@ export const calendarRefreshSubscription = (spaceId: string, calendarId: string,
     const repository = yield* CalendarRepository;
     const fetcher = yield* CalendarFeedFetcher;
     const sub = yield* repository.read(spaceId, null, { type: "Subscription", calendarId });
+
     if (!sub) return yield* new NotFound({ resource: "subscription" });
+
     const outcome = yield* Effect.result(
       fetcher.fetch({
         url: sub.url,
@@ -302,8 +328,10 @@ export const calendarRefreshSubscription = (spaceId: string, calendarId: string,
         maxBytes: CALENDAR_FEED_MAX_BYTES,
       }),
     );
+
     // The fetch ID is the command ID, so a redelivered refresh applies at most once.
     const apply = { type: "ApplySubscriptionFetch", commandId: fetchId, calendarId } as const;
+
     if (Result.isFailure(outcome))
       return yield* repository.execute(spaceId, null, {
         ...apply,
@@ -311,6 +339,7 @@ export const calendarRefreshSubscription = (spaceId: string, calendarId: string,
         error: outcome.failure.reason,
       });
     const fetched = outcome.success;
+
     return yield* repository.execute(
       spaceId,
       null,
@@ -333,8 +362,10 @@ export const calendarSearchLocations = (
   Effect.gen(function* () {
     yield* requireScope("calendar");
     const trimmed = text.trim();
+
     if (trimmed.length < 2 || trimmed.length > 200)
       return yield* invalid("query must be 2-200 characters");
     const locations = yield* LocationSearch;
+
     return yield* locations.search({ text: trimmed, near, limit: 8 });
   }).pipe(Effect.withSpan("calendar.locations"));

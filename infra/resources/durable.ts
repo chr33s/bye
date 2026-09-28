@@ -15,15 +15,19 @@ import type { ProbeParams } from "../../workers/core/src/probe.ts";
 export const Mailboxes = Cloudflare.DurableObject<CoreClasses["MailboxDO"]>("Mailboxes", {
   className: "MailboxDO",
 });
+
 export const Calendars = Cloudflare.DurableObject<CoreClasses["CalendarDO"]>("Calendars", {
   className: "CalendarDO",
 });
+
 export const SharedSpaces = Cloudflare.DurableObject<CoreClasses["SharedSpaceDO"]>("SharedSpaces", {
   className: "SharedSpaceDO",
 });
+
 export const SearchShards = Cloudflare.DurableObject<CoreClasses["SearchShardDO"]>("SearchShards", {
   className: "SearchShardDO",
 });
+
 export const IngressJournals = Cloudflare.DurableObject<CoreClasses["IngressJournalDO"]>(
   "IngressJournals",
   {
@@ -44,15 +48,19 @@ export const Probes = Cloudflare.DurableObject<CoreClasses["ProbeDO"]>("Probes",
 export const ProvisionDomain = Cloudflare.Workflow<DomainParams>("ProvisionDomain", {
   className: "ProvisionDomainWorkflow",
 });
+
 export const ExportAccount = Cloudflare.Workflow<ExportParams>("ExportAccount", {
   className: "ExportWorkflow",
 });
+
 export const EraseAccount = Cloudflare.Workflow<EraseParams>("EraseAccount", {
   className: "EraseWorkflow",
 });
+
 export const Reindex = Cloudflare.Workflow<ReindexParams>("Reindex", {
   className: "ReindexWorkflow",
 });
+
 export const Fanout = Cloudflare.Workflow<FanoutParams>("Fanout", {
   className: "FanoutWorkflow",
 });

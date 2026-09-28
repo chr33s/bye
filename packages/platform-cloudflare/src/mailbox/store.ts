@@ -1,3 +1,4 @@
+import { Option, Schema } from "effect";
 import { type DueJob, Kernel, KERNEL_MIGRATIONS, type KernelClock } from "../durable/kernel.ts";
 import { migrate, Sql, type TransactionalStorage } from "../durable/sql.ts";
 import { MailboxAutomation } from "./automation.ts";
@@ -27,11 +28,28 @@ export interface MailboxStoreOptions {
   readonly publishAddress: string | null;
 }
 
+type RunDueJobsResult = {
+  readonly ran: number;
+  readonly stale: number;
+  readonly failed: ReadonlyArray<{
+    readonly kind: string;
+    readonly key: string;
+    readonly outcome: "retry" | "failed" | "stale";
+    readonly error: string;
+  }>;
+};
+
 /**
  * Single-authority mailbox state (§3.2 `MailboxDO(mailboxId)`): the composition root of the
  * mailbox modules. Every method is synchronous over DO SQLite; commands are made idempotent by
  * the dispatcher (`applyMailboxCommand`), which runs each one inside `ctx.cmd`.
  */
+const decodeJson = Schema.decodeUnknownOption(Schema.Json);
+
+const decodeEmptyDispositionPayload = Schema.decodeUnknownOption(
+  Schema.Struct({ before: Schema.optional(Schema.Number) }),
+);
+
 export class MailboxStore {
   readonly ctx: MailboxContext;
   readonly kernel: Kernel;
@@ -55,6 +73,7 @@ export class MailboxStore {
     migrate(sql, "kernel", KERNEL_MIGRATIONS);
     migrate(sql, "mailbox", MAILBOX_MIGRATIONS);
     this.kernel = new Kernel(sql, options.clock);
+
     const ctx = (this.ctx = new MailboxContext(
       options.mailboxId,
       sql,
@@ -62,6 +81,7 @@ export class MailboxStore {
       options.clock,
       options.codec,
     ));
+
     const directory = new IdentityDirectory(ctx);
     this.ledger = new ThreadLedger(ctx);
     this.organize = new MailboxOrganizer(ctx);
@@ -104,32 +124,24 @@ export class MailboxStore {
    * A job that throws is isolated: its transaction rolls back, the kernel records the error and
    * retries it with backoff (then parks it as `failed`), and the remaining jobs still run.
    */
-  runDueJobs(
-    now: number,
-    limit = 100,
-  ): {
-    readonly ran: number;
-    readonly stale: number;
-    readonly failed: ReadonlyArray<{
-      readonly kind: string;
-      readonly key: string;
-      readonly outcome: "retry" | "failed" | "stale";
-      readonly error: string;
-    }>;
-  } {
+  runDueJobs(now: number, limit = 100): RunDueJobsResult {
     let ran = 0;
     let stale = 0;
+
     const failed: Array<{
       kind: string;
       key: string;
       outcome: "retry" | "failed" | "stale";
       error: string;
     }> = [];
+
     for (const job of this.kernel.dueJobs(now, limit)) {
       let ok: boolean;
+
       try {
         ok = this.ctx.sql.tx(() => {
           if (!this.kernel.completeJob(job)) return false;
+
           return this.runJob(job);
         });
       } catch (error) {
@@ -142,9 +154,11 @@ export class MailboxStore {
         });
         continue;
       }
+
       if (ok) ran++;
       else stale++;
     }
+
     return { ran, stale, failed };
   }
 
@@ -152,26 +166,37 @@ export class MailboxStore {
     switch (job.kind) {
       case "bubble": {
         const t = this.ledger.row(job.key);
+
         if (!t || t.bubble_tag !== "Scheduled" || Number(t.bubble_generation) !== job.generation)
           return false;
         this.ledger.setBubble(t.thread_id, { _tag: "Popped", surface: true });
+
         return true;
       }
+
       case "send":
       case "send-retry":
         return this.sends.onSendDue(job.key, job.kind);
       case "world-publish":
-        return this.sends.onLegacyWorldPublishDue(job.key, job.payload);
+        return this.sends.onLegacyWorldPublishDue(
+          job.key,
+          Option.getOrElse(decodeJson(job.payload), () => null),
+        );
       case "retention-sweep":
         this.retention.sweepRetention(this.ctx.now());
+
         return true;
       case "empty-disposition": {
         const d = job.key;
+
         if (d !== "trash" && d !== "spam" && d !== "screened-out") return false;
-        const before = (job.payload as { before?: unknown } | null)?.before;
-        this.retention.emptyDisposition(d, typeof before === "number" ? before : this.ctx.now());
+        const payload = decodeEmptyDispositionPayload(job.payload);
+        const before = Option.isSome(payload) ? payload.value.before : undefined;
+        this.retention.emptyDisposition(d, before ?? this.ctx.now());
+
         return true;
       }
+
       default:
         return false;
     }
@@ -180,6 +205,7 @@ export class MailboxStore {
   /** Next alarm time: earliest due job, or now if outbox work is pending (recovers lost alarms). */
   nextWakeAt(now: number): number | null {
     if (this.kernel.hasPendingOutbox()) return now;
+
     return this.kernel.nextDueAt();
   }
 

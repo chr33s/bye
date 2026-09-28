@@ -18,17 +18,22 @@ const setup = async () => {
   const clock = new TestClock();
   const cf = new FakeCloudflare();
   const dir = new ControlDirectory(d1, clock);
+
   const owner = await dir.provisionPersonalAccount({
     address: "owner@bye.test",
     displayName: "Owner",
   });
+
   const orgs = new ControlOrganizations(d1, clock);
+
   const orgId = await orgs.createOrganization(owner.userId, {
     name: "Acme",
     kind: "domain",
     seatLimit: 5,
   });
+
   const domains = new ControlDomains(d1, clock);
+
   const onboarding = (automated: boolean) =>
     new DomainOnboarding(d1, clock, {
       api: automated ? cloudflareApi("cf-test-token", cf.fetch) : null,
@@ -36,10 +41,11 @@ const setup = async () => {
       profile: mailDnsProfile(DKIM),
       workerName: "mailcore",
     });
+
   return { d1, clock, cf, owner, orgId, domains, onboarding, orgs };
 };
 
-const code = (e: unknown) => (e instanceof Rejection ? e.code : String(e));
+const code = <Caught>(e: Caught) => (e instanceof Rejection ? e.code : String(e));
 
 describe("[O01] customer-domain onboarding through a scoped Cloudflare API", () => {
   it("proves ownership, applies DNS, enables routing, verifies alignment and activates", async () => {
@@ -135,6 +141,7 @@ describe("[O01] customer-domain onboarding through a scoped Cloudflare API", () 
     const blocked = await ob.configureDns(d.id, owner.userId);
     expect(blocked.domain.state).toBe("zone-authorized");
     expect(blocked.diagnostics.some((x) => x.status === "fail")).toBe(true);
+
     // The customer publishes the planned records by hand.
     for (const op of (await ob.preview(d.id)).plan)
       if (op.op === "create") cf.external.push({ id: `m${cf.external.length}`, ...op.record });
@@ -150,10 +157,12 @@ describe("[O01] customer-domain onboarding through a scoped Cloudflare API", () 
       )
       .bind(orgId, clock.now(), clock.now())
       .run();
+
     const mbx = (await d1
       .prepare("SELECT id FROM mailboxes WHERE owner_user_id = ?")
       .bind(owner.userId)
       .first<{ id: string }>())!.id;
+
     // A personal mailbox belongs to the personal org, not the domain org.
     expect(
       code(
@@ -210,22 +219,26 @@ describe("incoming email for the onboarding-selected zone (infra/onboarding/spec
   const installed = async () => {
     const s = await setup();
     const zoneId = s.cf.addZone("example.test");
+
     const d = await s.domains.requestFromInstallation(s.orgId, s.owner.userId, {
       name: "Example.test.",
       accountId: "acc_1",
       zoneId,
     });
+
     return { ...s, zoneId, d };
   };
 
   it("binds the installation zone at ownership-proven, re-entrantly, and never to another zone", async () => {
     const { orgs, domains, owner, orgId, zoneId, d, clock, d1 } = await installed();
     expect(d).toMatchObject({ name: "example.test", state: "ownership-proven" });
+
     const again = await domains.requestFromInstallation(orgId, owner.userId, {
       name: "example.test",
       accountId: "acc_1",
       zoneId,
     });
+
     expect(again.id).toBe(d.id);
     expect(
       code(
@@ -238,16 +251,19 @@ describe("incoming email for the onboarding-selected zone (infra/onboarding/spec
           .catch((e) => e),
       ),
     ).toBe("conflict");
+
     // Another organization cannot take the bound name.
     const other = await new ControlDirectory(d1, clock).provisionPersonalAccount({
       address: "eve@bye.test",
       displayName: "Eve",
     });
+
     const eveOrg = await orgs.createOrganization(other.userId, {
       name: "Eve",
       kind: "domain",
       seatLimit: 1,
     });
+
     expect(
       code(
         await domains
@@ -308,6 +324,7 @@ describe("incoming email for the onboarding-selected zone (infra/onboarding/spec
 
   it("confirmed cutover replaces the foreign MX, merges SPF, keeps DMARC and unrelated records; rollback restores", async () => {
     const { cf, zoneId, d, onboarding, domains, owner, d1 } = await installed();
+
     const foreign = [
       {
         id: "g1",
@@ -333,6 +350,7 @@ describe("incoming email for the onboarding-selected zone (infra/onboarding/spec
       },
       { id: "www", zoneId, type: "CNAME" as const, name: "www.example.test", content: "x.test" },
     ];
+
     cf.records.push(...foreign.map((r) => ({ ...r })));
     const ob = onboarding(true);
 
@@ -349,11 +367,13 @@ describe("incoming email for the onboarding-selected zone (infra/onboarding/spec
     await domains.recordCutover(d.id, owner.userId, snap, true);
     const dns = await ob.configureDns(d.id, owner.userId);
     expect(dns.conflicts).toEqual([]);
+
     const mx = () =>
       cf.records
         .filter((r) => r.type === "MX")
         .map((r) => r.content)
         .sort();
+
     expect(mx()).toEqual([
       "route1.mx.cloudflare.net",
       "route2.mx.cloudflare.net",
@@ -420,14 +440,17 @@ describe("incoming email for the onboarding-selected zone (infra/onboarding/spec
     await ob.domains.authorizeZone(s.d.id, s.owner.userId, {
       method: automated ? "delegated-token" : "manual-records",
     });
+
     return { ...s, ob };
   };
+
   const forwardRule = {
     enabled: true,
     name: "to gmail",
     matchers: [{ type: "all" }],
     actions: [{ type: "forward", value: ["someone@gmail.test"] }],
   };
+
   const cfMx = (zoneId: string) =>
     ["route1", "route2", "route3"].map((h, i) => ({
       id: `cfmx${i}`,
@@ -522,8 +545,10 @@ describe("incoming email for the onboarding-selected zone (infra/onboarding/spec
       const ob = s.onboarding(true);
       await ob.domains.recordCutover(s.d.id, s.owner.userId, await ob.snapshot(s.d.id), true);
       await ob.domains.authorizeZone(s.d.id, s.owner.userId, { method: "delegated-token" });
+
       return { ...s, ob };
     });
+
     cf.calls.length = 0;
     await ob.configureDns(d.id, owner.userId);
     const writes = cf.calls.filter((c) => !c.startsWith("GET"));
@@ -555,6 +580,7 @@ describe("incoming email for the onboarding-selected zone (infra/onboarding/spec
     const { cf, zoneId, d, ob, owner, domains } = await authorized(false);
     cf.records.push(...cfMx(zoneId));
     await domains.recordCutover(d.id, owner.userId, await ob.snapshot(d.id), true);
+
     // Publish the rest of the records by hand (the plan's creates), then verify.
     for (const op of (await ob.preview(d.id)).plan)
       if (op.op === "create")
@@ -587,8 +613,10 @@ describe("incoming email for the onboarding-selected zone (infra/onboarding/spec
       await ob.domains.recordCutover(s.d.id, s.owner.userId, await ob.snapshot(s.d.id), true);
       await ob.domains.recordAuthorization(s.d.id, s.owner.userId, "manual-records");
       await ob.domains.authorizeZone(s.d.id, s.owner.userId, { method: "manual-records" });
+
       return { ...s, ob };
     });
+
     // The owner switched MX by hand; then verification failed and they restore.
     cf.records.splice(
       cf.records.findIndex((r) => r.id === "g1"),

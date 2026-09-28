@@ -38,7 +38,9 @@ describe("buildMessage", () => {
       inReplyTo: "parent@x.example",
       references: ["root@x.example", "parent@x.example"],
     });
+
     const wire = text(built.bytes);
+
     for (const line of wire.split("\r\n")) expect(line.length).toBeLessThanOrEqual(998);
     expect(wire).not.toMatch(/[^\r]\n/);
     const parsed = parseMessage(built.bytes);
@@ -81,6 +83,7 @@ describe("buildMessage", () => {
         ["Content-Type", "text/html"],
       ],
     });
+
     const wire = text(built.bytes);
     const headerBlock = wire.split("\r\n\r\n")[0]!;
     expect(headerBlock).not.toMatch(/^Bcc:/im);
@@ -91,9 +94,11 @@ describe("buildMessage", () => {
 
   it("[C04] emits text/calendar alternatives with the iTIP method", () => {
     const ics = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR";
+
     const parsed = parseMessage(
       buildMessage({ ...base, text: "invite", calendar: { method: "REQUEST", ics } }).bytes,
     );
+
     expect(parsed.calendar?.method).toBe("REQUEST");
     expect(parsed.calendar?.ics).toBe(ics);
   });
@@ -102,6 +107,7 @@ describe("buildMessage", () => {
     const parsed = parseMessage(
       buildMessage({ ...base, text: "away", autoSubmitted: "auto-replied" }).bytes,
     );
+
     expect(parsed.autoSubmitted).toBe("auto-replied");
   });
 
@@ -117,9 +123,11 @@ describe("buildMessage", () => {
         },
       ],
     });
+
     const lines = text(built.bytes)
       .split("\r\n")
       .filter((l) => /^[A-Za-z0-9+/=]{20,}$/.test(l));
+
     expect(lines.length).toBeGreaterThan(5);
     expect(Math.max(...lines.map((l) => l.length))).toBe(76);
   });
@@ -136,6 +144,7 @@ describe("buildMessage", () => {
 describe("header line limits (RFC 5322 §2.1.1)", () => {
   it("[E17] an ASCII subject with a very long unbroken run is encoded so no line exceeds 998 octets", () => {
     const url = `https://example.net/${"a".repeat(1200)}`;
+
     const { bytes } = buildMessage({
       from: { name: undefined, address: "ana@bye.test" },
       to: [{ name: undefined, address: "bob@example.net" }],
@@ -144,6 +153,7 @@ describe("header line limits (RFC 5322 §2.1.1)", () => {
       date: 0,
       messageId: "m1@bye.test",
     });
+
     const head = new TextDecoder().decode(bytes).split("\r\n\r\n")[0]!;
     expect(Math.max(...head.split("\r\n").map((l) => l.length))).toBeLessThanOrEqual(998);
     expect(head).toMatch(/^Subject:(\r\n)? =\?UTF-8\?B\?/m);
@@ -158,6 +168,7 @@ describe("header line limits (RFC 5322 §2.1.1)", () => {
       date: 0,
       messageId: "m2@bye.test",
     });
+
     expect(new TextDecoder().decode(bytes)).toContain("Subject: Lunch on Friday?");
   });
 });

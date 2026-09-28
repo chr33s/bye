@@ -10,16 +10,25 @@
 // Usage: node --experimental-strip-types packages/contracts/test/fixtures/generate.ts
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Effect, Schema } from "effect";
+import { Effect, Predicate, Schema, SchemaAST } from "effect";
 import * as Arbitrary from "effect/unstable/arbitrary/Arbitrary";
 import * as Contracts from "../../src/index.ts";
 
 export const CURRENT_FIXTURE_VERSION = "v1";
+
 export const FIXTURE_ROOT = import.meta.dirname;
 
+/** A JSON-decoded sample as read from a golden file or put on the wire. */
+export type WireValue = Schema.Json;
+
+/** A value a schema decodes to (its `Type`). */
+export type DecodedValue = Schema.Top["Type"];
+
 export const exportedSchemas = (): ReadonlyArray<readonly [string, Schema.Top]> =>
-  Object.entries(Contracts as Record<string, unknown>)
-    .filter((entry): entry is [string, Schema.Top] => Schema.isSchema(entry[1]))
+  Object.entries(Contracts)
+    .flatMap(([name, value]) =>
+      Schema.isSchema(value) ? [[name, value as Schema.Top] as const] : [],
+    )
     .sort(([a], [b]) => a.localeCompare(b));
 
 /** Schema name a fixture file belongs to: `Name.json` or `Name@member.json`. */
@@ -33,26 +42,29 @@ export interface UnionMember {
 
 /** Members of a top-level union schema (tagged structs or literals); [] for anything else. */
 export const unionMembers = (schema: Schema.Top): ReadonlyArray<UnionMember> => {
-  const ast = schema.ast as unknown as { _tag: string; types?: ReadonlyArray<AnyAst> };
-  if (ast._tag !== "Union" || !ast.types) return [];
-  const literalsOf = (member: AnyAst): Record<string, unknown> =>
-    Object.fromEntries(
-      (member.propertySignatures ?? [])
-        .filter((p) => p.type._tag === "Literal")
-        .map((p) => [String(p.name), p.type.literal]),
+  const ast = schema.ast;
+
+  if (!Predicate.isTagged(ast, "Union")) return [];
+
+  const literalsOf = (member: SchemaAST.AST): ReadonlyMap<string, DecodedValue> =>
+    new Map(
+      (Predicate.isTagged(member, "Objects") ? member.propertySignatures : []).flatMap((p) =>
+        Predicate.isTagged(p.type, "Literal") ? [[String(p.name), p.type.literal] as const] : [],
+      ),
     );
+
   const all = ast.types.map(literalsOf);
+
   // A literal property shared with the same value by every member (e.g. schemaVersion) is not a
   // discriminant; keep only the ones that tell members apart.
-  const shared = (key: string, value: unknown) => all.every((l) => key in l && l[key] === value);
+  const shared = (key: string, value: DecodedValue) =>
+    all.every((l) => l.has(key) && l.get(key) === value);
+
   return ast.types.map((member, i) => {
-    const raw =
-      member._tag === "Literal"
-        ? String(member.literal)
-        : Object.entries(all[i]!)
-            .filter(([k, v]) => !shared(k, v))
-            .map(([, v]) => String(v))
-            .join("-") || String(i);
+    const raw = Predicate.isTagged(member, "Literal")
+      ? String(member.literal)
+      : [...all[i]!].flatMap(([k, v]) => (shared(k, v) ? [] : [String(v)])).join("-") || String(i);
+
     return {
       label: raw.replace(/[^\w.-]/g, "_"),
       schema: Schema.make<Schema.Top>(member as never),
@@ -60,33 +72,26 @@ export const unionMembers = (schema: Schema.Top): ReadonlyArray<UnionMember> => 
   });
 };
 
-interface AnyAst {
-  readonly _tag: string;
-  readonly literal?: unknown;
-  readonly propertySignatures?: ReadonlyArray<{
-    readonly name: PropertyKey;
-    readonly type: { readonly _tag: string; readonly literal?: unknown };
-  }>;
-}
-
 /** Every golden sample recorded for `name`, across all versions and member files. */
-export const goldenSamples = (name: string): ReadonlyArray<unknown> =>
+export const goldenSamples = (name: string): ReadonlyArray<WireValue> =>
   readdirSync(FIXTURE_ROOT)
     .filter((d) => /^v\d+$/.test(d))
     .flatMap((version) =>
       readdirSync(join(FIXTURE_ROOT, version))
         .filter((f) => f.endsWith(".json") && fixtureSchemaName(f) === name)
         .flatMap(
-          (f) => JSON.parse(readFileSync(join(FIXTURE_ROOT, version, f), "utf8")) as Array<unknown>,
+          (f) =>
+            JSON.parse(readFileSync(join(FIXTURE_ROOT, version, f), "utf8")) as Array<WireValue>,
         ),
     );
 
 /** Union members of `schema` that none of the given encoded goldens decodes to. */
 export const uncoveredMembers = (
   schema: Schema.Top,
-  samples: ReadonlyArray<unknown>,
+  samples: ReadonlyArray<WireValue>,
 ): ReadonlyArray<UnionMember> => {
-  const decode = Schema.decodeUnknownSync(schema as never) as unknown as (u: unknown) => unknown;
+  const decode: (u: WireValue) => DecodedValue = Schema.decodeUnknownSync(schema as never);
+
   const decoded = samples.flatMap((s) => {
     try {
       return [decode(s)];
@@ -94,6 +99,7 @@ export const uncoveredMembers = (
       return [];
     }
   });
+
   return unionMembers(schema).filter((m) => !decoded.some((d) => Schema.is(m.schema as never)(d)));
 };
 
@@ -101,20 +107,24 @@ export const sampleEncoded = async (
   name: string,
   schema: Schema.Top,
   count = 3,
-): Promise<ReadonlyArray<unknown>> => {
-  const encode = Schema.encodeUnknownSync(schema as never) as unknown as (v: unknown) => unknown;
-  const decode = Schema.decodeUnknownSync(schema as never) as unknown as (u: unknown) => unknown;
+): Promise<ReadonlyArray<WireValue>> => {
+  const encode: (v: DecodedValue) => WireValue = Schema.encodeUnknownSync(schema as never);
+  const decode: (u: WireValue) => DecodedValue = Schema.decodeUnknownSync(schema as never);
+
   // Fixtures are exactly what crosses a wire or storage boundary, so keep only samples that
   // survive JSON (e.g. drop NaN/Infinity, which JSON cannot carry).
-  const survivesJson = (v: unknown) => {
+  const survivesJson = (v: DecodedValue) => {
     try {
       const wire = JSON.parse(JSON.stringify(encode(v)));
+
       return JSON.stringify(encode(decode(wire))) === JSON.stringify(wire);
     } catch {
       return false;
     }
   };
-  const out: Array<unknown> = [];
+
+  const out: Array<WireValue> = [];
+
   for (let attempt = 0; out.length < count && attempt < 20; attempt++) {
     const values = await Effect.runPromise(
       Arbitrary.sampleEffect(Arbitrary.schema(schema), {
@@ -123,9 +133,11 @@ export const sampleEncoded = async (
         size: 4,
       }),
     );
+
     for (const v of values)
       if (out.length < count && survivesJson(v)) out.push(JSON.parse(JSON.stringify(encode(v))));
   }
+
   return out;
 };
 
@@ -133,26 +145,32 @@ if (import.meta.main) {
   const dir = join(FIXTURE_ROOT, CURRENT_FIXTURE_VERSION);
   mkdirSync(dir, { recursive: true });
   let written = 0;
+
   for (const [name, schema] of exportedSchemas()) {
     const file = join(dir, `${name}.json`);
+
     try {
       if (!existsSync(file)) {
         writeFileSync(file, `${JSON.stringify(await sampleEncoded(name, schema), null, 2)}\n`);
         written++;
       }
+
       // Encode member samples through the whole union so the file is exactly what the union
       // schema would put on the wire.
-      const encode = Schema.encodeUnknownSync(schema as never) as unknown as (
-        v: unknown,
-      ) => unknown;
-      const decodeMember = (m: UnionMember) =>
-        Schema.decodeUnknownSync(m.schema as never) as unknown as (u: unknown) => unknown;
+      const encode: (v: DecodedValue) => WireValue = Schema.encodeUnknownSync(schema as never);
+
+      const decodeMember = (m: UnionMember): ((u: WireValue) => DecodedValue) =>
+        Schema.decodeUnknownSync(m.schema as never);
+
       for (const member of uncoveredMembers(schema, goldenSamples(name))) {
         const memberFile = join(dir, `${name}@${member.label}.json`);
+
         if (existsSync(memberFile)) continue;
+
         const samples = (await sampleEncoded(`${name}@${member.label}`, member.schema, 1)).map(
           (s) => JSON.parse(JSON.stringify(encode(decodeMember(member)(s)))),
         );
+
         if (samples.length === 0) throw new Error(`no JSON-safe sample for member ${member.label}`);
         writeFileSync(memberFile, `${JSON.stringify(samples, null, 2)}\n`);
         written++;
@@ -164,5 +182,6 @@ if (import.meta.main) {
       process.exitCode = 1;
     }
   }
+
   console.log(`fixtures: wrote ${written} new file(s) to ${dir}`);
 }

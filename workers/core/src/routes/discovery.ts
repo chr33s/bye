@@ -8,8 +8,11 @@ import { json, route, type Route } from "../http.ts";
 
 /** Compatibility-document schema identifier; bumped only for incompatible document changes. */
 export const INSTANCE_SCHEMA = "bye.instance/1";
+
 export const INSTANCE_DOCUMENT_PATH = "/.well-known/bye-instance";
+
 export const AS_METADATA_PATH = "/.well-known/oauth-authorization-server";
+
 /** The /v1 API revisions this deployment serves. */
 export const API_COMPATIBILITY = { min: 1, max: 1 } as const;
 
@@ -29,6 +32,7 @@ export const issuerOf = (env: Pick<CoreEnv, "APP_ORIGIN">): string =>
 
 export const instanceDocument = (env: Pick<CoreEnv, "APP_ORIGIN">) => {
   const issuer = issuerOf(env);
+
   return {
     schema: INSTANCE_SCHEMA,
     baseUrl: issuer,
@@ -53,6 +57,7 @@ export const instanceDocument = (env: Pick<CoreEnv, "APP_ORIGIN">) => {
 /** RFC 8414 §2 metadata. `authorization_response_iss_parameter_supported` is RFC 9207 §3. */
 export const authorizationServerMetadata = (env: Pick<CoreEnv, "APP_ORIGIN">) => {
   const issuer = issuerOf(env);
+
   return {
     issuer,
     authorization_endpoint: `${issuer}/oauth/authorize`,

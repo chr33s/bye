@@ -1,3 +1,4 @@
+import { Match, Predicate } from "effect";
 import type { MailView } from "@bye/domain";
 import { json, type SqlValue } from "../durable/sql.ts";
 import { type MailboxContext, reject } from "./context.ts";
@@ -42,6 +43,30 @@ const MAIL_VIEW_NAMES: ReadonlySet<string> = new Set<MailView>([
 
 export const isMailView = (v: string): v is MailView => MAIL_VIEW_NAMES.has(v);
 
+type MarkAllSeenResult = { readonly marked: number };
+
+type MarkSeenResult = { readonly newForYou: boolean };
+
+type VisitViewResult = { readonly previousVisitAt: number };
+
+type CreateBatchResult = {
+  readonly batchId: string;
+  readonly threadIds: ReadonlyArray<string>;
+};
+
+type GetThreadResult = {
+  readonly thread: MailboxThread;
+  readonly deliveries: ReadonlyArray<MailboxDelivery>;
+  readonly mergeHistory: ReturnType<MailboxViews["mergeHistory"]>;
+};
+
+type ImboxResult = {
+  readonly bubbledUp: ReadonlyArray<MailboxThread>;
+  readonly newForYou: ReadonlyArray<MailboxThread>;
+  readonly previouslySeen: ReadonlyArray<MailboxThread>;
+  readonly boundary: number;
+};
+
 export class MailboxViews {
   constructor(
     private readonly ctx: MailboxContext,
@@ -58,6 +83,7 @@ export class MailboxViews {
   /** Map thread rows to public threads with their labels loaded in one query. */
   threads(rows: ReadonlyArray<ThreadRow>, previousVisit = 0): Array<MailboxThread> {
     const labels = this.organize.labelsOf(rows.map((r) => r.thread_id));
+
     return rows.map((r) => toThread(r, labels.get(r.thread_id) ?? [], previousVisit));
   }
 
@@ -68,6 +94,7 @@ export class MailboxViews {
   /** Map delivery rows with their attachments loaded in one query. */
   deliveries(rows: ReadonlyArray<DeliveryRow>): Array<MailboxDelivery> {
     if (rows.length === 0) return [];
+
     const byDelivery = groupBy(
       allInChunks(
         rows.map((d) => d.delivery_id),
@@ -79,6 +106,7 @@ export class MailboxViews {
       ),
       (a) => a.delivery_id,
     );
+
     return rows.map((d) => toDelivery(d, byDelivery.get(d.delivery_id) ?? []));
   }
 
@@ -90,6 +118,7 @@ export class MailboxViews {
    */
   viewFilter(q: Pick<MailboxViewQuery, "view" | "label">): ViewFilter {
     const base = "merged_into IS NULL";
+
     switch (q.view) {
       case "imbox":
         return {
@@ -152,6 +181,7 @@ export class MailboxViews {
         };
       case "label": {
         const labelId = this.organize.labelId(q.label ?? "") ?? reject("not_found", "label");
+
         return {
           where: `${base} AND disposition = 'active' AND thread_id IN (SELECT thread_id FROM thread_labels WHERE label_id = ?)`,
           args: [labelId],
@@ -165,6 +195,7 @@ export class MailboxViews {
   /** Whether a (resolved) thread currently belongs to a view. */
   inView(threadId: string, view: MailView): boolean {
     const f = this.viewFilter({ view });
+
     return (
       this.sql.one(
         `SELECT 1 AS x FROM threads WHERE thread_id = ? AND ${f.where}`,
@@ -181,20 +212,23 @@ export class MailboxViews {
     const cursor = decodeCursor<{ k: number; id: string; b: number }>(query.cursor);
     const boundary = cursor?.b ?? this.ctx.kernel.currentSeq();
     const f = this.viewFilter(query);
-    const sortCol =
-      f.order === "reply_later"
-        ? "reply_later_at"
-        : f.order === "set_aside"
-          ? "set_aside_at"
-          : f.order === "bubble"
-            ? "COALESCE(bubble_at, 0)"
-            : "last_activity_at";
+
+    const sortCol = Match.value(f.order).pipe(
+      Match.when("reply_later", () => "reply_later_at"),
+      Match.when("set_aside", () => "set_aside_at"),
+      Match.when("bubble", () => "COALESCE(bubble_at, 0)"),
+      Match.orElse(() => "last_activity_at"),
+    );
+
     const ascending = f.order !== "activity";
+
     const grouped = f.bundles
       ? `SELECT *, MAX(${sortCol}) AS k, COUNT(*) AS bundle_count FROM (SELECT * FROM threads WHERE ${f.where} AND activity_seq <= ?) GROUP BY COALESCE(bundle_key, thread_id)`
       : `SELECT *, ${sortCol} AS k, 1 AS bundle_count FROM threads WHERE ${f.where} AND activity_seq <= ?`;
+
     const cmp = ascending ? ">" : "<";
     const dir = ascending ? "ASC" : "DESC";
+
     const rows = this.sql.all<ThreadRow & { k: number; bundle_count: number }>(
       `SELECT * FROM (${grouped}) ${cursor ? `WHERE (k ${cmp} ? OR (k = ? AND thread_id ${cmp} ?))` : ""} ORDER BY k ${dir}, thread_id ${dir} LIMIT ?`,
       ...f.args,
@@ -202,9 +236,11 @@ export class MailboxViews {
       ...(cursor ? [cursor.k, cursor.k, cursor.id] : []),
       limit + 1,
     );
+
     const previousVisit = this.visitMarker(query.view);
     const page = rows.slice(0, limit);
     const last = page.at(-1);
+
     const changed = cursor
       ? this.threads(
           this.sql.all<ThreadRow>(
@@ -215,6 +251,7 @@ export class MailboxViews {
           previousVisit,
         )
       : [];
+
     return {
       view: query.view,
       items: this.threads(page, previousVisit),
@@ -237,18 +274,16 @@ export class MailboxViews {
   }
 
   /** Imbox split into New For You and Previously Seen (E04); Bubble Up pins lead. */
-  imbox(limit = 50): {
-    readonly bubbledUp: ReadonlyArray<MailboxThread>;
-    readonly newForYou: ReadonlyArray<MailboxThread>;
-    readonly previouslySeen: ReadonlyArray<MailboxThread>;
-    readonly boundary: number;
-  } {
+  imbox(limit = 50): ImboxResult {
     const page = this.listView({ view: "imbox", limit });
+
     return {
-      bubbledUp: page.items.filter((t) => t.attention.bubble._tag === "Pinned"),
-      newForYou: page.items.filter((t) => t.newForYou && t.attention.bubble._tag !== "Pinned"),
+      bubbledUp: page.items.filter((t) => Predicate.isTagged(t.attention.bubble, "Pinned")),
+      newForYou: page.items.filter(
+        (t) => t.newForYou && !Predicate.isTagged(t.attention.bubble, "Pinned"),
+      ),
       previouslySeen: page.items.filter(
-        (t) => !t.newForYou && t.attention.bubble._tag !== "Pinned",
+        (t) => !t.newForYou && !Predicate.isTagged(t.attention.bubble, "Pinned"),
       ),
       boundary: page.boundary,
     };
@@ -263,12 +298,9 @@ export class MailboxViews {
     );
   }
 
-  getThread(threadId: string): {
-    readonly thread: MailboxThread;
-    readonly deliveries: ReadonlyArray<MailboxDelivery>;
-    readonly mergeHistory: ReturnType<MailboxViews["mergeHistory"]>;
-  } {
+  getThread(threadId: string): GetThreadResult {
     const row = this.ledger.require(threadId);
+
     return {
       thread: this.thread(row),
       deliveries: this.deliveriesOf(row.thread_id),
@@ -290,6 +322,7 @@ export class MailboxViews {
       "SELECT * FROM deliveries WHERE delivery_id = ?",
       deliveryId,
     );
+
     return d ? this.deliveries([d])[0] : undefined;
   }
 
@@ -326,16 +359,14 @@ export class MailboxViews {
   // ---------------------------------------------------------------- Read Together (E10)
 
   /** A fixed snapshot order that new arrivals don't reorder. */
-  createBatch(threadIds: ReadonlyArray<string> | "new-for-you"): {
-    readonly batchId: string;
-    readonly threadIds: ReadonlyArray<string>;
-  } {
+  createBatch(threadIds: ReadonlyArray<string> | "new-for-you"): CreateBatchResult {
     const ids =
       threadIds === "new-for-you"
         ? this.listView({ view: "imbox", limit: 200 })
             .items.filter((t) => t.newForYou)
             .map((t) => t.threadId)
         : threadIds.map((id) => this.ledger.require(id).thread_id);
+
     const batchId = this.ctx.id("bat");
     this.sql.run(
       "INSERT INTO batches (batch_id, thread_ids, created_at) VALUES (?, ?, ?)",
@@ -343,6 +374,7 @@ export class MailboxViews {
       JSON.stringify(ids),
       this.ctx.now(),
     );
+
     return { batchId, threadIds: ids };
   }
 
@@ -355,8 +387,10 @@ export class MailboxViews {
         "SELECT thread_ids FROM batches WHERE batch_id = ?",
         batchId,
       ) ?? reject("not_found", "batch");
+
     return json<Array<string>>(row.thread_ids, []).flatMap((id) => {
       const t = this.ledger.row(this.ledger.resolve(id));
+
       return t ? [{ thread: this.thread(t), deliveries: this.deliveriesOf(t.thread_id) }] : [];
     });
   }
@@ -364,11 +398,12 @@ export class MailboxViews {
   // ---------------------------------------------------------------- visits and positions (E05/E06)
 
   /** Record a view visit; returns the prior marker used for new-since-last-visit. */
-  visitView(view: string, position?: string): { readonly previousVisitAt: number } {
+  visitView(view: string, position?: string): VisitViewResult {
     const prior = this.sql.one<{ last_visit_at: number }>(
       "SELECT last_visit_at FROM view_positions WHERE view = ?",
       view,
     );
+
     const previousVisitAt = Number(prior?.last_visit_at ?? 0);
     this.sql.run(
       `INSERT INTO view_positions (view, position, last_visit_at, previous_visit_at) VALUES (?, ?, ?, ?)
@@ -379,6 +414,7 @@ export class MailboxViews {
       this.ctx.now(),
       previousVisitAt,
     );
+
     return { previousVisitAt };
   }
 
@@ -401,6 +437,7 @@ export class MailboxViews {
 
   private visitMarker(view: string): number {
     if (view !== "feed" && view !== "paper-trail") return 0;
+
     return Number(
       this.sql.one<{ previous_visit_at: number }>(
         "SELECT previous_visit_at FROM view_positions WHERE view = ?",
@@ -412,7 +449,7 @@ export class MailboxViews {
   // ---------------------------------------------------------------- seen state (E04)
 
   /** Mark seen up to the observed revision only; a concurrently arriving reply stays new. */
-  markSeen(threadId: string, observedRevision: number): { readonly newForYou: boolean } {
+  markSeen(threadId: string, observedRevision: number): MarkSeenResult {
     const t = this.ledger.require(threadId);
     const seen = Math.max(Number(t.seen_revision), Math.min(observedRevision, Number(t.revision)));
     const stillNew = Number(t.revision) > seen && t.disposition === "active" && t.unfollowed !== 1;
@@ -423,6 +460,7 @@ export class MailboxViews {
       t.thread_id,
     );
     this.ctx.change("thread", "seen", { threadId: t.thread_id });
+
     return { newForYou: stillNew };
   }
 
@@ -436,19 +474,18 @@ export class MailboxViews {
   }
 
   /** Bulk mark-seen over a bounded snapshot; arrivals after `boundary` are not swept in. */
-  markAllSeen(
-    view: MailView | "label",
-    boundary: number,
-    label?: string,
-  ): { readonly marked: number } {
+  markAllSeen(view: MailView | "label", boundary: number, label?: string): MarkAllSeenResult {
     if (view === "label" && !label) reject("bad_request", "label required");
     const f = this.viewFilter(view === "label" ? { view, label: label! } : { view });
+
     const marked = this.sql.run(
       `UPDATE threads SET seen_revision = revision, new_for_you = 0 WHERE ${f.where} AND activity_seq <= ? AND new_for_you = 1`,
       ...f.args,
       boundary,
     );
+
     this.ctx.change("view", "seen", { view, label: label ?? null, boundary });
+
     return { marked };
   }
 }

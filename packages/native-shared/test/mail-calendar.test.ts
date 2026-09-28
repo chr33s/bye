@@ -44,6 +44,7 @@ describe("invitation actions", () => {
       { kind: "event", ref: "cal_a", snippet: "no doc id" },
       { docId: "event:", kind: "event", ref: "cal_a", snippet: "empty" },
     ]);
+
     expect(events).toEqual([{ eventId: "evt_1", snippet: "[Standup] daily" }]);
   });
 });
@@ -106,6 +107,7 @@ describe("create event from message", () => {
 describe("calendar cover panel", () => {
   it("[C09] lists today's events (all-day first) and the next timed event not yet started", () => {
     const now = at(12);
+
     const agenda = coverAgenda(
       [
         occ("later-today", at(15), at(16)),
@@ -118,6 +120,7 @@ describe("calendar cover panel", () => {
       ],
       now,
     );
+
     expect(agenda.today.map((o) => o.eventId)).toEqual([
       "holiday",
       "overnight",
@@ -156,6 +159,7 @@ describe("calendar cover panel", () => {
 describe("native C09 client calls", () => {
   it("[C09] RSVP, search, calendars and create-from-message hit the documented routes", async () => {
     const calls: Array<{ url: string; method: string; body: unknown }> = [];
+
     const client = new ByeClient({
       origin: "https://app.bye.test",
       token: "tok",
@@ -166,15 +170,18 @@ describe("native C09 client calls", () => {
           method: init.method,
           body: init.body ? JSON.parse(init.body as string) : undefined,
         });
+
         return new Response(JSON.stringify({ items: [] }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
       },
     });
+
     await client.calendarSearch("space 1", "Standup", 5);
     await client.respondInvitation("space 1", "evt_1", "TENTATIVE");
     await client.calendars("space 1");
+
     const built = fromMessagePayload({
       calendarId: "cal_a",
       mailboxId: "mbx_1",
@@ -184,6 +191,7 @@ describe("native C09 client calls", () => {
       end: "2026-09-28T11:00",
       timeZone: "UTC",
     });
+
     if (!built.ok) throw new Error("expected a valid form");
     await client.createEventFromMessage("space 1", built.body);
     expect(calls[0]).toMatchObject({
@@ -239,10 +247,12 @@ describe("thread invitations", () => {
 
   it("[C09] uses the message lookup: occurrence, current answer and cancellation", async () => {
     const calls: Array<string> = [];
+
     const found = await findThreadInvitations(
       {
         messageInvitations: async (cal, mbx, dlv) => {
           calls.push(`${cal}/${mbx}/${dlv}`);
+
           return {
             invitations: [
               invitation,
@@ -259,6 +269,7 @@ describe("thread invitations", () => {
       "dlv_1",
       "Invitation: Standup",
     );
+
     expect(calls).toEqual(["cal_1/mbx_1/dlv_1"]);
     expect(found).toEqual([
       {
@@ -286,6 +297,7 @@ describe("thread invitations", () => {
         },
         calendarSearch: async (_cal, q) => {
           expect(q).toBe("Standup");
+
           return {
             items: [{ docId: "event:evt_9", kind: "event", ref: "cal_a", snippet: "Standup" }],
           };
@@ -296,9 +308,11 @@ describe("thread invitations", () => {
       "dlv_1",
       "Invitation: Standup",
     );
+
     expect(found).toEqual([
       { eventId: "evt_9", occurrenceKey: null, label: "Standup", answer: null, cancelled: false },
     ]);
+
     // A message the instance holds no link for (older mail) also falls back.
     const unlinked = await findThreadInvitations(
       {
@@ -312,6 +326,7 @@ describe("thread invitations", () => {
       "dlv_1",
       "Invitation: Standup",
     );
+
     expect(unlinked.map((e) => e.eventId)).toEqual(["evt_8"]);
     // Other failures are not masked by the fallback.
     await expect(

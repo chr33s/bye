@@ -17,6 +17,7 @@ class MemoryBucket implements MirrorBucket {
   private n = 0;
   async head(key: string) {
     const o = this.objects.get(key);
+
     return o
       ? { size: o.bytes.byteLength, etag: o.etag, httpEtag: `"${o.etag}"`, uploaded: o.uploaded }
       : null;
@@ -26,14 +27,17 @@ class MemoryBucket implements MirrorBucket {
     options: { range?: { offset: number; length?: number } | { suffix: number } } = {},
   ) {
     const o = this.objects.get(key);
+
     if (!o) return null;
     let bytes = o.bytes;
     const r = options.range;
+
     if (r)
       bytes =
         "suffix" in r
           ? bytes.slice(bytes.length - r.suffix)
           : bytes.slice(r.offset, r.length === undefined ? undefined : r.offset + r.length);
+
     return {
       size: o.bytes.byteLength,
       etag: o.etag,
@@ -54,35 +58,44 @@ class MemoryBucket implements MirrorBucket {
     this.objects.delete(key);
   }
   async list(options: { prefix: string }) {
-    const objects = [...this.objects.entries()]
-      .filter(([k]) => k.startsWith(options.prefix))
-      .map(([key, o]) => ({ key, size: o.bytes.byteLength, etag: o.etag }));
+    const objects = [...this.objects.entries()].flatMap(([key, o]) =>
+      key.startsWith(options.prefix) ? [{ key, size: o.bytes.byteLength, etag: o.etag }] : [],
+    );
+
     return { objects, truncated: false };
   }
 }
 
 const WRITE = "w".repeat(40);
+
+const requestInit = (
+  method: string,
+  init: { headers?: Record<string, string>; body?: string },
+): RequestInit => {
+  const request: RequestInit = { method, headers: init.headers ?? {} };
+
+  if (init.body !== undefined) request.body = init.body;
+
+  return request;
+};
+
 const setup = (extra: Partial<MirrorEnv> = {}) => {
   const bucket = new MemoryBucket();
   const env: MirrorEnv = { SIGNATURES: bucket, WRITE_TOKEN: WRITE, ...extra };
+
   const call = (
     method: string,
     path: string,
     init: { headers?: Record<string, string>; body?: string } = {},
   ) =>
-    handleMirror(
-      new Request(`http://sigmirror.internal${path}`, {
-        method,
-        headers: init.headers ?? {},
-        ...(init.body === undefined ? {} : { body: init.body }),
-      }),
-      env,
-    );
+    handleMirror(new Request(`http://sigmirror.internal${path}`, requestInit(method, init)), env);
+
   const put = (name: string, body: string) =>
     call("PUT", `/w/${name}`, {
       headers: { authorization: `Bearer ${WRITE}`, "content-length": String(body.length) },
       body,
     });
+
   return { bucket, env, call, put };
 };
 
@@ -165,9 +178,11 @@ describe("signature mirror Worker", () => {
         await m.call("GET", "/w/_state", { headers: { authorization: `Bearer ${WRITE}` } })
       ).text(),
     ).toBe('{"uuid":"secret"}');
+
     const manifest = (await (
       await m.call("GET", "/w/_manifest", { headers: { authorization: `Bearer ${WRITE}` } })
-    ).json()) as { files: Record<string, unknown> };
+    ).json()) as { files: Record<string, { size: number; etag: string }> };
+
     expect(Object.keys(manifest.files)).toEqual([]);
   });
 
@@ -189,6 +204,7 @@ describe("signature mirror Worker", () => {
     await m.put("daily.cvd", "x");
     // Encoded dot segments are normalised by the URL parser and cannot leave the database namespace.
     expect(await (await m.call("GET", "/%2e%2e/daily.cvd")).text()).toBe("x");
+
     for (const path of [
       "/..%2Fdaily.cvd",
       "/db%2Fdaily.cvd",
@@ -198,6 +214,7 @@ describe("signature mirror Worker", () => {
     ]) {
       expect([400, 404]).toContain((await m.call("GET", path)).status);
     }
+
     expect([400, 405]).toContain((await m.put("../escape.cvd", "x")).status);
     expect((await m.put("evil.exe", "x")).status).toBe(400);
     expect(isDatabaseName("daily-27791.cdiff")).toBe(true);
@@ -237,15 +254,13 @@ describe("signature mirror writes", () => {
 
   it("[E20] PUT without a usable content-length is a 411 and stores nothing", async () => {
     const m = setup();
-    for (const headers of [
-      { ...auth } as Record<string, string>,
-      { ...auth, "content-length": "abc" },
-      { ...auth, "content-length": "-1" },
-      { ...auth, "content-length": String(10 * 1024 ** 3) },
-    ]) {
+
+    for (const declared of [undefined, "abc", "-1", String(10 * 1024 ** 3)]) {
+      const headers = declared === undefined ? auth : { ...auth, "content-length": declared };
       const r = await m.call("PUT", "/w/daily.cvd", { headers, body: "x" });
-      expect([headers["content-length"], r.status]).toEqual([headers["content-length"], 411]);
+      expect([declared, r.status]).toEqual([declared, 411]);
     }
+
     // A declared length with no body is also refused.
     expect(
       (await m.call("PUT", "/w/daily.cvd", { headers: { ...auth, "content-length": "0" } })).status,
@@ -255,33 +270,60 @@ describe("signature mirror writes", () => {
   });
 });
 
+interface LoopbackFetcher {
+  fetch: () => undefined;
+}
+
+interface StartOptions {
+  enableInternet: boolean;
+  env: { MIRROR_URL: string; WRITE_TOKEN: string };
+}
+
+interface FakeContainer {
+  running: boolean;
+  started: StartOptions | null;
+  intercepted: { host: string; target: LoopbackFetcher } | null;
+  destroyedWith: Error | null;
+  start(options: StartOptions): void;
+  interceptOutboundHttp(host: string, target: LoopbackFetcher): Promise<void>;
+  destroy(error: Error): Promise<void>;
+  calls: Array<string>;
+}
+
 describe("signature mirror job", () => {
   afterEach(() => vi.useRealTimers());
 
-  const job = (container: unknown, exportsDefault: unknown = { fetch: () => undefined }) => {
+  const job = (
+    container: FakeContainer | undefined,
+    exportsDefault: LoopbackFetcher | null = { fetch: () => undefined },
+  ) => {
     const alarms: Array<number> = [];
+
     const ctx = {
       container,
       exports: { default: exportsDefault },
       storage: { setAlarm: async (at: number) => void alarms.push(at) },
     };
-    const env = { SIGNATURES: new MemoryBucket(), WRITE_TOKEN: WRITE } as unknown as SigMirrorEnv;
+
+    const env = { SIGNATURES: new MemoryBucket(), WRITE_TOKEN: WRITE } as never;
+
     return { job: new SigMirrorJob(ctx as never, env), alarms, ctx };
   };
 
   const fakeContainer = () => {
     const calls: Array<string> = [];
-    const c = {
+
+    const c: FakeContainer = {
       running: false,
-      started: null as unknown,
-      intercepted: null as unknown,
-      destroyedWith: null as unknown,
-      start(options: unknown) {
+      started: null,
+      intercepted: null,
+      destroyedWith: null,
+      start(options: StartOptions) {
         calls.push("start");
         c.started = options;
         c.running = true;
       },
-      async interceptOutboundHttp(host: string, target: unknown) {
+      async interceptOutboundHttp(host: string, target: LoopbackFetcher) {
         calls.push("intercept");
         c.intercepted = { host, target };
       },
@@ -292,6 +334,7 @@ describe("signature mirror job", () => {
       },
       calls,
     };
+
     return c;
   };
 
@@ -331,6 +374,7 @@ describe("signature mirror job", () => {
       container.calls.push("intercept");
       throw new Error("intercept refused");
     };
+
     const { job: j, alarms } = job(container);
     await expect(j.run()).rejects.toThrow(/intercept refused/);
     expect(container.calls).toEqual(["start", "intercept", "destroy"]);
@@ -354,6 +398,7 @@ describe("signature mirror job", () => {
   it("[E20] the cron trigger runs the single named mirror job", async () => {
     const names: Array<string> = [];
     let runs = 0;
+
     const env = {
       MIRROR_JOB: {
         getByName: (name: string) => (
@@ -361,14 +406,9 @@ describe("signature mirror job", () => {
           { run: async () => (runs++, { started: true }) }
         ),
       },
-    } as unknown as SigMirrorEnv;
-    await (
-      worker.scheduled as unknown as (
-        c: ScheduledController,
-        e: SigMirrorEnv,
-        x: ExecutionContext,
-      ) => Promise<void>
-    )({} as ScheduledController, env, {} as ExecutionContext);
+    } as SigMirrorEnv;
+
+    await worker.scheduled?.({} as ScheduledController, env);
     expect([names, runs]).toEqual([["mirror"], 1]);
   });
 });

@@ -1,3 +1,4 @@
+import type { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   ControlBilling,
@@ -9,6 +10,7 @@ import {
 import { MemoryD1, TestClock } from "@bye/testing";
 
 const DAY = 86_400_000;
+
 const SECRET = "whsec_test_0123456789abcdef0123456789";
 
 const setup = async () => {
@@ -16,18 +18,24 @@ const setup = async () => {
   const clock = new TestClock();
   const dir = new ControlDirectory(d1, clock);
   const billing = new ControlBilling(d1, clock);
+
   const account = await dir.provisionPersonalAccount({
     address: "alice@bye.test",
     displayName: "Alice",
   });
+
   const orgs = new ControlOrganizations(d1, clock);
+
   const orgId = (await orgs.membership(account.organizationId, account.userId))
     ? account.organizationId
     : "";
-  const send = async (event: Record<string, unknown>) => {
+
+  const send = async (event: Record<string, Schema.Json>) => {
     const body = JSON.stringify({ orgId, created: clock.now(), ...event });
+
     return billing.handleWebhook(body, await signBillingPayload(body, SECRET, clock.now()), SECRET);
   };
+
   return { d1, clock, dir, billing, account, orgId, send };
 };
 
@@ -75,6 +83,7 @@ describe("billing and entitlements", () => {
 
   it("[A02] forged, stale-timestamp and unsigned webhooks are rejected; browser success grants nothing", async () => {
     const { billing, orgId, clock } = await setup();
+
     const body = JSON.stringify({
       id: "evt_f",
       orgId,
@@ -85,6 +94,7 @@ describe("billing and entitlements", () => {
       seats: 1,
       periodEnd: clock.now() + 1e9,
     });
+
     await expect(
       billing.handleWebhook(body, await signBillingPayload(body, "wrong", clock.now()), SECRET),
     ).rejects.toThrow("signature");
@@ -118,10 +128,12 @@ describe("billing and entitlements", () => {
   it("[A04] closure is distinct from cancellation; reservation and verified forwarding survive the mailbox", async () => {
     const { d1, clock, dir, account } = await setup();
     const lifecycle = new ControlLifecycle(d1, clock, "secret");
+
     const { reserved } = await lifecycle.closeAccount(account.userId, {
       reserveAddressDays: 365,
       forwardingDays: 180,
     });
+
     expect(reserved).toEqual(["alice@bye.test"]);
     expect(await dir.resolveRecipient("alice@bye.test")).toEqual({
       _tag: "Rejected",
@@ -137,6 +149,7 @@ describe("billing and entitlements", () => {
       "alice@bye.test",
       "alice@elsewhere.test",
     );
+
     expect(await dir.resolveRecipient("alice@bye.test")).toEqual({
       _tag: "Rejected",
       reason: "closed",
@@ -172,19 +185,24 @@ describe("processor-time ordering and forwarding expiry", () => {
     const d1 = MemoryD1.migrated();
     const clock = new TestClock();
     const billing = new ControlBilling(d1, clock);
+
     const account = await new ControlDirectory(d1, clock).provisionPersonalAccount({
       address: "alice@bye.test",
       displayName: "Alice",
     });
+
     const orgId = account.organizationId;
-    const send = async (event: Record<string, unknown>) => {
+
+    const send = async (event: Record<string, Schema.Json>) => {
       const body = JSON.stringify({ orgId, ...event });
+
       return billing.handleWebhook(
         body,
         await signBillingPayload(body, SECRET, clock.now()),
         SECRET,
       );
     };
+
     const t0 = clock.now();
     // Activation (processor time t0) arrives late: we write it an hour after it happened.
     clock.advance(3600_000);
@@ -197,6 +215,7 @@ describe("processor-time ordering and forwarding expiry", () => {
       seats: 1,
       periodEnd: t0 + 365 * 86400_000,
     });
+
     // A genuine later cancellation (t0 + 30 min) is older than our receipt time but newer at the processor.
     const cancelled = await send({
       id: "evt_c",
@@ -204,8 +223,10 @@ describe("processor-time ordering and forwarding expiry", () => {
       type: "subscription.cancelled",
       atPeriodEnd: false,
     });
+
     expect(cancelled.applied).toBe(true);
     expect((await billing.entitlement(orgId))?.status).toBe("expired");
+
     // A truly older event is still ignored.
     const stale = await send({
       id: "evt_old",
@@ -213,6 +234,7 @@ describe("processor-time ordering and forwarding expiry", () => {
       type: "subscription.renewed",
       periodEnd: t0 + 400 * 86400_000,
     });
+
     expect(stale.applied).toBe(false);
     expect((await billing.entitlement(orgId))?.status).toBe("expired");
   });
@@ -220,17 +242,21 @@ describe("processor-time ordering and forwarding expiry", () => {
   it("[A04] forwarding can't be (re)configured after the forwarding entitlement has expired", async () => {
     const d1 = MemoryD1.migrated();
     const clock = new TestClock();
+
     const account = await new ControlDirectory(d1, clock).provisionPersonalAccount({
       address: "alice@bye.test",
       displayName: "Alice",
     });
+
     const lifecycle = new ControlLifecycle(d1, clock, "secret");
     await lifecycle.closeAccount(account.userId, { reserveAddressDays: 365, forwardingDays: 30 });
+
     const { verificationToken } = await lifecycle.requestForwarding(
       account.userId,
       "alice@bye.test",
       "me@example.net",
     );
+
     // 32 random bytes, base64url without padding; it verifies the destination while entitled.
     expect(verificationToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
     await lifecycle.confirmForwarding("alice@bye.test", verificationToken);
@@ -244,35 +270,43 @@ describe("processor-time ordering and forwarding expiry", () => {
     const d1 = MemoryD1.migrated();
     const clock = new TestClock();
     const dir = new ControlDirectory(d1, clock);
+
     const account = await dir.provisionPersonalAccount({
       address: "alice@bye.test",
       displayName: "Alice",
     });
+
     const lifecycle = new ControlLifecycle(d1, clock, "secret");
     await lifecycle.closeAccount(account.userId, { reserveAddressDays: 365, forwardingDays: 30 });
+
     const { verificationToken } = await lifecycle.requestForwarding(
       account.userId,
       "alice@bye.test",
       "me@example.net",
     );
+
     clock.advance(30 * 86400_000);
     await expect(
       lifecycle.confirmForwarding("alice@bye.test", verificationToken),
     ).rejects.toMatchObject({ code: "forbidden" });
+
     const row = await d1
       .prepare("SELECT forwarding_verified_at FROM address_reservations WHERE address = ?")
       .bind("alice@bye.test")
       .first<{ forwarding_verified_at: number | null }>();
+
     expect(row?.forwarding_verified_at).toBeNull();
   });
 
   it("[A04] closing an account revokes every credential kind: sessions, API tokens, device sessions and support grants", async () => {
     const d1 = MemoryD1.migrated();
     const clock = new TestClock();
+
     const account = await new ControlDirectory(d1, clock).provisionPersonalAccount({
       address: "alice@bye.test",
       displayName: "Alice",
     });
+
     const now = clock.now();
     await d1
       .prepare(

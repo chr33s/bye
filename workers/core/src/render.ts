@@ -74,15 +74,20 @@ const INLINE_MAX_BYTES = 10 * 1024 * 1024;
 
 const handleInline = async (env: CoreEnv, token: string): Promise<Response> => {
   const fields = await verify(env.PROXY_SIGNING_KEY, "inline", token, 2, Date.now());
+
   // Defense in depth: a token can only ever name an object in its own mailbox's namespace.
   if (!fields || !fields[1]!.startsWith(`t/${fields[0]}/`))
     return new Response("expired", { status: 403 });
   const object = await env.PARTS.get(fields[1]!);
+
   if (!object) return new Response("not found", { status: 404 });
+
   if (object.size > INLINE_MAX_BYTES) return new Response("too large", { status: 413 });
   const bytes = new Uint8Array(await object.arrayBuffer());
   const type = sniffRaster(bytes);
+
   if (!type) return new Response("not an image", { status: 415 });
+
   return new Response(bytes, {
     headers: {
       "content-type": type,
@@ -98,19 +103,26 @@ const handleInline = async (env: CoreEnv, token: string): Promise<Response> => {
 /** A part-granting capability's claims (preview/download). */
 const partClaims = async (env: CoreEnv, purpose: "preview" | "download", token: string) => {
   const fields = await verify(env.PROXY_SIGNING_KEY, purpose, token, 3, Date.now());
+
   return fields ? { mailboxId: fields[0]!, deliveryId: fields[1]!, partId: fields[2]! } : null;
 };
 
 const handleDownload = async (env: CoreEnv, token: string): Promise<Response> => {
   const claims = await partClaims(env, "download", token);
+
   if (!claims) return new Response("expired", { status: 403 });
   const a = await mailbox(env, claims.mailboxId).attachmentFor(claims.deliveryId, claims.partId);
+
   if (!a) return new Response("not found", { status: 404 });
+
   if (!a.access.allowed) return new Response("blocked", { status: 403 });
+
   const object = await env.PARTS.get(
     blobKey.part(claims.mailboxId, ingestionIdOf(a.messageKey), claims.partId),
   );
+
   if (!object) return new Response("not found", { status: 404 });
+
   return new Response(object.body, {
     headers: {
       "content-type": "application/octet-stream",
@@ -125,6 +137,7 @@ const handleDownload = async (env: CoreEnv, token: string): Promise<Response> =>
 };
 
 const PREVIEW_IMAGE = /^image\/(png|jpeg|gif|webp|avif|bmp)$/i;
+
 const PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
 
 /**
@@ -133,16 +146,23 @@ const PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
  */
 const handlePreview = async (env: CoreEnv, token: string): Promise<Response> => {
   const claims = await partClaims(env, "preview", token);
+
   if (!claims) return new Response("expired", { status: 403 });
   const a = await mailbox(env, claims.mailboxId).attachmentFor(claims.deliveryId, claims.partId);
+
   if (!a) return new Response("not found", { status: 404 });
+
   if (!a.access.allowed) return new Response("blocked", { status: 403 });
+
   if (a.size > PREVIEW_MAX_BYTES) return new Response("too large to preview", { status: 413 });
+
   const object = await env.PARTS.get(
     blobKey.part(claims.mailboxId, ingestionIdOf(a.messageKey), claims.partId),
   );
+
   if (!object) return new Response("not found", { status: 404 });
   const type = a.contentType.split(";")[0]!.trim().toLowerCase();
+
   const headers = {
     "content-security-policy":
       "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
@@ -151,11 +171,14 @@ const handlePreview = async (env: CoreEnv, token: string): Promise<Response> => 
     "cache-control": "private, no-store",
     "cross-origin-resource-policy": "same-origin",
   };
+
   if (PREVIEW_IMAGE.test(type))
     return new Response(object.body, { headers: { ...headers, "content-type": type } });
+
   if (type === "text/plain" || type === "text/csv" || type === "text/markdown") {
     const text = (await object.text()).slice(0, 1_000_000);
     const escaped = escapeHtml(text);
+
     return new Response(
       `<!doctype html><meta charset="utf-8"><pre style="white-space:pre-wrap;font:14px/1.5 ui-monospace,monospace;margin:12px">${escaped}</pre>`,
       {
@@ -163,6 +186,7 @@ const handlePreview = async (env: CoreEnv, token: string): Promise<Response> => 
       },
     );
   }
+
   return new Response("preview not available for this type", { status: 415 });
 };
 
@@ -179,17 +203,23 @@ export const handleRender = async (
     case "inline":
       return handleInline(env, token);
   }
+
   const fields = await verify(env.PROXY_SIGNING_KEY, "render", token, 2, Date.now());
+
   if (!fields) return new Response("expired", { status: 403 });
   const claims = { mailboxId: fields[0]!, deliveryId: fields[1]! };
   const stub = mailbox(env, claims.mailboxId);
   const renderable = await stub.renderable(claims.deliveryId);
+
   if (!renderable) return new Response("not found", { status: 404 });
   const object = await env.PARTS.get(bodyKeyFor(renderable.messageKey));
+
   const stored = object
     ? ((await object.json()) as StoredBody)
     : { text: "", html: null, remoteImages: 0, blockedTrackers: 0 };
+
   let html: string;
+
   if (stored.html !== null) {
     // Re-sanitize at render time with the viewer's remote-image preference and signed proxy URLs.
     const rendered = await rewriteImages(
@@ -199,10 +229,12 @@ export const handleRender = async (
       claims.mailboxId,
       stored.inline ?? {},
     );
+
     html = rendered;
   } else {
     html = `<pre style="white-space:pre-wrap;font:inherit">${escapeHtml(stored.text)}</pre>`;
   }
+
   return new Response(
     `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><base target="_blank"><body style="font:15px/1.5 system-ui,sans-serif;margin:12px">${html}</body>`,
     {
@@ -236,21 +268,27 @@ const rewriteImages = async (
   });
   const inlineUrls = new Map<string, string>();
   const now = Date.now();
+
   for (const id of [...new Set(cids)].slice(0, 100)) {
     const partKey = Object.hasOwn(inline, id) ? inline[id] : undefined;
+
     if (partKey)
       inlineUrls.set(
         id,
         `${env.MAIL_ORIGIN}/render/${await inlineToken(env, mailboxId, partKey, now)}`,
       );
   }
+
   const signed = new Map<string, string>();
+
   if (allowRemote) {
     for (const url of urls.slice(0, 200)) {
       const proxied = await signProxyUrl(url, env.PROXY_SIGNING_KEY, `${env.MAIL_ORIGIN}/img`);
+
       if (proxied) signed.set(url, proxied);
     }
   }
+
   return sanitizeHtml(html, {
     proxyImage: (url) => signed.get(url) ?? null,
     cid: (id) => inlineUrls.get(id) ?? null,
@@ -259,6 +297,7 @@ const rewriteImages = async (
 };
 
 const IMAGE_TYPES = /^image\/(png|jpeg|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon)$/i;
+
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 /** Network seams for the image proxy (tests inject fakes; production uses the global fetch). */
@@ -281,36 +320,51 @@ export const handleImageProxy = async (
   deps: ImageProxyDeps = liveProxyDeps,
 ): Promise<Response> => {
   const target = await verifyProxyUrl(request.url, env.PROXY_SIGNING_KEY);
+
   if (!target) return new Response("forbidden", { status: 403 });
   let url = target;
+
   for (let hop = 0; hop < 4; hop++) {
     if (isForbiddenProxyTarget(url)) return new Response("forbidden", { status: 403 });
+
     if (await forbiddenResolution(new URL(url).hostname, deps.doh))
       return new Response("forbidden", { status: 403 });
+
     const response = await deps.fetch(url, {
       redirect: "manual",
       headers: { accept: "image/*", "user-agent": "bye-image-proxy" },
       cf: { cacheTtl: 3600 },
     } as RequestInit);
+
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel().catch(() => undefined);
       const next = response.headers.get("location");
+
       if (!next) return new Response("bad redirect", { status: 502 });
       url = new URL(next, url).toString();
       continue;
     }
+
     const type = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+
     if (!response.ok || !IMAGE_TYPES.test(type)) {
       await response.body?.cancel().catch(() => undefined);
+
       return new Response("unsupported", { status: 415 });
     }
+
     const declared = Number(response.headers.get("content-length") ?? "0");
+
     if (declared > MAX_IMAGE_BYTES) {
       await response.body?.cancel().catch(() => undefined);
+
       return new Response("too large", { status: 413 });
     }
+
     const bytes = await readCapped(response, MAX_IMAGE_BYTES);
+
     if (!bytes) return new Response("too large", { status: 413 });
+
     return new Response(bytes, {
       headers: {
         "content-type": type,
@@ -320,5 +374,6 @@ export const handleImageProxy = async (
       },
     });
   }
+
   return new Response("too many redirects", { status: 508 });
 };

@@ -8,6 +8,7 @@
     "./drafts": "./src/drafts.ts",
     "./errors": "./src/errors.ts",
     "./wire": "./src/wire.ts",
+    "./json": "./src/json.ts",
     "./auth": "./src/auth/index.ts",
     "./instance": "./src/instance/index.ts",
     "./calendar-form": "./src/calendar-form.ts",

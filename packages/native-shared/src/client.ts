@@ -19,6 +19,8 @@ import type {
   WeekTaskWire,
   WidgetWire,
 } from "./wire.ts";
+import { Predicate } from "effect";
+import type { JsonInput, JsonObject, JsonValue } from "./json.ts";
 import type { AfterSend } from "./after-send.ts";
 import type { CalendarSearchHitWire, FromMessageBody } from "./mail-calendar.ts";
 
@@ -53,18 +55,41 @@ export type FetchLike = (
   text(): Promise<string>;
 }>;
 
+/** A JSON request body as a caller states it (serialized with `JSON.stringify`). */
+export type RequestBody = JsonInput;
+
+type CreateDraftBody = {
+  commandId: string;
+  mailboxId: string;
+  content: MailDraftContent;
+  threadId?: string;
+};
+
+type SendDraftBody = {
+  commandId: string;
+  mailboxId: string;
+  revision: number;
+  afterSend?: AfterSend;
+};
+
+type RespondInvitationCommand = Extract<CalendarCommandInput, { type: "RespondInvitation" }>;
+
+type MutableRespondInvitation = {
+  -readonly [K in keyof RespondInvitationCommand]: RespondInvitationCommand[K];
+};
+
+type MutableFetchInit = { -readonly [K in keyof FetchInit]: FetchInit[K] };
+
+/** Machine-readable details from an error envelope. */
+export type ErrorDetails = Readonly<JsonObject>;
+
 export class ByeApiError extends Error {
   readonly status: number;
   readonly code: string;
   /** Machine-readable details from the error envelope (e.g. `stepUp`, `currentRevision`). */
-  readonly details?: Readonly<Record<string, unknown>>;
+  readonly details?: ErrorDetails;
 
-  constructor(
-    status: number,
-    code: string,
-    message: string,
-    details?: Readonly<Record<string, unknown>>,
-  ) {
+  constructor(status: number, code: string, message: string, details?: ErrorDetails) {
     super(message);
     this.name = "ByeApiError";
     this.status = status;
@@ -107,12 +132,15 @@ export interface RequestOptions {
 
 /** A command as a client writes it: the client supplies `commandId`. */
 type WithoutCommandId<T> = T extends unknown ? Omit<T, "commandId"> : never;
+
 export type MailboxCommandInput = WithoutCommandId<MailboxCommand>;
+
 export type CalendarCommandInput = WithoutCommandId<CalendarCommand>;
 
 export const newCommandId = (): string => {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
+
   return `cmd_${Array.from(bytes, (b) => b.toString(36).padStart(2, "0"))
     .join("")
     .slice(0, 26)}`;
@@ -123,15 +151,18 @@ const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 /** `?a=1&b=2` from defined, non-empty values (empty string when none). */
 export const queryString = (params: QueryParams | undefined): string => {
   const q = new URLSearchParams();
+
   for (const [k, v] of Object.entries(params ?? {}))
     if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
   const s = q.toString();
+
   return s ? `?${s}` : "";
 };
 
 /** JSON when the body is JSON; otherwise the text itself (vCard, ICS and CSV exports). */
-const parseBody = (text: string, contentType: string | null): unknown => {
+const parseBody = (text: string, contentType: string | null): JsonValue => {
   if (!text) return null;
+
   if ((contentType ?? "").includes("json") || /^[[{]/.test(text.trimStart())) {
     try {
       return JSON.parse(text);
@@ -139,18 +170,26 @@ const parseBody = (text: string, contentType: string | null): unknown => {
       return text;
     }
   }
+
   return text;
 };
 
-const errorFrom = (status: number, statusText: string | undefined, data: unknown): ByeApiError => {
-  const envelope = (data && typeof data === "object" ? data : null) as {
-    error?: { code?: string; message?: string; details?: Record<string, unknown> };
-  } | null;
+const errorFrom = (
+  status: number,
+  statusText: string | undefined,
+  data: JsonValue,
+): ByeApiError => {
+  const error = Predicate.isObject(data) ? data.error : undefined;
+  const envelope = Predicate.isObject(error) ? error : undefined;
+  const code = envelope?.code;
+  const message = envelope?.message;
+  const details = envelope?.details;
+
   return new ByeApiError(
     status,
-    envelope?.error?.code ?? "internal",
-    envelope?.error?.message ?? (statusText || `HTTP ${status}`),
-    envelope?.error?.details,
+    Predicate.isString(code) ? code : "internal",
+    Predicate.isString(message) ? message : statusText || `HTTP ${status}`,
+    Predicate.isObject(details) ? details : undefined,
   );
 };
 
@@ -168,6 +207,7 @@ export class ByeClient {
 
   constructor(options: ByeClientOptions) {
     const url = new URL(options.origin);
+
     if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK.has(url.hostname)))
       throw new Error("API origin must be https");
     this.origin = url.origin;
@@ -184,7 +224,7 @@ export class ByeClient {
   request<T>(
     method: Method,
     path: string,
-    body?: unknown,
+    body?: RequestBody,
     options: RequestOptions = {},
   ): Promise<T> {
     return this.dispatch<T>(
@@ -218,38 +258,56 @@ export class ByeClient {
     options: RequestOptions,
     retried: boolean,
   ): Promise<T> {
-    const headers: Record<string, string> = {
-      accept: "application/json",
-      ...this.extraHeaders,
-      ...options.headers,
-    };
+    const headers = new Map<string, string>(
+      Object.entries({
+        accept: "application/json",
+        ...this.extraHeaders,
+        ...options.headers,
+      }),
+    );
+
     if (!this.cookie) {
       const bearer = this.auth ? await this.auth.token() : this.token;
+
       if (this.auth && !bearer) throw new ByeApiError(401, "unauthenticated", "signed out");
-      if (bearer) headers.authorization = `Bearer ${bearer}`;
+
+      if (bearer) headers.set("authorization", `Bearer ${bearer}`);
+
       // Browsers set Origin themselves; bearer clients state it for the server's Origin checks.
-      if (method !== "GET") headers.origin = this.origin;
+      if (method !== "GET") headers.set("origin", this.origin);
     }
+
     if (payload) {
-      headers["content-type"] = payload.contentType;
+      headers.set("content-type", payload.contentType);
+
       if (payload.body instanceof Uint8Array)
-        headers["content-length"] = String(payload.body.byteLength);
+        headers.set("content-length", String(payload.body.byteLength));
     }
-    const response = await this.fetchImpl(`${this.base}${path}${queryString(options.query)}`, {
+
+    const init: MutableFetchInit = {
       method,
-      headers,
-      ...(payload ? { body: payload.body } : {}),
+      headers: Object.fromEntries(headers),
       // Cookie sessions are same-origin only; bearer clients never send or store platform cookies.
       credentials: this.cookie ? "same-origin" : "omit",
-      ...(this.cookie ? {} : { redirect: "error" as const }),
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
+    };
+
+    if (payload) init.body = payload.body;
+
+    if (!this.cookie) init.redirect = "error";
+
+    if (options.signal) init.signal = options.signal;
+
+    const response = await this.fetchImpl(`${this.base}${path}${queryString(options.query)}`, init);
+
     // An expired/rotated access token gets exactly one transparent refresh and retry.
     if (response.status === 401 && this.auth && !retried && (await this.auth.onUnauthorized())) {
       return this.dispatch<T>(method, path, payload, options, true);
     }
+
     const data = parseBody(await response.text(), response.headers?.get("content-type") ?? null);
+
     if (response.status >= 400) throw errorFrom(response.status, response.statusText, data);
+
     return data as T;
   }
 
@@ -258,7 +316,8 @@ export class ByeClient {
   command = <T = unknown>(mailboxId: string, command: MailboxCommandInput) =>
     this.request<T>("POST", `/v1/mailboxes/${encodeURIComponent(mailboxId)}/commands`, {
       commandId: this.newId(),
-      ...command,
+      // The preference command's `value` is schema-`unknown` but is JSON on the wire.
+      ...(command as JsonObject),
     });
 
   calendarCommand = <T = unknown>(calendarId: string, command: CalendarCommandInput) =>
@@ -298,13 +357,13 @@ export class ByeClient {
 
   // ---- drafts (§8; the offline sync in ./drafts.ts drives these) ----
 
-  createDraft = (mailboxId: string, content: MailDraftContent, threadId?: string) =>
-    this.request<{ draftId: string; revision: number }>("POST", "/v1/drafts", {
-      commandId: this.newId(),
-      mailboxId,
-      content,
-      ...(threadId ? { threadId } : {}),
-    });
+  createDraft = (mailboxId: string, content: MailDraftContent, threadId?: string) => {
+    const body: CreateDraftBody = { commandId: this.newId(), mailboxId, content };
+
+    if (threadId) body.threadId = threadId;
+
+    return this.request<{ draftId: string; revision: number }>("POST", "/v1/drafts", body);
+  };
 
   saveDraft = (
     mailboxId: string,
@@ -333,12 +392,17 @@ export class ByeClient {
     revision: number,
     commandId = this.newId(),
     afterSend?: AfterSend,
-  ) =>
-    this.request<typeof MailSendResponse.Type>(
+  ) => {
+    const body: SendDraftBody = { commandId, mailboxId, revision };
+
+    if (afterSend) body.afterSend = afterSend;
+
+    return this.request<typeof MailSendResponse.Type>(
       "POST",
       `/v1/drafts/${encodeURIComponent(draftId)}/send`,
-      { commandId, mailboxId, revision, ...(afterSend ? { afterSend } : {}) },
+      body,
     );
+  };
 
   cancelSend = (mailboxId: string, sendJobId: string) =>
     this.request<typeof MailCancelResponse.Type>(
@@ -414,14 +478,11 @@ export class ByeClient {
   setPreference = (
     mailboxId: string,
     key: Extract<MailboxCommandInput, { _tag: "SetPreference" }>["key"],
-    value: unknown,
+    value: JsonValue,
   ) => this.command(mailboxId, { _tag: "SetPreference", key, value });
 
   preferences = (mailboxId: string) =>
-    this.request<Record<string, unknown>>(
-      "GET",
-      `/v1/mailboxes/${encodeURIComponent(mailboxId)}/preferences`,
-    );
+    this.request<JsonObject>("GET", `/v1/mailboxes/${encodeURIComponent(mailboxId)}/preferences`);
 
   sendJob = (mailboxId: string, sendJobId: string) =>
     this.request<{
@@ -484,13 +545,17 @@ export class ByeClient {
     eventId: string,
     partstat: "ACCEPTED" | "TENTATIVE" | "DECLINED",
     occurrenceKey?: string,
-  ) =>
-    this.calendarCommand(calendarId, {
+  ) => {
+    const command: MutableRespondInvitation = {
       type: "RespondInvitation",
       eventId,
       partstat,
-      ...(occurrenceKey ? { occurrenceKey } : {}),
-    });
+    };
+
+    if (occurrenceKey) command.occurrenceKey = occurrenceKey;
+
+    return this.calendarCommand(calendarId, command);
+  };
 
   /** Create an event with a backlink to a message; the server checks read access to its mailbox. */
   createEventFromMessage = (calendarId: string, body: FromMessageBody) =>
@@ -525,6 +590,7 @@ export const widgetSnapshot = (w: WidgetWire | null, unseen: number, now = Date.
   const next = (w?.upcoming ?? [])
     .filter((o) => o.startMs >= now)
     .sort((a, b) => a.startMs - b.startMs)[0];
+
   return {
     nextEvent: next ? { title: next.data.summary, startMs: next.startMs } : null,
     timer: w?.activeTimer
@@ -539,5 +605,6 @@ export const weekStart = (now: Date): Date => {
   const d = new Date(now);
   d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+
   return d;
 };

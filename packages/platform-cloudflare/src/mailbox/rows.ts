@@ -1,3 +1,4 @@
+import { Match, type Schema } from "effect";
 import type {
   BubbleCondition,
   BubbleState,
@@ -58,16 +59,16 @@ export interface ThreadRow {
 }
 
 export const bubbleOf = (r: ThreadRow): BubbleState =>
-  r.bubble_tag === "Scheduled"
-    ? {
-        _tag: "Scheduled",
-        at: Number(r.bubble_at),
-        generation: Number(r.bubble_generation),
-        condition: r.bubble_condition ?? "always",
-      }
-    : r.bubble_tag === "Pinned"
-      ? { _tag: "Pinned" }
-      : { _tag: "None" };
+  Match.value(r.bubble_tag).pipe(
+    Match.when("Scheduled", (): BubbleState => ({
+      _tag: "Scheduled",
+      at: Number(r.bubble_at),
+      generation: Number(r.bubble_generation),
+      condition: r.bubble_condition ?? "always",
+    })),
+    Match.when("Pinned", (): BubbleState => ({ _tag: "Pinned" })),
+    Match.orElse((): BubbleState => ({ _tag: "None" })),
+  );
 
 export const toThread = (
   r: ThreadRow,
@@ -327,19 +328,23 @@ export { allInChunks, inListChunks, placeholders } from "../durable/sql.ts";
 /** Group rows by a key (for single-query child loads instead of one query per parent). */
 export const groupBy = <T, K>(rows: ReadonlyArray<T>, key: (r: T) => K): Map<K, Array<T>> => {
   const out = new Map<K, Array<T>>();
+
   for (const r of rows) {
     const k = key(r);
     const list = out.get(k);
+
     if (list) list.push(r);
     else out.set(k, [r]);
   }
+
   return out;
 };
 
-export const encodeCursor = (value: unknown): string => btoa(JSON.stringify(value));
+export const encodeCursor = (value: Schema.Json): string => btoa(JSON.stringify(value));
 
 export const decodeCursor = <T>(value: string | undefined): T | undefined => {
   if (!value) return undefined;
+
   try {
     return JSON.parse(atob(value)) as T;
   } catch {

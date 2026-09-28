@@ -26,6 +26,7 @@ export const CalTimeSchema = Schema.Union([
   }),
   Schema.Struct({ kind: Schema.Literal("date"), date: CalLocalDateSchema }),
 ]);
+
 export type CalTimeWire = typeof CalTimeSchema.Type;
 
 export const CalEventDataSchema = Schema.Struct({
@@ -46,6 +47,7 @@ const SingleLine = Schema.String.pipe(
   // eslint-disable-next-line no-control-regex
   Schema.check(Schema.isPattern(/^[^\u0000-\u0008\u000A-\u001F\u007F]*$/)),
 );
+
 const MultiLine = Schema.String.pipe(
   // eslint-disable-next-line no-control-regex
   Schema.check(Schema.isPattern(/^[^\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]*$/)),
@@ -78,16 +80,22 @@ const AttendeeAddress = Schema.String.check(
   Schema.isMaxLength(320),
   Schema.isPattern(/^(?:mailto:)?[^\s@<>()",;:]+@[^\s@<>()",;:]+$/i),
 );
+
 const Person = Schema.Struct({ address: AttendeeAddress, name: Schema.optional(SingleLine) });
+
 /** Invitees per event: the same ceiling as recipients per message (`MAX_MESSAGE_RECIPIENTS`). */
 export const MAX_CALENDAR_ATTENDEES = 100;
+
 const Attendees = Schema.Array(Person).check(Schema.isMaxLength(MAX_CALENDAR_ATTENDEES));
+
 const MessageRef = Schema.Struct({
   mailboxId: Schema.String,
   threadId: Schema.String,
   deliveryId: Schema.optional(Schema.String),
 });
+
 const EditScope = Schema.Literals(["series", "this", "future"]);
+
 const Weekday = Schema.Int;
 
 const cmd = <const T extends string, F extends Schema.Struct.Fields>(type: T, fields: F) =>
@@ -207,13 +215,16 @@ export const CalendarCommand = Schema.Union([
   cmd("ArchiveHabit", { habitId: Schema.String }),
   cmd("ImportIcs", { calendarId: Schema.String, ics: Schema.String }),
 ]);
+
 export type CalendarCommand = typeof CalendarCommand.Type;
 
 export const CalendarCommandEnvelope = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   command: CalendarCommand,
 });
+
 export type CalendarCommandEnvelope = typeof CalendarCommandEnvelope.Type;
+
 export const decodeCalendarCommandEnvelope = Schema.decodeUnknownEffect(CalendarCommandEnvelope);
 
 /** Separate endpoints: these need cross-resource checks or return secrets exactly once. */
@@ -226,6 +237,7 @@ export const CreateEventFromMessageRequest = Schema.Struct({
   start: CalTimeSchema,
   end: CalTimeSchema,
 });
+
 export type CreateEventFromMessageRequest = typeof CreateEventFromMessageRequest.Type;
 
 export const CreateFeedTokenRequest = Schema.Struct({
@@ -234,6 +246,7 @@ export const CreateFeedTokenRequest = Schema.Struct({
   calendarIds: Schema.Array(Schema.String),
   label: Schema.String,
 });
+
 export type CreateFeedTokenRequest = typeof CreateFeedTokenRequest.Type;
 
 export const OccurrencesQuery = Schema.Struct({
@@ -243,7 +256,9 @@ export const OccurrencesQuery = Schema.Struct({
   calendarIds: Schema.optional(Schema.Array(Schema.String)),
   visibleOnly: Schema.optional(Schema.Boolean),
 });
+
 export type OccurrencesQuery = typeof OccurrencesQuery.Type;
+
 export const decodeOccurrencesQuery = Schema.decodeUnknownEffect(OccurrencesQuery);
 
 export const CalPartstatSchema = Schema.Literals([
@@ -283,6 +298,7 @@ export const OccurrenceWire = Schema.Struct({
   /** Present only for the owner, on events someone else organizes. Added in v1.2. */
   invitation: Schema.optional(InvitationStateWire),
 });
+
 export type OccurrenceWire = typeof OccurrenceWire.Type;
 
 /** An invitation a delivered message carried (C09): what a thread's RSVP actions answer. */
@@ -299,6 +315,7 @@ export const MessageInvitationWire = Schema.Struct({
   end: CalTimeSchema,
   cancelled: Schema.Boolean,
 });
+
 export type MessageInvitationWire = typeof MessageInvitationWire.Type;
 
 export const MessageInvitationsResponse = Schema.Struct({
@@ -330,6 +347,7 @@ export const LocationSuggestion = Schema.Struct({
   longitude: Schema.optional(Schema.Number),
   providerId: Schema.optional(Schema.String),
 });
+
 export type LocationSuggestion = typeof LocationSuggestion.Type;
 
 /** Queue payload asking a consumer to refresh an external subscription (outbox topic `calendar.subscription.refresh`). */
@@ -340,10 +358,12 @@ export const CalendarRefreshMessage = Schema.Struct({
   calendarSpaceId: Schema.String,
   calendarId: Schema.String,
 });
+
 export type CalendarRefreshMessage = typeof CalendarRefreshMessage.Type;
 
 /** Read models served by the CalendarDO (C01, C05–C08, C10). Private kinds are owner-only in the authority. */
 const ReadZone = { viewerZone: Schema.optional(Schema.String) };
+
 export const CalendarReadQuery = Schema.Union([
   Schema.Struct({ type: Schema.Literal("Calendars") }),
   Schema.Struct({ type: Schema.Literal("Preferences") }),
@@ -390,7 +410,9 @@ export const CalendarReadQuery = Schema.Union([
     deliveryId: Schema.String,
   }),
 ]);
+
 export type CalendarReadQuery = typeof CalendarReadQuery.Type;
+
 export const decodeCalendarReadQuery = Schema.decodeUnknownEffect(CalendarReadQuery);
 
 /**
@@ -451,6 +473,7 @@ export type CalendarInternalQuery =
 
 /** Everything the CalendarDO `execute`/`read` RPC accepts. */
 export type CalendarAuthorityCommand = CalendarCommand | CalendarInternalCommand;
+
 export type CalendarAuthorityQuery = CalendarReadQuery | CalendarInternalQuery;
 
 /**

@@ -7,6 +7,7 @@ const setup = () => {
   const sql = new Sql(storage);
   migrate(sql, "kernel", KERNEL_MIGRATIONS);
   const clock = new TestClock();
+
   return { storage, sql, clock, kernel: new Kernel(sql, clock) };
 };
 
@@ -59,13 +60,16 @@ describe("durable kernel", () => {
     sql.tx(() =>
       kernel.consume("evt_1", "mbx_a", () => kernel.change("thread", "created", { id: 1 })),
     );
+
     const again = sql.tx(() =>
       kernel.consume("evt_1", "mbx_a", () => kernel.change("thread", "created", { id: 2 })),
     );
+
     expect(again.replayed).toBe(true);
     const page = kernel.changesSince(0, 10);
     expect(page.changes).toHaveLength(1);
     expect(page.cursor).toBe(1);
+
     for (let i = 0; i < 5; i++) kernel.change("x", "y", i);
     kernel.compactChanges(2);
     expect(kernel.changesSince(1, 10).expired).toBe(true);

@@ -1,4 +1,5 @@
 import type { CoreEnv } from "./env.ts";
+import { typeNameOf } from "./typename.ts";
 import { metric } from "./metrics.ts";
 
 // Storage accounting outside the mailbox authority (§12 blob quota): extracted parts, normalized
@@ -6,6 +7,7 @@ import { metric } from "./metrics.ts";
 // check adds these D1 totals (see `extraUsageBytes`).
 
 export type UsageOwner = "mailbox" | "user";
+
 export type UsageCategory = "parts" | "bodies" | "exports";
 
 export const recordUsage = async (
@@ -40,12 +42,15 @@ export const extraUsageBytes = async (
   )
     .bind(ownerKind, ownerId)
     .all<{ category: UsageCategory; bytes: number }>();
+
   const by = Object.fromEntries(rows.results.map((r) => [r.category, Number(r.bytes)])) as Partial<
     Record<UsageCategory, number>
   >;
+
   const parts = by.parts ?? 0;
   const bodies = by.bodies ?? 0;
   const exports = by.exports ?? 0;
+
   return { parts, bodies, exports, total: parts + bodies + exports };
 };
 
@@ -58,6 +63,7 @@ export const extraUsageBytes = async (
 // recorded while listing is never overwritten by a stale total; the next run retries that row.
 
 const RECOMPUTE_OWNERS_PER_RUN = 50;
+
 const RECOMPUTE_MAX_PAGES = 20;
 
 /** Bytes under `prefix` (optionally filtered), or null when the listing exceeds the page bound. */
@@ -68,12 +74,18 @@ const sumPrefix = async (
 ): Promise<number | null> => {
   let total = 0;
   let cursor: string | undefined;
+
   for (let page = 0; page < RECOMPUTE_MAX_PAGES; page++) {
-    const listed = await bucket.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
+    const listed = await bucket.list(
+      cursor ? { prefix, limit: 1000, cursor } : { prefix, limit: 1000 },
+    );
+
     for (const o of listed.objects) if (include(o.key)) total += o.size ?? 0;
+
     if (!listed.truncated) return total;
     cursor = listed.cursor;
   }
+
   return null;
 };
 
@@ -85,11 +97,13 @@ const actualUsage = async (
 ): Promise<Partial<Record<UsageCategory, number | null>>> => {
   if (ownerKind === "user")
     return { exports: await sumPrefix(env.EXPORTS, `t/${ownerId}/export/`) };
+
   const [bodies, sentBodies, parts] = await Promise.all([
     sumPrefix(env.PARTS, `t/${ownerId}/body/`),
     sumPrefix(env.PARTS, `t/${ownerId}/out/`, (key) => key.endsWith(".json")),
     sumPrefix(env.PARTS, `t/${ownerId}/part/`),
   ]);
+
   return { bodies: bodies === null || sentBodies === null ? null : bodies + sentBodies, parts };
 };
 
@@ -105,17 +119,21 @@ export const recomputeUsage = async (
   )
     .bind(ownerKind, ownerId)
     .all<{ category: UsageCategory; bytes: number; updated_at: number }>();
+
   const stored = new Map(rows.results.map((r) => [r.category, r]));
   const actual = await actualUsage(env, ownerKind, ownerId);
   let corrected = 0;
   let skipped = 0;
+
   for (const [category, bytes] of Object.entries(actual) as Array<[UsageCategory, number | null]>) {
     if (bytes === null) {
       skipped++;
       continue;
     }
+
     // A correct row is still re-stamped (compare-and-set), so the rotation moves on to other owners.
     const row = stored.get(category);
+
     const result = row
       ? await env.DIRECTORY.prepare(
           "UPDATE storage_usage SET bytes = ?, updated_at = ? WHERE owner_kind = ? AND owner_id = ? AND category = ? AND updated_at = ?",
@@ -129,11 +147,13 @@ export const recomputeUsage = async (
             .bind(ownerKind, ownerId, category, bytes, now)
             .run()
         : null;
+
     if (result?.meta.changes === 1 && Number(row?.bytes ?? 0) !== bytes) {
       corrected++;
       metric("usage.drift", bytes - Number(row?.bytes ?? 0), { category });
     }
   }
+
   return { corrected, skipped };
 };
 
@@ -151,8 +171,10 @@ export const sweepUsage = async (
   )
     .bind(limit)
     .all<{ owner_kind: UsageOwner; owner_id: string }>();
+
   let corrected = 0;
   let failed = 0;
+
   for (const o of owners.results) {
     try {
       corrected += (await recomputeUsage(env, o.owner_kind, o.owner_id, now)).corrected;
@@ -163,11 +185,13 @@ export const sweepUsage = async (
           level: "warn",
           op: "usage.recompute",
           ownerKind: o.owner_kind,
-          error: error instanceof Error ? error.name : typeof error,
+          error: error instanceof Error ? error.name : typeNameOf(error),
         }),
       );
     }
   }
+
   metric("usage.recomputed", owners.results.length, { corrected, failed });
+
   return { owners: owners.results.length, corrected, failed };
 };

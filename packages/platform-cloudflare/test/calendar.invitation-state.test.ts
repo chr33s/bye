@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { calendarRead } from "@bye/platform-cloudflare";
+import { type CalendarMessageInvitation, calendarRead } from "@bye/platform-cloudflare";
 import { makeTestCalendarStore } from "@bye/testing";
 
 // Invitation state for clients (C04/C09): which message carried which invitation, the occurrence
 // it concerns, and the owner's current answer — per occurrence as well as for the series.
 
 const START = Date.parse("2026-09-25T12:00:00Z");
+
 const GUEST = "usr_guest0000000000000000";
+
 const REF = { mailboxId: "mbx_owner", threadId: "thr_1" };
 
 const vevent = (lines: ReadonlyArray<string>) =>
@@ -42,6 +44,7 @@ const moved = (hour: string, sequence: number) =>
 
 const setup = () => {
   const ctx = makeTestCalendarStore({}, START);
+
   const receive = (deliveryId: string, ics: string) =>
     ctx.store.receiveInvitation({
       ingestionId: deliveryId,
@@ -49,12 +52,14 @@ const setup = () => {
       ics,
       sourceRef: { ...REF, deliveryId },
     });
+
   const lookup = (deliveryId: string, mailboxId = REF.mailboxId) =>
     (
       calendarRead(ctx.store, ctx.owner, { type: "Invitations", mailboxId, deliveryId }) as {
-        invitations: ReadonlyArray<Record<string, unknown>>;
+        invitations: ReadonlyArray<CalendarMessageInvitation>;
       }
     ).invitations;
+
   return { ...ctx, receive, lookup };
 };
 
@@ -105,6 +110,7 @@ describe("[C09] invitations by message", () => {
       from: Date.parse("2026-10-05T00:00:00Z"),
       to: Date.parse("2026-10-20T00:00:00Z"),
     });
+
     expect(occurrences.map((o) => o.invitation?.partstat)).toEqual([
       "ACCEPTED",
       "DECLINED",
@@ -120,12 +126,14 @@ describe("[C09] invitations by message", () => {
     const { store, owner, cmd, receive, lookup } = setup();
     receive("dlv_series", calendar(SERIES));
     const [series] = lookup("dlv_series");
+
     // Answer the 19 Oct occurrence, which has no exception of its own yet.
     const occurrenceKey = store.listOccurrences({
       actor: owner,
       from: Date.parse("2026-10-19T00:00:00Z"),
       to: Date.parse("2026-10-20T00:00:00Z"),
     })[0]!.key;
+
     store.respondToInvitation({
       commandId: cmd(),
       actor: owner,
@@ -193,10 +201,12 @@ describe("[C09] invitations by message", () => {
       grantee: GUEST,
       role: "read",
     });
+
     const window = {
       from: Date.parse("2026-10-05T00:00:00Z"),
       to: Date.parse("2026-10-06T00:00:00Z"),
     };
+
     expect(store.listOccurrences({ actor: owner, ...window })[0]?.invitation).toBeDefined();
     const shared = store.listOccurrences({ actor: GUEST, ...window });
     expect(shared).toHaveLength(1);

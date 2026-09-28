@@ -6,20 +6,22 @@ import { runStateDrill } from "../../drills/state-drill.ts";
 // Writer lease (§15.6 serialized deployments) and operator-only admin routes.
 
 const TOKEN = "state-token-0123456789abcdef";
+
 const ADMIN = "admin-token-0123456789abcdef";
 
 const backend = (admin: string | null = ADMIN) => {
   const storage = new MemoryDurableStorage();
   const puts = new Map<string, string>();
+
   const env: StateEnv = {
     STATE_TOKEN: TOKEN,
     STATE_ENCRYPTION_KEY: `v1:${"11".repeat(32)}`,
-    ...(admin ? { STATE_ADMIN_TOKEN: admin } : {}),
+    STATE_ADMIN_TOKEN: admin || undefined,
     BACKUPS: {
       put: async (k: string, v: string) => void puts.set(k, v),
       get: async (k: string) => (puts.has(k) ? { text: async () => puts.get(k)! } : null),
       list: async ({ prefix }) => ({
-        objects: [...puts.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })),
+        objects: [...puts.keys()].flatMap((key) => (key.startsWith(prefix) ? [{ key }] : [])),
       }),
       delete: async (keys) => {
         for (const k of Array.isArray(keys) ? keys : [keys]) puts.delete(k);
@@ -27,7 +29,9 @@ const backend = (admin: string | null = ADMIN) => {
     },
     STATE: { getByName: () => object },
   };
+
   const object = new StateStoreObject({ storage: storage as never }, env);
+
   const call = (path: string, init: RequestInit = {}, headers: Record<string, string> = {}) =>
     handleStateRequest(
       new Request(`https://state.test${path}`, {
@@ -40,6 +44,7 @@ const backend = (admin: string | null = ADMIN) => {
       }),
       env,
     );
+
   return { object, call };
 };
 
@@ -62,14 +67,17 @@ describe("state backend writer lease and admin routes", () => {
 
   it("exposes the lease over HTTP behind the bearer token", async () => {
     const { call } = backend();
+
     const a = await call("/state/locks/S/prod", {
       method: "POST",
       body: JSON.stringify({ holder: "a" }),
     });
+
     const b = await call("/state/locks/S/prod", {
       method: "POST",
       body: JSON.stringify({ holder: "b" }),
     });
+
     expect([a.status, b.status]).toEqual([200, 409]);
     expect((await call("/state/locks/S/prod?holder=b", { method: "DELETE" })).status).toBe(409);
     expect((await call("/state/locks/S/prod?holder=a", { method: "DELETE" })).status).toBe(204);
@@ -82,6 +90,7 @@ describe("state backend writer lease and admin routes", () => {
       (await call("/state/admin/snapshot", { method: "POST" }, { "x-bye-admin-token": "wrong" }))
         .status,
     ).toBe(403);
+
     // Path tricks the Durable Object normalizes away still require the admin secret.
     for (const path of [
       "/state//admin/snapshot",
@@ -91,6 +100,7 @@ describe("state backend writer lease and admin routes", () => {
     ]) {
       expect((await call(path, { method: "POST" })).status).toBe(403);
     }
+
     expect((await call("/state/%E0%A4%A/x", { method: "POST" })).status).toBe(400);
     expect(
       (await call("/state/admin/snapshot", { method: "POST" }, { "x-bye-admin-token": ADMIN }))
@@ -118,12 +128,10 @@ describe("state backend writer lease and admin routes", () => {
 
 describe("state Worker entry module", () => {
   it("exports only handlers and classes (workerd rejects primitive exports from the main module)", async () => {
-    const mod = (await import("../worker.ts")) as Record<string, unknown>;
+    const mod = await import("../worker.ts");
+
     for (const [name, value] of Object.entries(mod)) {
-      expect(
-        typeof value === "function" || (typeof value === "object" && value !== null),
-        `export ${name}`,
-      ).toBe(true);
+      expect(Object(value) === value, `export ${name}`).toBe(true);
     }
   });
 });

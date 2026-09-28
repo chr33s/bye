@@ -19,14 +19,17 @@ describe("§13 deployment egress inspection", () => {
     await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
     const upPort = (upstream.address() as { port: number }).port;
     const proxy = await startEgressProxy(["127.0.0.1"]);
+
     try {
       const script = `
         const ok = await fetch("http://127.0.0.1:${upPort}/").then(r => r.status, () => -1);
         const blocked = await fetch("http://telemetry.example.invalid/v1/traces").then(r => r.status, () => -1);
         console.log(JSON.stringify({ ok, blocked }));`;
+
       const { stdout } = await run(process.execPath, ["--input-type=module", "-e", script], {
         env: { ...process.env, ...proxyEnv(proxy.port) },
       });
+
       const result = JSON.parse(stdout.trim()) as { ok: number; blocked: number };
       expect(result.ok).toBe(200);
       expect(result.blocked).not.toBe(200);

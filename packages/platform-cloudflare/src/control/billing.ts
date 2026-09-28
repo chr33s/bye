@@ -1,4 +1,5 @@
 import { normalizeAddress } from "@bye/domain";
+import { Predicate } from "effect";
 import type { KernelClock } from "../durable/kernel.ts";
 import {
   hmacSha256,
@@ -13,7 +14,15 @@ import {
   untagVersion,
 } from "./crypto.ts";
 import { revokeAllCredentials } from "./auth.ts";
-import { audit, changesOf, type D1Like, type D1StatementLike, primary, q } from "./d1.ts";
+import {
+  audit,
+  changesOf,
+  type D1BatchResult,
+  type D1Like,
+  type D1StatementLike,
+  primary,
+  q,
+} from "./d1.ts";
 import type { ControlCommerce } from "./commerce.ts";
 import { guardD1 } from "./errors.ts";
 import { reject } from "@bye/contracts";
@@ -23,6 +32,7 @@ import { reject } from "@bye/contracts";
 // A browser "checkout success" redirect never grants access.
 
 export type PlanInterval = "monthly" | "annual";
+
 export type EntitlementStatus = "trialing" | "active" | "past_due" | "cancelled" | "expired";
 
 export interface EntitlementRecord {
@@ -119,6 +129,7 @@ export type BillingProcessorEvent =
     };
 
 export const WEBHOOK_TOLERANCE_MS = 5 * 60 * 1000;
+
 /** Webhook signing secrets shorter than this are treated as unset. */
 export const MIN_WEBHOOK_SECRET_LENGTH = 32;
 
@@ -131,14 +142,19 @@ export const verifyBillingSignature = async (
 ): Promise<boolean> => {
   // An empty or short secret would let anyone forge events: refuse to verify at all.
   if (!header || secret.length < MIN_WEBHOOK_SECRET_LENGTH) return false;
+
   const parts = Object.fromEntries(
     header.split(",").map((p) => p.trim().split("=") as [string, string]),
   );
+
   const t = Number(parts["t"]);
   const sig = parts["v1"];
+
   if (!Number.isFinite(t) || !sig) return false;
+
   if (Math.abs(nowMs - t * 1000) > WEBHOOK_TOLERANCE_MS) return false;
   const expected = toHex(await hmacSha256(secret, `${t}.${body}`));
+
   return timingSafeEqual(expected, sig);
 };
 
@@ -148,6 +164,7 @@ export const signBillingPayload = async (
   nowMs: number,
 ): Promise<string> => {
   const t = Math.floor(nowMs / 1000);
+
   return `t=${t},v1=${toHex(await hmacSha256(secret, `${t}.${body}`))}`;
 };
 
@@ -172,10 +189,14 @@ export class ControlBilling {
   /** Whether the organization currently has service. Trials lapse at trial_ends_at. */
   async isEntitled(orgId: string): Promise<boolean> {
     const e = await this.entitlement(orgId);
+
     if (!e) return false;
     const now = this.clock.now();
+
     if (e.status === "trialing") return e.trial_ends_at !== null && e.trial_ends_at > now;
+
     if (e.status === "active" || e.status === "past_due") return true;
+
     // Cancelled at period end keeps service until the paid period finishes.
     return e.status === "cancelled" && e.period_end !== null && e.period_end > now;
   }
@@ -192,17 +213,20 @@ export class ControlBilling {
     if (!(await verifyBillingSignature(body, signature, secret, this.clock.now())))
       return reject("unauthenticated", "invalid webhook signature");
     let event: BillingProcessorEvent;
+
     try {
       event = JSON.parse(body) as BillingProcessorEvent;
     } catch {
       return reject("bad_request", "invalid webhook body");
     }
+
     if (
-      typeof event.id !== "string" ||
-      typeof event.orgId !== "string" ||
-      typeof event.type !== "string"
+      !Predicate.isString(event.id) ||
+      !Predicate.isString(event.orgId) ||
+      !Predicate.isString(event.type)
     )
       reject("bad_request", "invalid webhook event");
+
     return this.apply(event, body);
   }
 
@@ -215,6 +239,7 @@ export class ControlBilling {
       "SELECT 1 AS s FROM billing_events WHERE provider_event_id = ?",
       event.id,
     ).first();
+
     if (seen) return { applied: false, duplicate: true };
     const current = await this.entitlement(event.orgId);
     const now = this.clock.now();
@@ -223,18 +248,23 @@ export class ControlBilling {
     // receipt time says nothing about the processor's ordering (a genuine later event can carry a
     // `created` earlier than the moment we happened to write the previous one).
     const lastProcessorAt = current?.processor_event_at ?? null;
+
     const stale =
       lastProcessorAt !== null &&
       event.created < lastProcessorAt &&
       !["credit.granted", "checkout.completed", "refund.issued"].includes(event.type);
+
     const change = stale ? [] : this.transition(event, current, now);
+
     if (this.commerce && !stale) {
       if (event.type === "checkout.completed")
         change.push(...this.commerce.completeCheckoutStatements(event.sessionId, event.id));
+
       // First paid activation credits referral participants exactly once (A02).
       if (event.type === "subscription.activated" && current?.status !== "active")
         change.push(...(await this.commerce.referralCreditStatements(event.orgId, event.id)));
     }
+
     if (event.type === "refund.issued") {
       change.push(
         q(
@@ -248,7 +278,9 @@ export class ControlBilling {
         ),
       );
     }
-    let results: Array<unknown>;
+
+    let results: Array<D1BatchResult>;
+
     try {
       results = await this.db.batch([
         q(
@@ -266,6 +298,7 @@ export class ControlBilling {
       if (String(e).includes("UNIQUE")) return { applied: false, duplicate: true };
       throw e;
     }
+
     // The SQL ordering guard may have skipped a change that raced a newer event.
     return { applied: results.slice(1).some((r) => changesOf(r) > 0), duplicate: false };
   }
@@ -283,7 +316,10 @@ export class ControlBilling {
     now: number,
   ): Array<D1StatementLike> {
     type Column = Exclude<keyof EntitlementRecord, "org_id" | "updated_at" | "processor_event_at">;
-    const defaults: Record<Column, unknown> = {
+
+    type ColumnValue = string | number | null;
+
+    const defaults: Record<Column, ColumnValue> = {
       plan: "personal",
       interval: "annual",
       status: "expired",
@@ -293,10 +329,12 @@ export class ControlBilling {
       credits_cents: 0,
       short_address: 0,
     };
+
     const ordered =
       "(entitlements.processor_event_at IS NULL OR excluded.processor_event_at >= entitlements.processor_event_at)";
+
     const upsert = (
-      fields: Partial<Record<Column, unknown>>,
+      fields: Partial<Record<Column, ColumnValue>>,
       opts: {
         /** Only update an existing row (never create one). */
         readonly onlyWhen?: string;
@@ -309,6 +347,7 @@ export class ControlBilling {
       const row = { ...defaults, ...fields };
       const columns = Object.keys(defaults) as Array<Column>;
       const changed = Object.keys(fields) as Array<Column>;
+
       const sets = [
         ...changed.map((c) => `${c} = ${opts.set?.[c] ?? `excluded.${c}`}`),
         "updated_at = excluded.updated_at",
@@ -316,7 +355,9 @@ export class ControlBilling {
           ? "processor_event_at = MAX(COALESCE(entitlements.processor_event_at, excluded.processor_event_at), excluded.processor_event_at)"
           : "processor_event_at = excluded.processor_event_at",
       ];
+
       const where = [opts.unordered ? null : ordered, opts.onlyWhen ?? null].filter(Boolean);
+
       return q(
         this.db,
         `INSERT INTO entitlements (org_id, ${columns.join(", ")}, updated_at, processor_event_at) VALUES (?, ${columns.map(() => "?").join(", ")}, ?, ?)
@@ -327,6 +368,7 @@ export class ControlBilling {
         event.created,
       );
     };
+
     switch (event.type) {
       case "trial.started":
         return [
@@ -408,6 +450,7 @@ export class ControlLifecycle {
     const hash = await sha256Hex(
       `${secretFor(this.secrets, version, "forwarding-verification")}:${token}`,
     );
+
     return tagVersion(version, hash);
   }
 
@@ -416,10 +459,13 @@ export class ControlLifecycle {
     input: { reserveAddressDays: number; forwardingDays: number },
   ): Promise<{ reserved: ReadonlyArray<string> }> {
     const db = primary(this.db);
+
     const user = await q(db, "SELECT status FROM users WHERE id = ?", userId).first<{
       status: string;
     }>();
+
     if (!user || user.status === "closed") return reject("not_found", "account");
+
     const routes = (
       await q(
         db,
@@ -427,6 +473,7 @@ export class ControlLifecycle {
         userId,
       ).all<{ address: string }>()
     ).results.map((r) => r.address);
+
     const now = this.clock.now();
     await this.db.batch([
       q(this.db, "UPDATE users SET status = 'closed', closed_at = ? WHERE id = ?", now, userId),
@@ -462,6 +509,7 @@ export class ControlLifecycle {
         detail: { addresses: routes.length },
       }),
     ]);
+
     return { reserved: routes };
   }
 
@@ -472,13 +520,17 @@ export class ControlLifecycle {
     destination: string,
   ): Promise<{ verificationToken: string }> {
     const a = normalizeAddress(address);
+
     const r = await q(
       primary(this.db),
       "SELECT user_id, forwarding_until FROM address_reservations WHERE address = ?",
       a,
     ).first<{ user_id: string; forwarding_until: number | null }>();
+
     if (!r || r.user_id !== userId) return reject("not_found", "reservation");
+
     if (r.forwarding_until === null) reject("forbidden", "no forwarding entitlement");
+
     if (r.forwarding_until !== null && r.forwarding_until <= this.clock.now())
       reject("forbidden", "forwarding entitlement expired");
     const token = randomToken();
@@ -488,22 +540,28 @@ export class ControlLifecycle {
       `${normalizeAddress(destination)}#${await this.forwardingHash(token, this.secrets.current)}`,
       a,
     ).run();
+
     return { verificationToken: token };
   }
 
   async confirmForwarding(address: string, token: string): Promise<void> {
     const a = normalizeAddress(address);
+
     const r = await q(
       primary(this.db),
       "SELECT forwarding_to, forwarding_until FROM address_reservations WHERE address = ?",
       a,
     ).first<{ forwarding_to: string | null; forwarding_until: number | null }>();
+
     const [dest, stored] = (r?.forwarding_to ?? "").split("#");
+
     if (!dest || !stored) return reject("forbidden", "invalid verification");
     // Untagged hashes predate key rings and are version 1; an unknown version is a tagged error.
     const { version, value } = untagVersion(stored);
     const expected = untagVersion(await this.forwardingHash(token, version)).value;
+
     if (!timingSafeEqual(value, expected)) return reject("forbidden", "invalid verification");
+
     // A token issued inside the window must not activate forwarding after it has ended.
     if (r!.forwarding_until === null || r!.forwarding_until <= this.clock.now())
       return reject("forbidden", "forwarding entitlement expired");

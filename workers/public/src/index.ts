@@ -42,13 +42,15 @@ export interface PublicEnv {
 }
 
 const HANDLE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
 const SLUG = /^[a-z0-9][a-z0-9-]{0,127}$/;
+
 const TOKEN = /^[A-Za-z0-9_-]{16,128}$/;
 
 const csp = (imageOrigin: string) =>
   `default-src 'none'; img-src 'self' ${imageOrigin} data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`;
 
-const BASE_HEADERS: Readonly<Record<string, string>> = {
+const BASE_HEADERS = {
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
   "x-frame-options": "DENY",
@@ -61,13 +63,16 @@ const BASE_HEADERS: Readonly<Record<string, string>> = {
 /** Pin `img-src` to the image-proxy origin when it is configured. */
 const withImageOrigin = (response: Response, env: PublicEnv): Response => {
   let origin: string | null = null;
+
   try {
     origin = env.MAIL_ORIGIN ? new URL(env.MAIL_ORIGIN).origin : null;
   } catch {
     origin = null;
   }
+
   if (origin && response.headers.has("content-security-policy"))
     response.headers.set("content-security-policy", csp(origin));
+
   return response;
 };
 
@@ -98,8 +103,10 @@ const serveObject = async (
   media = false,
 ): Promise<Response> => {
   const object = await env.PUBLISHED.get(key);
+
   if (!object) return notFound();
   const stored = object.httpMetadata?.contentType?.split(";")[0]?.trim().toLowerCase();
+
   return new Response(object.body, {
     headers: {
       ...BASE_HEADERS,
@@ -136,29 +143,38 @@ class FormTooLarge extends Error {}
  */
 const form = async (request: Request): Promise<URLSearchParams> => {
   const type = request.headers.get("content-type") ?? "";
+
   if (!type.startsWith("application/x-www-form-urlencoded") || !request.body)
     return new URLSearchParams();
   const declared = request.headers.get("content-length");
+
   if (declared !== null && Number(declared) > FORM_MAX_BYTES) throw new FormTooLarge();
   const reader = request.body.getReader();
   const chunks: Array<Uint8Array> = [];
   let total = 0;
+
   for (;;) {
     const { done, value } = await reader.read();
+
     if (done) break;
     total += value.byteLength;
+
     if (total > FORM_MAX_BYTES) {
       await reader.cancel().catch(() => undefined);
       throw new FormTooLarge();
     }
+
     chunks.push(value);
   }
+
   const bytes = new Uint8Array(total);
   let offset = 0;
+
   for (const c of chunks) {
     bytes.set(c, offset);
     offset += c.byteLength;
   }
+
   return new URLSearchParams(new TextDecoder().decode(bytes));
 };
 
@@ -182,15 +198,17 @@ export const handlePublic = async (request: Request, env: PublicEnv): Promise<Re
       JSON.stringify({
         level: "error",
         op: "public",
-        error: error instanceof Error ? error.name : typeof error,
+        error: error instanceof Error ? error.name : "non-error",
       }),
     );
+
     return unavailable();
   }
 };
 
 const route = async (request: Request, env: PublicEnv): Promise<Response> => {
   const url = new URL(request.url);
+
   // Liveness for uptime checks: no bindings touched, no details, never cached.
   if (url.pathname === "/healthz")
     return new Response("ok", {
@@ -203,22 +221,28 @@ const route = async (request: Request, env: PublicEnv): Promise<Response> => {
   if (parts[0] === "s" && parts.length === 3) {
     const spaceId = parts[1]!;
     const token = parts[2]!;
+
     if (!TOKEN.test(token) || !/^[a-z0-9_-]{4,64}$/i.test(spaceId)) return notFound();
     const { success } = await env.PUBLIC_RATE_LIMIT.limit({ key: `share:${ip}` });
+
     if (!success) return tooMany();
     const view = await env.CORE.resolveShareLink(spaceId, token);
+
     return view ? renderShare(view) : notFound();
   }
 
   const handle = parts[0]?.startsWith("@") ? parts[0].slice(1) : undefined;
+
   if (!handle || !HANDLE.test(handle))
     return parts.length === 0 ? page("bye", "<h1>bye</h1>") : notFound();
 
   if (request.method === "GET") {
     if (parts.length === 1)
       return serveObject(env, publishedKey.index(handle), "text/html; charset=utf-8");
+
     if (parts[1] === "feed.xml" && parts.length === 2)
       return serveObject(env, publishedKey.feed(handle), "application/rss+xml; charset=utf-8");
+
     if (
       parts[1] === "media" &&
       parts.length === 3 &&
@@ -231,8 +255,10 @@ const route = async (request: Request, env: PublicEnv): Promise<Response> => {
         true,
       );
     }
+
     if (parts[1] === "confirm" && parts.length === 3 && TOKEN.test(parts[2]!)) {
       const result = await env.CORE.confirmSubscription(handle, parts[2]!);
+
       return page(
         "Subscription",
         result.ok ? "<h1>You're subscribed.</h1>" : "<h1>This link has expired.</h1>",
@@ -240,15 +266,18 @@ const route = async (request: Request, env: PublicEnv): Promise<Response> => {
         { "cache-control": "no-store" },
       );
     }
+
     if (parts[1] === "unsubscribe" && parts.length === 2) {
       // The human-visible link in the mail footer. GET never changes state (mail scanners prefetch
       // links); it shows a one-button form that posts to the RFC 8058 one-click endpoint below.
       const token = url.searchParams.get("token") ?? "";
       const who = (url.searchParams.get("email") ?? "").toLowerCase();
+
       if (!TOKEN.test(token) || !who)
         return page("Unsubscribe", "<h1>This link is invalid.</h1>", 400, {
           "cache-control": "no-store",
         });
+
       return page(
         "Unsubscribe",
         `<h1>Unsubscribe ${escapeHtml(who)} from @${escapeHtml(handle)}?</h1>
@@ -257,37 +286,47 @@ const route = async (request: Request, env: PublicEnv): Promise<Response> => {
         { "cache-control": "no-store", "referrer-policy": "no-referrer" },
       );
     }
+
     if (parts.length === 2 && SLUG.test(parts[1]!))
       return serveObject(env, publishedKey.post(handle, parts[1]!), "text/html; charset=utf-8");
+
     return notFound();
   }
 
   if (request.method === "POST") {
     const subscribing = parts[1] === "subscribe" && parts.length === 2;
+
     const limiter = subscribing
       ? (env.SUBSCRIBE_RATE_LIMIT ?? env.PUBLIC_RATE_LIMIT)
       : env.PUBLIC_RATE_LIMIT;
+
     const { success } = await limiter.limit({ key: `${subscribing ? "sub" : "unsub"}:${ip}` });
+
     if (!success) return tooMany();
     const data = await form(request);
     const address = (data.get("email") ?? "").trim().toLowerCase();
+
     if (subscribing) {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) || address.length > 254)
         return page("Subscribe", "<h1>Enter a valid email address.</h1>", 400);
       // Per-target bucket as well: many IPs aiming confirmation mail at one address are throttled.
       // A throttled target gets the ordinary answer (no signal that someone else just asked).
       const target = await limiter.limit({ key: `sub:${handle}:${address}` });
+
       if (target.success) await env.CORE.subscribe(handle, address);
+
       // Same response whether or not the address was already subscribed (no enumeration).
       return page("Subscribe", "<h1>Check your email to confirm.</h1>", 202, {
         "cache-control": "no-store",
       });
     }
+
     if (parts[1] === "unsubscribe" && parts.length === 2) {
       // RFC 8058 one-click unsubscribe posts here with address and token.
       const token = data.get("token") ?? url.searchParams.get("token") ?? "";
       const who = address || (url.searchParams.get("email") ?? "").toLowerCase();
       const result = await env.CORE.unsubscribe(handle, who, token);
+
       return page(
         "Unsubscribe",
         result.ok ? "<h1>You're unsubscribed.</h1>" : "<h1>This link is invalid.</h1>",
@@ -296,6 +335,7 @@ const route = async (request: Request, env: PublicEnv): Promise<Response> => {
       );
     }
   }
+
   return notFound();
 };
 

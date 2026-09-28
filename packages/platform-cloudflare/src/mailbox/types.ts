@@ -134,7 +134,7 @@ export type MailboxAfterSend =
   /** Send-and-pop: the reply resolves the thread's bubble without resurfacing it. */
   | { readonly _tag: "ClearBubble" };
 
-export interface MailboxDraftContent {
+export type MailboxDraftContent = {
   readonly to: ReadonlyArray<Address>;
   readonly cc: ReadonlyArray<Address>;
   readonly bcc: ReadonlyArray<Address>;
@@ -153,18 +153,18 @@ export interface MailboxDraftContent {
   readonly headers?: Readonly<Record<string, string>>;
   /** Contact groups expanded into To when the send intent is frozen (E17 recipient groups). */
   readonly groups?: ReadonlyArray<string>;
-}
+};
 
 export type MailboxDraftState = "open" | "sending" | "sent";
 
-export interface MailboxDraft {
+export type MailboxDraft = {
   readonly draftId: string;
   readonly threadId: string | null;
   readonly revision: number;
   readonly content: MailboxDraftContent;
   readonly state: MailboxDraftState;
   readonly updatedAt: number;
-}
+};
 
 export interface MailboxIdentity {
   readonly identityId: string;
@@ -226,7 +226,7 @@ export type MailboxSendResult =
     }
   | { readonly _tag: "Conflict"; readonly currentRevision: number };
 
-export interface MailboxUpload {
+export type MailboxUpload = {
   readonly uploadId: string;
   readonly filename: string;
   readonly contentType: string;
@@ -235,7 +235,7 @@ export interface MailboxUpload {
   readonly state: "reserved" | "uploading" | "complete" | "failed" | "aborted";
   readonly scanStatus: "pending" | "clean" | "infected" | "failed";
   readonly blobKey: string;
-}
+};
 
 /** Search candidate hydrated back into a result the caller may see (§8). */
 export interface MailboxSearchHit {

@@ -50,19 +50,23 @@ const guard = toRpcSync;
 export const makeMailboxRpcHandlers = (store: MailboxStore): LocalMailboxRpc => ({
   execute: (command) => guard(() => applyMailboxCommand(store, command) ?? null),
   view: (query) =>
-    guard((): MailViewPage =>
-      store.views.listView({
-        view: query.view,
-        ...(query.label ? { label: query.label } : {}),
-        ...(query.cursor ? { cursor: query.cursor } : {}),
-        ...(query.limit ? { limit: query.limit } : {}),
-      }),
-    ),
+    guard((): MailViewPage => {
+      let viewQuery: Parameters<typeof store.views.listView>[0] = { view: query.view };
+
+      if (query.label) viewQuery = { ...viewQuery, label: query.label };
+
+      if (query.cursor) viewQuery = { ...viewQuery, cursor: query.cursor };
+
+      if (query.limit) viewQuery = { ...viewQuery, limit: query.limit };
+
+      return store.views.listView(viewQuery);
+    }),
   thread: (threadId) => guard(() => store.views.getThread(threadId)),
   changes: (cursor) => guard(() => store.changes(cursor)),
   commitDelivery: (input) =>
     guard(() => {
       const r = store.ingest.commitDelivery(input);
+
       return {
         deliveryId: r.deliveryId,
         threadId: r.threadId,
@@ -85,11 +89,11 @@ const lift = <A>(op: string, f: () => MailboxRpcResult<A> | Promise<MailboxRpcRe
       r.ok
         ? Effect.succeed(r.value)
         : Effect.fail(
-            new MailboxRejected({
-              code: r.code,
-              message: r.message,
-              ...(r.details ? { details: r.details } : {}),
-            }),
+            new MailboxRejected(
+              r.details
+                ? { code: r.code, message: r.message, details: r.details }
+                : { code: r.code, message: r.message },
+            ),
           ),
     ),
   );

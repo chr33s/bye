@@ -8,21 +8,27 @@ const Id = Schema.String.check(
   Schema.isMaxLength(64),
   Schema.isPattern(/^[A-Za-z0-9_.:-]+$/),
 );
+
 const Text = (max: number) => Schema.String.check(Schema.isMaxLength(max));
+
 const EmailAddress = Schema.String.check(
   Schema.isMaxLength(320),
   Schema.isPattern(/^[^\s@<>()",;]+@[^\s@<>()",;]+$/),
 );
+
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
+
 const Revision = Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
 
 export const MailAddress = Schema.Struct({
   name: Schema.optional(Text(256)),
   address: EmailAddress,
 });
+
 export type MailAddress = typeof MailAddress.Type;
 
 export const MailDestination = Schema.Literals(["imbox", "feed", "paper-trail"]);
+
 export const MailViewName = Schema.Literals([
   "imbox",
   "feed",
@@ -37,6 +43,7 @@ export const MailViewName = Schema.Literals([
   "everything",
   "label",
 ]);
+
 export type MailViewName = typeof MailViewName.Type;
 
 export const MailSenderPolicy = Schema.Struct({
@@ -77,10 +84,12 @@ export const MailDraftContent = Schema.Struct({
       `at most ${MAX_MESSAGE_RECIPIENTS} recipients (to + cc + bcc)`,
   ),
 );
+
 export type MailDraftContent = typeof MailDraftContent.Type;
 
 /** `if-no-reply` bubbles are cancelled by a qualifying reply (E09); absent means `always`. */
 export const MailBubbleCondition = Schema.Literals(["always", "if-no-reply"]);
+
 export type MailBubbleCondition = typeof MailBubbleCondition.Type;
 
 export const MailAfterSend = Schema.Union([
@@ -101,6 +110,7 @@ const RuleConditions = Schema.Struct({
   subjectContains: Schema.optional(Text(256)),
   listId: Schema.optional(Text(256)),
 });
+
 const RuleActions = Schema.Struct({
   labels: Schema.optional(Schema.Array(Text(64))),
   destination: Schema.optional(MailDestination),
@@ -298,7 +308,9 @@ export const MailboxCommand = Schema.Union([
     mode: Schema.Literals(["copy", "move"]),
   }),
 ]);
+
 export type MailboxCommand = typeof MailboxCommand.Type;
+
 export type MailboxCommandTag = MailboxCommand["_tag"];
 
 export const decodeMailboxCommand = Schema.decodeUnknownEffect(MailboxCommand);
@@ -311,6 +323,7 @@ export const MailViewQuery = Schema.Struct({
     Schema.Finite.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 200 })),
   ),
 });
+
 export type MailViewQuery = typeof MailViewQuery.Type;
 
 export const MailBubble = Schema.Union([
@@ -372,6 +385,7 @@ export const MailViewPage = Schema.Struct({
     }),
   ),
 });
+
 export type MailViewPage = typeof MailViewPage.Type;
 
 export const MailSendResponse = Schema.Union([
@@ -436,6 +450,7 @@ export const MailUnifiedItem = Schema.Struct({
   ),
   thread: MailThreadSummary,
 });
+
 export const MailUnifiedPage = Schema.Struct({
   view: Schema.String,
   items: Schema.Array(MailUnifiedItem),
@@ -462,12 +477,14 @@ export const MailDraftCreateRequest = Schema.Struct({
   threadId: Schema.optional(Id),
   content: MailDraftContent,
 });
+
 export const MailDraftSaveRequest = Schema.Struct({
   mailboxId: Id,
   commandId: Id,
   expectedRevision: Revision,
   content: MailDraftContent,
 });
+
 export const MailSendRequest = Schema.Struct({
   mailboxId: Id,
   commandId: Id,

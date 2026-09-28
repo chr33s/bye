@@ -9,6 +9,7 @@ import {
 } from "@bye/mail-codec";
 
 const enc = (s: string) => new TextEncoder().encode(s);
+
 const dec = (b: Uint8Array) => new TextDecoder().decode(b);
 
 describe("MBOX", () => {
@@ -26,6 +27,7 @@ describe("MBOX", () => {
       },
       { envelopeFrom: "c@x.example", date: 0, bytes: enc("Subject: ünï\n\n\nblank lines\n\n") },
     ];
+
     const mbox = writeMbox(messages);
     const text = dec(mbox);
     expect(text).toContain("\n>From here on\n>>From quoted\n>>>From deeper\n");
@@ -43,6 +45,7 @@ describe("MBOX", () => {
     const mbox = writeMbox([
       { envelopeFrom: "a@x", date: 0, bytes: enc("A: b\r\n\r\nFrom x\r\n") },
     ]);
+
     expect(dec(readMbox(mbox, { crlf: true })[0]!.bytes)).toBe("A: b\r\n\r\nFrom x\r\n");
   });
 });
@@ -66,6 +69,7 @@ describe("vCard", () => {
   it("[E16] round-trips vCard 4.0 and 3.0 with escaping and folding", () => {
     for (const version of ["4.0", "3.0"] as const) {
       const text = serializeVCard(card, version);
+
       for (const line of text.split("\r\n"))
         expect(new TextEncoder().encode(line).length).toBeLessThanOrEqual(75);
       const [parsed] = parseVCards(text);
@@ -88,6 +92,7 @@ describe("vCard", () => {
       "EMAIL:mailto:only@example.com",
       "END:VCARD",
     ].join("\n");
+
     const cards = parseVCards(text);
     expect(cards).toHaveLength(2);
     expect(cards[0]!.fn).toBe("Jane Smith");

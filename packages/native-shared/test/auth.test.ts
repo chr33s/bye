@@ -1,3 +1,4 @@
+import type { JsonValue } from "../src/json.ts";
 import { describe, expect, it } from "vitest";
 import {
   base64Url,
@@ -44,12 +45,14 @@ class FakeAuthServer {
       redirect: q.get("redirect_uri")!,
       used: false,
     });
+
     return `${q.get("redirect_uri")}?code=${code}&state=${encodeURIComponent(q.get("state")!)}&iss=${encodeURIComponent(ORIGIN)}`;
   }
 
   private issue(family: string) {
     const refresh = `rt_${family}_${++this.n}_${"r".repeat(16)}`;
     this.families.get(family)!.current = refresh;
+
     return {
       status: 200,
       body: {
@@ -65,41 +68,56 @@ class FakeAuthServer {
   readonly fetch: TokenFetch = async (url, init) => {
     if (this.down) throw new TypeError("Network request failed");
     const form = new URLSearchParams(init.body);
-    const reply = (status: number, body: unknown) => ({
+
+    const reply = (status: number, body: JsonValue) => ({
       status,
       text: async () => JSON.stringify(body),
     });
+
     if (url === `${ORIGIN}/oauth/revoke`) {
       for (const f of this.families.values()) if (f.current === form.get("token")) f.revoked = true;
+
       return reply(200, {});
     }
+
     if (url !== `${ORIGIN}/oauth/token`) return reply(404, {});
+
     if (form.get("grant_type") === "authorization_code") {
       const code = this.codes.get(form.get("code") ?? "");
+
       if (!code || code.used || code.redirect !== form.get("redirect_uri"))
         return reply(400, { error: "invalid_grant" });
       code.used = true;
+
       if (codeChallengeS256(form.get("code_verifier") ?? "") !== code.challenge)
         return reply(400, { error: "invalid_grant" });
       const family = `f${this.families.size + 1}`;
       this.families.set(family, { current: "", revoked: false });
       const r = this.issue(family);
+
       return reply(r.status, r.body);
     }
+
     if (form.get("grant_type") === "refresh_token") {
       this.refreshCalls++;
       const token = form.get("refresh_token") ?? "";
       const family = /^rt_(f\d+)_/.exec(token)?.[1] ?? "";
       const f = this.families.get(family);
+
       if (!f || f.revoked) return reply(400, { error: "invalid_grant" });
+
       if (f.current !== token) {
         // Replay of a rotated refresh token: revoke the whole device session (RFC 9700 §4.14.2).
         f.revoked = true;
+
         return reply(400, { error: "invalid_grant" });
       }
+
       const r = this.issue(family);
+
       return reply(r.status, r.body);
     }
+
     return reply(400, { error: "unsupported_grant_type" });
   };
 }
@@ -112,11 +130,14 @@ class FakeStore implements SecureSessionStore {
   async read(key: string) {
     if (this.failRead) throw new SecureStoreError(this.failRead, "-25308");
     const v = this.data.get(key);
+
     if (v === undefined) throw new SecureStoreError("MissingCredential");
+
     return v;
   }
   async write(key: string, value: string) {
     this.writes++;
+
     if (this.failWrite) throw new SecureStoreError(this.failWrite);
     this.data.set(key, value);
   }
@@ -130,6 +151,10 @@ const setup = (options: { persist?: boolean; redirectUri?: string } = {}) => {
   const store = new FakeStore();
   let now = Date.UTC(2026, 8, 25, 12);
   const opened: Array<string> = [];
+  const persistOption: PersistOption = {};
+
+  if (options.persist === false) persistOption.persist = false;
+
   const make = () =>
     new SessionClient({
       instance: testInstance(ORIGIN),
@@ -139,8 +164,9 @@ const setup = (options: { persist?: boolean; redirectUri?: string } = {}) => {
       store,
       openBrowser: async (url) => void opened.push(url),
       now: () => now,
-      ...(options.persist === false ? { persist: false } : {}),
+      ...persistOption,
     });
+
   return { server, store, opened, make, advance: (ms: number) => (now += ms) };
 };
 
@@ -148,6 +174,7 @@ const signIn = async (env: ReturnType<typeof setup>, client = env.make()) => {
   await client.restore();
   const attempt = await client.beginSignIn();
   expect(await client.handleCallback(env.server.approve(attempt.url))).toBe(true);
+
   return client;
 };
 
@@ -222,11 +249,13 @@ describe("PKCE and callback validation", () => {
     // Replaying the same callback: the attempt is single-use, and the server code is consumed.
     expect(await client.handleCallback(callback)).toBe(true);
     const code = /code=([^&]+)/.exec(callback)![1]!;
+
     const replay = await env.server.fetch(`${ORIGIN}/oauth/token`, {
       method: "POST",
       headers: {},
       body: `grant_type=authorization_code&code=${code}&redirect_uri=${encodeURIComponent(CUSTOM_SCHEME_REDIRECT)}&code_verifier=${attempt.verifier}`,
     });
+
     expect(replay.status).toBe(400);
   });
 
@@ -274,9 +303,11 @@ describe("device session persistence", () => {
   it("[X01] DS07: an expired access token renews silently with rotation", async () => {
     const env = setup();
     const client = await signIn(env);
+
     const before = decodeSession(
       env.store.data.get(sessionKey(testInstance(ORIGIN).key))!,
     ).refreshToken;
+
     env.advance(16 * 60_000);
     expect(await client.accessToken()).toMatch(/^at_/);
     expect(
@@ -288,11 +319,13 @@ describe("device session persistence", () => {
     const env = setup();
     const client = await signIn(env);
     env.advance(16 * 60_000);
+
     const results = await Promise.all([
       client.accessToken(),
       client.onUnauthorized(),
       client.accessToken(),
     ]);
+
     expect(new Set(results).size).toBe(1);
     expect(env.server.refreshCalls).toBe(1);
     expect(client.state._tag).toBe("SignedIn");
@@ -383,9 +416,11 @@ describe("device session persistence", () => {
     const store = new FakeStore();
     const opened: Array<string> = [];
     const bodies: Array<URLSearchParams> = [];
+
     const fetch: TokenFetch = async (_url, init) => {
       const form = new URLSearchParams(init.body);
       bodies.push(form);
+
       return {
         status: 200,
         text: async () =>
@@ -398,6 +433,7 @@ describe("device session persistence", () => {
           }),
       };
     };
+
     const client = new SessionClient({
       instance: testInstance(ORIGIN),
       clientId: MOBILE_CLIENT_ID,
@@ -407,6 +443,7 @@ describe("device session persistence", () => {
       store,
       openBrowser: async (url) => void opened.push(url),
     });
+
     await client.restore();
     const attempt = await client.beginSignIn();
     const authorize = new URLSearchParams(opened[0]!.split("?")[1]);
@@ -440,3 +477,7 @@ describe("device session persistence", () => {
     expect(() => sessionKey("http://evil.test|http://evil.test")).toThrow();
   });
 });
+
+interface PersistOption {
+  persist?: boolean;
+}

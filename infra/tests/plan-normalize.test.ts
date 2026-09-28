@@ -12,13 +12,18 @@ const row = (
   resourceType: string,
   action: ExportedPlan["rows"][number]["action"],
   envBindings?: Array<string>,
-) => ({
-  fqn: `MailboxPlatform/${logicalId}`,
-  logicalId,
-  resourceType,
-  action,
-  ...(envBindings ? { envBindings } : {}),
-});
+) => {
+  let planRow: ExportedPlan["rows"][number] = {
+    fqn: `MailboxPlatform/${logicalId}`,
+    logicalId,
+    resourceType,
+    action,
+  };
+
+  if (envBindings) planRow = { ...planRow, envBindings };
+
+  return planRow;
+};
 
 const exported = (
   stage: string,
@@ -40,6 +45,7 @@ describe("real Alchemy plan → policy gate (§15.6/§15.10)", () => {
         row("Originals", "Cloudflare.R2.Bucket", "orphaned"),
       ]),
     );
+
     expect(plan.entries.map((e) => [e.type, e.action])).toEqual([
       ["Cloudflare.D1.Database", "delete"],
       ["Cloudflare.R2.Bucket", "delete"],
@@ -55,6 +61,7 @@ describe("real Alchemy plan → policy gate (§15.6/§15.10)", () => {
         row("PublicSite", "Cloudflare.Worker", "update", ["PUBLISHED", "ORIGINALS"]),
       ]),
     );
+
     expect(checkPlan("deploy", plan, []).some((v) => v.includes("ORIGINALS"))).toBe(true);
   });
 
@@ -90,6 +97,7 @@ describe("real Alchemy plan → policy gate (§15.6/§15.10)", () => {
           row("MailCore", "Cloudflare.Worker", action),
         ]),
       );
+
     expect(checkPlan("drift", plan("noop"), [])).toEqual([]);
     expect(checkPlan("drift", plan("update"), [])).toEqual([
       "drift: update Cloudflare.Worker MailCore",
@@ -100,6 +108,7 @@ describe("real Alchemy plan → policy gate (§15.6/§15.10)", () => {
     const ok = normalizePlan(
       exported("preview-42", [row("Originals", "Cloudflare.R2.Bucket", "delete")], "destroy"),
     );
+
     expect(checkPlan("destroy", ok, [])).toEqual([]);
     expect(
       checkPlan(
@@ -130,10 +139,12 @@ describe("real Alchemy plan → policy gate (§15.6/§15.10)", () => {
       row("B", "Cloudflare.Worker", "noop"),
       row("A", "Cloudflare.D1Database", "noop"),
     ]);
+
     const b = exported("prod", [
       row("A", "Cloudflare.D1Database", "noop"),
       row("B", "Cloudflare.Worker", "noop"),
     ]);
+
     expect(canonicalPlan(a)).toBe(canonicalPlan(b));
     expect(resourceIdentities(a).map((r) => r.type)).toEqual([
       "Cloudflare.D1.Database",

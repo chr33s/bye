@@ -13,13 +13,16 @@ import {
 // ever sees a short-lived authorization code on its registered callback.
 
 export const DESKTOP_CLIENT_ID = "bye-desktop";
+
 /** iOS/Android: same PKCE device-session flow, registered as its own client. */
 export const MOBILE_CLIENT_ID = "bye-mobile";
+
 export const CUSTOM_SCHEME_REDIRECT = "bye://oauth/callback";
 
 export const loopbackRedirect = (port: number): string => {
   if (!Number.isInteger(port) || port < 1024 || port > 65535)
     throw new Error("invalid loopback port");
+
   return `http://127.0.0.1:${port}/oauth/callback`;
 };
 
@@ -39,6 +42,7 @@ export const ATTEMPT_TTL_MS = 10 * 60_000;
 /** An authorization callback URL (never navigation, never an instance handoff). */
 export const isAuthCallback = (url: string): boolean => {
   const parsed = parseUrl(url);
+
   return parsed !== null && isAllowedRedirect(parsed.base);
 };
 
@@ -71,6 +75,7 @@ export const createAuthorizationAttempt = (input: {
   const verifier = createCodeVerifier(random);
   const state = createState(random);
   const clientId = input.clientId ?? DESKTOP_CLIENT_ID;
+
   const url = withQuery(input.instance.endpoints.authorization, [
     ["response_type", "code"],
     ["client_id", clientId],
@@ -80,6 +85,7 @@ export const createAuthorizationAttempt = (input: {
     ["state", state],
     ["device_name", input.deviceName.slice(0, 64)],
   ]);
+
   return {
     id: state.slice(0, 8),
     instanceKey: input.instance.key,
@@ -114,22 +120,32 @@ export const parseCallback = (
   now: number = Date.now(),
 ): CallbackResult => {
   const parsed = parseUrl(url);
+
   if (!parsed) return { _tag: "Ignored", reason: "not-a-callback" };
   const normalized = parsed.base;
+
   if (!isAllowedRedirect(normalized)) return { _tag: "Ignored", reason: "not-a-callback" };
+
   if (!attempt) return { _tag: "Ignored", reason: "no-attempt" };
+
   if (normalized !== attempt.redirectUri) return { _tag: "Ignored", reason: "not-a-callback" };
   const state = parsed.query.get("state") ?? "";
+
   if (!constantTimeEqual(state, attempt.state))
     return { _tag: "Ignored", reason: "state-mismatch" };
   // RFC 9207 §2.4: a missing or different `iss` means the response may come from another
   // instance's authorization server; nothing from it is used, not even an error.
   const iss = parsed.query.get("iss");
+
   if (iss === undefined) return { _tag: "Invalid", reason: "missing issuer" };
+
   if (iss !== attempt.issuer) return { _tag: "Invalid", reason: "issuer mismatch" };
+
   if (now > attempt.expiresAt) return { _tag: "Invalid", reason: "expired attempt" };
   const error = parsed.query.get("error");
+
   if (error) return { _tag: "Denied", error };
+
   // Tokens must never arrive on the callback URL (RFC 9700 §2.1.2).
   if (
     parsed.query.has("access_token") ||
@@ -138,8 +154,11 @@ export const parseCallback = (
   ) {
     return { _tag: "Invalid", reason: "tokens in callback" };
   }
+
   const code = parsed.query.get("code");
+
   if (!code || code.length < 8 || code.length > 512)
     return { _tag: "Invalid", reason: "missing code" };
+
   return { _tag: "Code", code };
 };

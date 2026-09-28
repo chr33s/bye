@@ -25,7 +25,11 @@ const RAWTEXT = new Set([
   "plaintext",
 ]);
 
-const NAMED_ENTITIES: Readonly<Record<string, string>> = {
+interface NamedEntityTable {
+  readonly [name: string]: string;
+}
+
+const NAMED_ENTITIES: NamedEntityTable = {
   amp: "&",
   lt: "<",
   gt: ">",
@@ -66,6 +70,7 @@ export const decodeHtmlEntities = (text: string): string =>
         body[1] === "x" || body[1] === "X"
           ? parseInt(body.slice(2), 16)
           : parseInt(body.slice(1), 10);
+
       if (
         !Number.isFinite(code) ||
         code <= 0 ||
@@ -73,14 +78,18 @@ export const decodeHtmlEntities = (text: string): string =>
         (code >= 0xd800 && code <= 0xdfff)
       )
         return "\ufffd";
+
       return String.fromCodePoint(code);
     }
+
     const named = NAMED_ENTITIES[body] ?? NAMED_ENTITIES[body.toLowerCase()];
+
     return named ?? match;
   });
 
 const escapeText = (text: string): string =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 const escapeAttr = (text: string): string => escapeText(text).replace(/"/g, "&quot;");
 
 /** Tolerant HTML tokenizer. Never throws; unknown constructs become text or are skipped. */
@@ -88,6 +97,7 @@ export const tokenizeHtml = (html: string): Array<HtmlToken> => {
   const tokens: Array<HtmlToken> = [];
   const len = html.length;
   let i = 0;
+
   while (i < len) {
     if (html.startsWith("<!--", i)) {
       const end = html.indexOf("-->", i + 4);
@@ -95,12 +105,14 @@ export const tokenizeHtml = (html: string): Array<HtmlToken> => {
       i = end < 0 ? len : end + 3;
       continue;
     }
+
     if (html[i] === "<" && (html[i + 1] === "!" || html[i + 1] === "?")) {
       const end = html.indexOf(">", i);
       tokens.push({ type: "comment" });
       i = end < 0 ? len : end + 1;
       continue;
     }
+
     if (html[i] === "<" && html[i + 1] === "/" && /[A-Za-z]/.test(html[i + 2] ?? "")) {
       const end = html.indexOf(">", i);
       const name = /^[A-Za-z][A-Za-z0-9:-]*/.exec(html.slice(i + 2))?.[0] ?? "";
@@ -108,50 +120,64 @@ export const tokenizeHtml = (html: string): Array<HtmlToken> => {
       i = end < 0 ? len : end + 1;
       continue;
     }
+
     if (html[i] === "<" && /[A-Za-z]/.test(html[i + 1] ?? "")) {
       let j = i + 1;
+
       while (j < len && /[A-Za-z0-9:-]/.test(html[j]!)) j++;
       const name = html.slice(i + 1, j).toLowerCase();
       const attrs: Array<readonly [string, string]> = [];
       const seen = new Set<string>();
       let selfClosing = false;
+
       while (j < len) {
         while (j < len && /[\s/]/.test(html[j]!)) {
           if (html[j] === "/" && html[j + 1] === ">") selfClosing = true;
           j++;
         }
+
         if (j >= len || html[j] === ">") break;
         let k = j;
+
         while (k < len && !/[\s/>=]/.test(html[k]!)) k++;
+
         if (k === j) k++;
         const attrName = html.slice(j, k).toLowerCase();
         j = k;
+
         while (j < len && /\s/.test(html[j]!)) j++;
         let value = "";
+
         if (html[j] === "=") {
           j++;
+
           while (j < len && /\s/.test(html[j]!)) j++;
           const quote = html[j];
+
           if (quote === '"' || quote === "'") {
             const end = html.indexOf(quote, j + 1);
             value = html.slice(j + 1, end < 0 ? len : end);
             j = end < 0 ? len : end + 1;
           } else {
             let e = j;
+
             while (e < len && !/[\s>]/.test(html[e]!)) e++;
             value = html.slice(j, e);
             j = e;
           }
         }
+
         if (!seen.has(attrName)) {
           seen.add(attrName);
           attrs.push([attrName, decodeHtmlEntities(value)]);
         }
       }
+
       i = j + 1;
       // Browsers ignore `/>` on raw-text elements: `<style/>` still opens a style block.
       const rawText = RAWTEXT.has(name);
       tokens.push({ type: "start", name, attrs, selfClosing: selfClosing && !rawText });
+
       if (rawText) {
         const closeRe = new RegExp(`</${name}[\\s>/]`, "i");
         const rest = html.slice(i);
@@ -162,25 +188,34 @@ export const tokenizeHtml = (html: string): Array<HtmlToken> => {
         const gt = html.indexOf(">", endIdx);
         i = found ? (gt < 0 ? len : gt + 1) : len;
       }
+
       continue;
     }
+
     let next = i + 1;
+
     while (next < len) {
       const at = html.indexOf("<", next);
+
       if (at < 0) {
         next = len;
         break;
       }
+
       const c = html[at + 1] ?? "";
+
       if (/[A-Za-z!?/]/.test(c)) {
         next = at;
         break;
       }
+
       next = at + 1;
     }
+
     tokens.push({ type: "text", text: decodeHtmlEntities(html.slice(i, next)) });
     i = next;
   }
+
   return tokens;
 };
 
@@ -373,10 +408,14 @@ const schemeOf = (url: string): string | undefined =>
 const sanitizeHref = (value: string): string | null => {
   const trimmed = value.trim();
   const stripped = stripForScheme(trimmed);
+
   if (stripped.startsWith("#")) return stripped;
   const scheme = schemeOf(stripped);
+
   if (!scheme || !["http", "https", "mailto", "tel"].includes(scheme)) return null;
+
   if (schemeOf(trimmed) !== scheme) return null;
+
   return trimmed;
 };
 
@@ -389,17 +428,25 @@ interface Ctx {
 const resolveImageUrl = (raw: string, ctx: Ctx): string | null => {
   const url = stripForScheme(raw.trim());
   const scheme = schemeOf(url);
+
   if (scheme === "cid") return ctx.opts.cid(url.slice(4).replace(/^<|>$/g, ""));
+
   if (scheme === "data") return SAFE_DATA_IMAGE.test(url) ? url.replace(/\s+/g, "") : null;
+
   if (scheme === "http" || scheme === "https") {
     if (isKnownTrackerUrl(url)) {
       ctx.trackers.push(url);
+
       return null;
     }
+
     ctx.remote.push(url);
+
     if (ctx.opts.blockRemoteImages) return null;
+
     return ctx.opts.proxyImage(url);
   }
+
   return null;
 };
 
@@ -415,10 +462,12 @@ const decodeCssEscapes = (css: string): string =>
     (_, hex: string | undefined, ch: string | undefined) => {
       if (hex !== undefined) {
         const code = parseInt(hex, 16);
+
         return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) && code !== 0x5c
           ? String.fromCodePoint(code)
           : "";
       }
+
       // `\<newline>` is a line continuation; an escaped backslash is dropped rather than emitted.
       return ch === undefined || ch === "\\" || /[\r\n\f]/.test(ch) ? "" : ch;
     },
@@ -429,6 +478,7 @@ const splitDeclarations = (text: string): Array<string> => {
   let depth = 0;
   let quote: string | undefined;
   let current = "";
+
   for (const ch of text) {
     if (quote) {
       if (ch === quote) quote = undefined;
@@ -440,9 +490,12 @@ const splitDeclarations = (text: string): Array<string> => {
       current = "";
       continue;
     }
+
     current += ch;
   }
+
   out.push(current);
+
   return out;
 };
 
@@ -460,39 +513,50 @@ const neutralizeComments = (css: string): string => css.replace(/\/\*/g, "/ *");
 
 const sanitizeDeclarations = (text: string, ctx: Ctx): string => {
   const kept: Array<string> = [];
+
   for (const decl of splitDeclarations(text)) {
     const colon = decl.indexOf(":");
+
     if (colon <= 0) continue;
     const prop = decl.slice(0, colon).trim().toLowerCase();
     let value = decl.slice(colon + 1).trim();
+
     if (!/^-?[a-z][a-z0-9-]*$/.test(prop)) continue;
+
     if (prop === "behavior" || prop.includes("binding") || DANGEROUS_CSS.test(value)) continue;
+
     if (STRING_IMAGE_FN.test(value)) continue;
+
     if (prop === "position" && /fixed|sticky/i.test(value)) continue;
     let ok = true;
     value = value.replace(/url\(\s*(['"]?)(.*?)\1\s*\)/gi, (_, _q: string, target: string) => {
       const resolved = resolveImageUrl(target, ctx);
+
       if (resolved === null) {
         ok = false;
+
         return "";
       }
+
       return `url("${resolved.replace(/["\\]/g, "")}")`;
     });
+
     if (!ok || /url\s*\(/i.test(value.replace(/url\("[^"]*"\)/g, ""))) continue;
     kept.push(`${prop}: ${value}`);
   }
+
   return neutralizeComments(kept.join("; "));
 };
 
-export const sanitizeCss = (
-  css: string,
-  opts: SanitizeOptions,
-): {
+export interface SanitizedCss {
   readonly css: string;
   readonly remoteImages: ReadonlyArray<string>;
   readonly blockedTrackers: ReadonlyArray<string>;
-} => {
+}
+
+export const sanitizeCss = (css: string, opts: SanitizeOptions): SanitizedCss => {
   const ctx: Ctx = { opts, trackers: [], remote: [] };
+
   return {
     css: sanitizeStyleBlock(css, ctx),
     remoteImages: ctx.remote,
@@ -507,6 +571,7 @@ const sanitizeStyleBlock = (css: string, ctx: Ctx): string => {
     .replace(/@charset[^;]*;?/gi, "")
     .replace(/@namespace[^;]*;?/gi, "")
     .replace(/@font-face\s*\{[^}]*\}/gi, "");
+
   return neutralizeComments(rebuildStylesheet(text, ctx))
     .replace(/<\//g, "<\\/")
     .replace(/[<>]/g, "");
@@ -528,10 +593,13 @@ const rebuildStylesheet = (text: string, ctx: Ctx): string => {
   let depth = 0;
   let complete = 0; // out length at the last point the sheet was balanced
   let quote: string | undefined;
+
   const prelude = (raw: string) => {
     const p = raw.trim();
+
     return /url\s*\(|expression\s*\(|javascript:|image-set|@import/i.test(p) ? "x-blocked" : p;
   };
+
   for (const c of text) {
     if (quote) {
       if (c === quote || c === "\n") quote = undefined;
@@ -545,11 +613,13 @@ const rebuildStylesheet = (text: string, ctx: Ctx): string => {
         const cut = buf.lastIndexOf(";");
         const decls = cut >= 0 ? buf.slice(0, cut) : "";
         const kept = decls.trim() ? sanitizeDeclarations(decls, ctx) : "";
+
         if (kept) out.push(`${kept}; `);
         out.push(`${prelude(cut >= 0 ? buf.slice(cut + 1) : buf)} { `);
       } else {
         out.push(`${prelude(buf)} { `);
       }
+
       depth++;
       buf = "";
     } else if (c === "}") {
@@ -557,10 +627,12 @@ const rebuildStylesheet = (text: string, ctx: Ctx): string => {
         buf = ""; // stray closing brace: drop it and whatever preceded it at top level
         continue;
       }
+
       const kept = buf.trim() ? sanitizeDeclarations(buf, ctx) : "";
       out.push(`${kept} }`);
       depth--;
       buf = "";
+
       if (depth === 0) {
         out.push("\n");
         complete = out.length;
@@ -569,16 +641,21 @@ const rebuildStylesheet = (text: string, ctx: Ctx): string => {
       buf += c;
     }
   }
+
   return out.slice(0, complete).join("");
 };
 
 const isHiddenOrPixel = (attrs: ReadonlyMap<string, string>): boolean => {
   const width = Number.parseFloat(attrs.get("width") ?? "");
   const height = Number.parseFloat(attrs.get("height") ?? "");
+
   if ((width <= 1 && height <= 1) || width === 0 || height === 0) return true;
   const style = (attrs.get("style") ?? "").toLowerCase().replace(/\s+/g, "");
+
   if (/display:none|visibility:hidden|opacity:0(?![.\d])/.test(style)) return true;
+
   if (/(^|;)width:[01]px/.test(style) && /(^|;)height:[01]px/.test(style)) return true;
+
   return false;
 };
 
@@ -587,9 +664,11 @@ export const sanitizeHtml = (html: string, opts: SanitizeOptions): SanitizedHtml
   const out: Array<string> = [];
   const skip: Array<string> = [];
   let inStyle = false;
+
   for (const token of tokenizeHtml(html)) {
     if (skip.length > 0) {
       const top = skip[skip.length - 1]!;
+
       if (
         token.type === "start" &&
         token.name === top &&
@@ -600,6 +679,7 @@ export const sanitizeHtml = (html: string, opts: SanitizeOptions): SanitizedHtml
       else if (token.type === "end" && token.name === top) skip.pop();
       continue;
     }
+
     switch (token.type) {
       case "comment":
         break;
@@ -608,62 +688,81 @@ export const sanitizeHtml = (html: string, opts: SanitizeOptions): SanitizedHtml
         break;
       case "end":
         if (token.name === "style") inStyle = false;
+
         if (ALLOWED_TAGS.has(token.name) && !VOID.has(token.name)) out.push(`</${token.name}>`);
         break;
       case "start": {
         const { name } = token;
+
         if (DROP_WITH_CONTENT.has(name)) {
           if (!token.selfClosing && !VOID.has(name)) skip.push(name);
           break;
         }
+
         if (!ALLOWED_TAGS.has(name)) break;
         const attrs = new Map(token.attrs);
         const kept: Array<string> = [];
+
         if (name === "img") {
           const src = attrs.get("src");
+
           if (!src) break;
           const scheme = schemeOf(stripForScheme(src.trim()));
+
           if ((scheme === "http" || scheme === "https") && isHiddenOrPixel(attrs)) {
             ctx.trackers.push(src.trim());
             break;
           }
+
           const resolved = resolveImageUrl(src, ctx);
+
           if (resolved === null) break;
           kept.push(`src="${escapeAttr(resolved)}"`);
         }
+
         if (name === "a") {
           const href = attrs.get("href");
           const safe = href === undefined ? null : sanitizeHref(href);
+
           if (safe !== null)
             kept.push(`href="${escapeAttr(safe)}"`, 'rel="noopener noreferrer"', 'target="_blank"');
         }
+
         for (const [attr, value] of token.attrs) {
           if (!ALLOWED_ATTRS.has(attr)) continue;
+
           if (attr === "style") {
             const css = sanitizeDeclarations(
               decodeCssEscapes(value.replace(/\/\*[\s\S]*?\*\//g, "")),
               ctx,
             );
+
             if (css) kept.push(`style="${escapeAttr(css)}"`);
             continue;
           }
+
           kept.push(`${attr}="${escapeAttr(value)}"`);
         }
+
         if (name === "style") {
           if (token.selfClosing) break;
+
           if (ctx.opts.allowStyleBlocks === false) {
             skip.push("style"); // drop the block and its content
             break;
           }
+
           inStyle = true;
           out.push("<style>");
           break;
         }
+
         out.push(`<${name}${kept.length ? ` ${kept.join(" ")}` : ""}>`);
         break;
       }
     }
   }
+
   return { html: out.join(""), blockedTrackers: ctx.trackers, remoteImages: ctx.remote };
 };
 
@@ -695,6 +794,7 @@ const BLOCK_TAGS = new Set([
   "address",
   "center",
 ]);
+
 const SKIP_TEXT = new Set([
   "script",
   "style",
@@ -712,13 +812,16 @@ const SKIP_TEXT = new Set([
 export const htmlToText = (html: string): string => {
   const parts: Array<string> = [];
   const skip: Array<string> = [];
+
   for (const token of tokenizeHtml(html)) {
     if (skip.length > 0) {
       const top = skip[skip.length - 1]!;
+
       if (token.type === "start" && token.name === top && !token.selfClosing) skip.push(top);
       else if (token.type === "end" && token.name === top) skip.pop();
       continue;
     }
+
     if (token.type === "text") parts.push(token.text.replace(/\s+/g, " "));
     else if (token.type === "start") {
       if (SKIP_TEXT.has(token.name) && !token.selfClosing) skip.push(token.name);
@@ -728,6 +831,7 @@ export const htmlToText = (html: string): string => {
       else if (BLOCK_TAGS.has(token.name)) parts.push("\n");
     } else if (token.type === "end" && BLOCK_TAGS.has(token.name)) parts.push("\n");
   }
+
   return parts
     .join("")
     .replace(/\u00a0/g, " ")
@@ -751,16 +855,21 @@ export const htmlToReadableText = (html: string): string => {
   const skip: Array<string> = [];
   let preDepth = 0;
   let link: { href: string; label: string } | undefined;
+
   for (const token of tokenizeHtml(html)) {
     if (skip.length > 0) {
       const top = skip[skip.length - 1]!;
+
       if (token.type === "start" && token.name === top && !token.selfClosing) skip.push(top);
       else if (token.type === "end" && token.name === top) skip.pop();
       continue;
     }
+
     if (token.type === "text") {
       const text = decodeHtmlEntities(token.text);
+
       if (link) link.label += text;
+
       if (preDepth > 0) emit(text, true);
       else emit(text.replace(/\s+/g, " "));
     } else if (token.type === "start") {
@@ -785,8 +894,10 @@ export const htmlToReadableText = (html: string): string => {
       } else if (BLOCK_TAGS.has(token.name)) emit("\n");
     }
   }
+
   // Tidy flowing lines only; preformatted lines keep their leading spaces.
   const lines: Array<{ text: string; pre: boolean }> = [{ text: "", pre: false }];
+
   for (const s of segments) {
     const parts = s.text.split("\n");
     parts.forEach((part, i) => {
@@ -796,6 +907,7 @@ export const htmlToReadableText = (html: string): string => {
       line.pre ||= s.pre && part.length > 0;
     });
   }
+
   return lines
     .map((l) =>
       (l.pre

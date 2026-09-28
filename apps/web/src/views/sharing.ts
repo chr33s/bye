@@ -1,3 +1,4 @@
+import type { JsonObject } from "@bye/native-shared/json";
 import { escapeHtml } from "@bye/domain";
 import { degrade } from "../core/degrade.ts";
 import { api, list, apiRaw, query } from "../api.ts";
@@ -9,13 +10,20 @@ import { textToHtml } from "../lib/compose.ts";
 // of exactly what becomes visible before they are created (§10); Bcc, private notes and comments
 // never appear in it.
 
+interface SharedThread {
+  readonly subject?: string;
+  readonly messages?: ReadonlyArray<JsonObject>;
+}
+
 export const renderSpaces = async (signal: AbortSignal): Promise<void> => {
-  const spaces = await list<Record<string, unknown>>("/v1/spaces", signal).catch(degrade([]));
+  const spaces = await list<JsonObject>("/v1/spaces", signal).catch(degrade([]));
+
   const org = h(
     "select",
     { "aria-label": "Organization" },
     (state.me?.organizationIds ?? []).map((id) => h("option", { value: id }, id)),
   );
+
   show(
     section(
       "spaces-title",
@@ -62,37 +70,34 @@ export const renderSpace = async (
 ): Promise<void> => {
   const id = encodeURIComponent(spaceId);
   const reload = () => void renderSpace(spaceId, threadId, signal);
+
   const [members, threads, collections, grants] = await Promise.all([
-    list<Record<string, unknown>>(`/v1/spaces/${id}/members`, signal).catch(degrade([])),
-    list<Record<string, unknown>>(`/v1/spaces/${id}/threads`, signal).catch(degrade([])),
-    list<Record<string, unknown>>(`/v1/spaces/${id}/collections`, signal).catch(degrade([])),
-    list<Record<string, unknown>>(`/v1/spaces/${id}/grants`, signal).catch(degrade([])),
+    list<JsonObject>(`/v1/spaces/${id}/members`, signal).catch(degrade([])),
+    list<JsonObject>(`/v1/spaces/${id}/threads`, signal).catch(degrade([])),
+    list<JsonObject>(`/v1/spaces/${id}/collections`, signal).catch(degrade([])),
+    list<JsonObject>(`/v1/spaces/${id}/grants`, signal).catch(degrade([])),
   ]);
+
   const memberId = h("input", { "aria-label": "User ID to add" });
   const collectionName = h("input", { "aria-label": "Collection name" });
   let threadPane: HTMLElement | null = null;
+
   if (threadId) {
     const tid = encodeURIComponent(threadId);
+
     const [thread, comments, links] = await Promise.all([
-      api<{ subject?: string; messages?: ReadonlyArray<Record<string, unknown>> }>(
-        "GET",
-        `/v1/spaces/${id}/threads/${tid}`,
-        undefined,
-        signal,
-      ).catch(
-        degrade({} as { subject?: string; messages?: ReadonlyArray<Record<string, unknown>> }),
+      api<SharedThread>("GET", `/v1/spaces/${id}/threads/${tid}`, undefined, signal).catch(
+        degrade<SharedThread>({}),
       ),
-      list<Record<string, unknown>>(`/v1/spaces/${id}/threads/${tid}/comments`, signal).catch(
-        degrade([]),
-      ),
-      list<Record<string, unknown>>(`/v1/spaces/${id}/threads/${tid}/public-links`, signal).catch(
-        degrade([]),
-      ),
+      list<JsonObject>(`/v1/spaces/${id}/threads/${tid}/comments`, signal).catch(degrade([])),
+      list<JsonObject>(`/v1/spaces/${id}/threads/${tid}/public-links`, signal).catch(degrade([])),
     ]);
+
     const comment = h("textarea", {
       rows: "3",
       "aria-label": "Private comment (never sent to recipients)",
     });
+
     threadPane = h(
       "article",
       { "aria-labelledby": "shared-thread-title" },
@@ -104,11 +109,7 @@ export const renderSpace = async (
           h(
             "li",
             {},
-            h(
-              "strong",
-              {},
-              text((m.from as Record<string, unknown> | undefined)?.address ?? m.from),
-            ),
+            h("strong", {}, text((m.from as JsonObject | undefined)?.address ?? m.from)),
             ` · ${formatDate(m.sentAt as number)} — `,
             text(m.snippet),
           ),
@@ -172,6 +173,7 @@ export const renderSpace = async (
       ),
     );
   }
+
   show(
     section(
       "space-title",
@@ -303,8 +305,9 @@ export const renderSpace = async (
 /** Share a mailbox thread's selected messages into a space (O04). */
 export const renderShare = async (params: URLSearchParams, signal: AbortSignal): Promise<void> => {
   const threadId = params.get("thread") ?? "";
+
   const [spaces, detail] = await Promise.all([
-    list<Record<string, unknown>>("/v1/spaces", signal).catch(degrade([])),
+    list<JsonObject>("/v1/spaces", signal).catch(degrade([])),
     api<{
       thread: { subject: string };
       deliveries: ReadonlyArray<{
@@ -315,6 +318,7 @@ export const renderShare = async (params: URLSearchParams, signal: AbortSignal):
       }>;
     }>("GET", `/v1/mailboxes/${mb()}/threads/${encodeURIComponent(threadId)}`, undefined, signal),
   ]);
+
   const space = h(
     "select",
     { "aria-label": "Space" },
@@ -322,9 +326,11 @@ export const renderShare = async (params: URLSearchParams, signal: AbortSignal):
       h("option", { value: text(s.spaceId ?? s.id) }, text(s.name ?? s.spaceId ?? s.id)),
     ),
   );
+
   const boxes = detail.deliveries.map((d) =>
     h("input", { type: "checkbox", value: d.deliveryId, checked: true }),
   );
+
   const future = h("input", { type: "checkbox" });
   const grantees = h("input", { "aria-label": "Also grant to (user IDs, comma-separated)" });
   show(
@@ -383,6 +389,7 @@ export const renderPublicLink = async (
 ): Promise<void> => {
   const spaceId = params.get("space") ?? "";
   const threadId = params.get("thread") ?? "";
+
   const preview = await api<{
     subject?: string;
     messages?: ReadonlyArray<{ from?: { address?: string }; sentAt?: number; snippet?: string }>;
@@ -392,6 +399,7 @@ export const renderPublicLink = async (
     undefined,
     signal,
   );
+
   const future = h("input", { type: "checkbox" });
   const expires = h("input", { type: "date", "aria-label": "Expires on (optional)" });
   const result = h("div", { role: "status", "aria-live": "polite" });
@@ -422,9 +430,10 @@ export const renderPublicLink = async (
                 spaceId,
                 threadId,
                 includeFuture: future.checked,
-                ...(expires.value ? { expiresAt: Date.parse(`${expires.value}T23:59:59`) } : {}),
+                expiresAt: expires.value ? Date.parse(`${expires.value}T23:59:59`) : undefined,
               }),
             );
+
             result.replaceChildren(
               h("p", {}, "Share this link. You can revoke it any time:"),
               h("code", { class: "token" }, r.url),
@@ -446,31 +455,36 @@ export const renderWorld = async (
   signal: AbortSignal,
 ): Promise<void> => {
   const reload = () => void renderWorld(postId, signal);
+
   const [world, posts] = await Promise.all([
-    api<Record<string, unknown>>("GET", "/v1/world", undefined, signal).catch(
-      degrade({} as Record<string, unknown>),
-    ),
-    list<Record<string, unknown>>("/v1/world/posts", signal).catch(degrade([])),
+    api<JsonObject>("GET", "/v1/world", undefined, signal).catch(degrade<JsonObject>({})),
+    list<JsonObject>("/v1/world/posts", signal).catch(degrade([])),
   ]);
+
   const editing = postId ? posts.find((p) => text(p.id) === postId) : undefined;
+
   const title = h("input", {
     required: true,
     value: text(editing?.title ?? ""),
     "aria-label": "Title",
   });
+
   const body = h(
     "textarea",
     { rows: "14", "aria-label": "Post (plain text)" },
     text(editing?.text ?? ""),
   );
+
   const media = h("input", {
     type: "file",
     accept: "image/png,image/jpeg,image/gif,image/webp",
     "aria-label": "Add an image",
   });
+
   const csv = h("input", { type: "file", accept: ".csv,text/csv", "aria-label": "Subscriber CSV" });
   const previewPane = h("div", { class: "preview", "aria-live": "polite" });
   const mediaKeys: Array<{ contentKey: string; name: string; contentType: string }> = [];
+
   // The editor is plain text: it is always escaped into paragraphs, never sent as raw HTML (a "<"
   // in prose must not switch modes). MailCore sanitizes stored HTML regardless.
   const payload = () => ({
@@ -479,6 +493,7 @@ export const renderWorld = async (
     text: body.value,
     media: mediaKeys,
   });
+
   show(
     section(
       "world-title",
@@ -579,13 +594,16 @@ export const renderWorld = async (
               type: "button",
               onclick: act("Image added", async () => {
                 const file = media.files?.[0];
+
                 if (!file) throw new Error("Choose an image");
+
                 const r = await apiRaw<{ contentKey: string; name?: string }>(
                   "PUT",
                   `/v1/world/media${query({ name: file.name })}`,
                   file,
                   file.type,
                 );
+
                 mediaKeys.push({
                   contentKey: r.contentKey,
                   name: r.name ?? file.name,
@@ -611,6 +629,7 @@ export const renderWorld = async (
                       "GET",
                       `/v1/world/posts/${encodeURIComponent(postId!)}/preview`,
                     );
+
                     // Author-controlled HTML is shown in a sandboxed frame, never injected into the app.
                     previewPane.replaceChildren(
                       h("iframe", {
@@ -643,6 +662,7 @@ export const renderWorld = async (
             type: "button",
             onclick: act("Invitations sent", async () => {
               const file = csv.files?.[0];
+
               if (!file) throw new Error("Choose a CSV file");
               await apiRaw("POST", "/v1/world/subscribers/import", await file.text(), "text/csv");
             }),

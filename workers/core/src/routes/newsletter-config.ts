@@ -4,7 +4,7 @@
 // can no longer be used. A usable configuration is never replaced here. The API key is write-only.
 import { Authorization, requireOperatorAccess, requireStepUp } from "@bye/application";
 import { ApiError, NewsletterConfigRequest } from "@bye/contracts";
-import { Effect } from "effect";
+import { Effect, Match } from "effect";
 import type { CoreEnv } from "../env.ts";
 import { route, type Route } from "../http.ts";
 import { configureNewsletterProvider, newsletterConfigView } from "../newsletter-config.ts";
@@ -18,6 +18,7 @@ export const newsletterConfigRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const principal = yield* requireUser("read");
         const isOperator = (yield* Authorization).isOperator(principal.userId);
+
         return yield* Effect.promise(() => newsletterConfigView(env, isOperator));
       }),
     ),
@@ -29,6 +30,7 @@ export const newsletterConfigRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const operator = yield* requireOperatorAccess();
         yield* requireStepUp("admin");
+
         const result = yield* Effect.promise(() =>
           configureNewsletterProvider(env, {
             provider: body.provider,
@@ -36,14 +38,16 @@ export const newsletterConfigRoutes: ReadonlyArray<Route<CoreEnv>> = [
             actorId: operator.userId,
           }),
         );
-        switch (result._tag) {
-          case "Rejected":
-            return yield* new ApiError({ code: result.code, message: result.message });
-          case "NeedsAttention":
-            return yield* new ApiError({ code: "unavailable", message: result.message });
-          case "Ready":
-            return yield* Effect.promise(() => newsletterConfigView(env, true));
-        }
+
+        return yield* Match.value(result).pipe(
+          Match.tagsExhaustive({
+            Rejected: (rejected) =>
+              new ApiError({ code: rejected.code, message: rejected.message }),
+            NeedsAttention: (attention) =>
+              new ApiError({ code: "unavailable", message: attention.message }),
+            Ready: () => Effect.promise(() => newsletterConfigView(env, true)),
+          }),
+        );
       }),
     ),
   ),

@@ -2,7 +2,7 @@
 // account-level WAF) is administered separately; this stack references it, never owns it.
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Config, Effect } from "effect";
+import { Config, Effect, Predicate } from "effect";
 import {
   CONSUMER_POLICY,
   DeadLetters,
@@ -13,7 +13,7 @@ import {
 } from "./resources/queues.ts";
 import { type DomainHost, domainStageMismatch, hostConfig } from "./resources/domain.ts";
 import { classifyStage, mailRoutingZone } from "./resources/stage.ts";
-import { makeSigMirror } from "./resources/sigmirror.ts";
+import * as SigMirror from "./resources/sigmirror.ts";
 import {
   ConfigCache,
   Directory,
@@ -22,12 +22,15 @@ import {
   Parts,
   Published,
 } from "./resources/storage.ts";
-import { makeCore, makePublic, makeRenderOrigin } from "./resources/workers.ts";
+import * as Workers from "./resources/workers.ts";
 import { selectState } from "./state/client.ts";
 
 export * from "./resources/storage.ts";
+
 export * from "./resources/durable.ts";
+
 export * from "./resources/queues.ts";
+
 export type { CoreEnv, PublicEnv } from "./resources/workers.ts";
 
 const optional = (name: string) => Config.String(name).pipe(Config.withDefault(""));
@@ -53,13 +56,16 @@ export default Alchemy.Stack(
   Effect.gen(function* () {
     const stageName = yield* Alchemy.Stage;
     const classified = classifyStage(stageName);
-    if (classified._tag === "Invalid") return yield* Effect.die(new Error(classified.reason));
+
+    if (Predicate.isTagged(classified, "Invalid"))
+      return yield* Effect.die(new Error(classified.reason));
     const stage = classified.stage;
 
     // Unset origins and hostnames default from DOMAIN per stage: prod uses DOMAIN itself, staging
     // uses staging.DOMAIN (infra/resources/domain.ts). The defaults are computed from STAGE, so it
     // must name this stage.
     const mismatch = (yield* domainStageMismatch)(stageName);
+
     if (mismatch !== undefined) return yield* Effect.die(new Error(mismatch));
     const domainHost = (name: DomainHost) => hostConfig(Config.String(name), name);
     const appDomain = (yield* domainHost("APP_DOMAIN")) || undefined;
@@ -85,6 +91,7 @@ export default Alchemy.Stack(
     yield* Exports.pipe(persistent);
     yield* Published.pipe(persistent);
     yield* ConfigCache.pipe(persistent);
+
     for (const name of QUEUE_NAMES) {
       yield* Queues[name].pipe(persistent);
       yield* DeadLetters[name].pipe(persistent);
@@ -92,23 +99,27 @@ export default Alchemy.Stack(
 
     // Private ClamAV mirror: the only signature egress point; scanners read it via an intercepted
     // service binding (SIGMIRROR), so scanner containers run with enableInternet: false.
-    const sigmirror = yield* makeSigMirror(stage).pipe(persistent);
+    const sigmirror = yield* SigMirror.makeSigMirror(stage).pipe(persistent);
     // Canary (§15.9): BYE_CANARY_PERCENT is computed by infra/policies/canary.ts in CI (100 when
     // class migrations changed). Unset/100 = full cutover.
     const canary = Number((yield* optional("BYE_CANARY_PERCENT")) || "100");
-    const core = yield* makeCore(
+
+    const core = yield* Workers.makeCore(
       stage,
       appDomain,
       sigmirror,
       stage.persistent && canary < 100 ? canary : undefined,
       install,
     ).pipe(persistent);
-    const site = yield* makePublic(stage, publicDomain, core, install).pipe(persistent);
+
+    const site = yield* Workers.makePublic(stage, publicDomain, core, install).pipe(persistent);
+
     const render =
-      install === undefined ? undefined : yield* makeRenderOrigin(stage, core, install);
+      install === undefined ? undefined : yield* Workers.makeRenderOrigin(stage, core, install);
 
     // Explicit consumer wiring for the native queue handler; one mechanism per subscription (§15.4).
     const coreScript = yield* UploadedScript("MailCoreUploaded", { workerName: core.workerName });
+
     for (const name of QUEUE_NAMES) {
       const queue = yield* Queues[name];
       const dlq = yield* DeadLetters[name];
@@ -141,6 +152,7 @@ export default Alchemy.Stack(
     // Routing takes over the zone's MX, so it only happens once BYE_MX_CUTOVER=approved is set for
     // the stage after the cutover checklist (RUNBOOK "MX cutover") has been signed off.
     const routedZone = mailRoutingZone(stage, mailZone, yield* optional("BYE_MX_CUTOVER"));
+
     if (routedZone !== undefined) {
       yield* Cloudflare.Email.Routing("MailRouting", { zone: routedZone, enabled: true }).pipe(
         persistent,
@@ -153,6 +165,7 @@ export default Alchemy.Stack(
     }
 
     let turnstileSitekey: Alchemy.Output<string> | undefined;
+
     // Onboarding installations (BYE_WORKERS_DEV_NAME) create their first account with the
     // single-use BOOTSTRAP_TOKEN instead, so their custom hostname adds no Turnstile widget: the
     // only zone-level change onboarding makes is MailCore's custom domain.
@@ -163,10 +176,11 @@ export default Alchemy.Stack(
         domains: [appDomain],
         mode: "managed",
       }).pipe(persistent);
+
       turnstileSitekey = widget.sitekey.as<string>();
     }
 
-    return {
+    const outputs = {
       stage: stage.name,
       coreUrl: core.url.as<string>(),
       publicUrl: site.url.as<string>(),
@@ -174,8 +188,12 @@ export default Alchemy.Stack(
       // (infra/probes/run.ts); set only while a gradual rollout (canary < 100) is in flight.
       coreWorkerName: core.workerName.as<string>(),
       coreVersionId: core.versionId.as<string | undefined>(),
-      ...(turnstileSitekey === undefined ? {} : { turnstileSitekey }),
-      ...(render === undefined ? {} : { renderUrl: render.url.as<string>() }),
     };
+
+    const withSitekey = turnstileSitekey !== undefined ? { ...outputs, turnstileSitekey } : outputs;
+
+    return render !== undefined
+      ? { ...withSitekey, renderUrl: render.url.as<string>() }
+      : withSitekey;
   }),
 );

@@ -22,16 +22,19 @@
 // reaches the places that rely on empty meaning off: previews and the ephemeral CI jobs get no
 // DOMAIN defaults (only the staging/prod jobs map it) and onboarding blanks it for installations
 // (executor FORCED_EMPTY).
-import { Config, ConfigProvider, Effect } from "effect";
+import { Config, ConfigProvider, Effect, Match } from "effect";
 
 const configError = (message: string) =>
   new Config.ConfigError(new ConfigProvider.SourceError({ message }));
 
 export const DOMAIN_ORIGINS = { APP_ORIGIN: "app", MAIL_RENDER_ORIGIN: "mail" } as const;
+
 export const DOMAIN_HOSTS = { APP_DOMAIN: "app", PUBLIC_DOMAIN: "" } as const;
+
 export const ONBOARDING_ORIGIN = "BYE_ONBOARDING_ORIGIN";
 
 export type DomainOrigin = keyof typeof DOMAIN_ORIGINS;
+
 export type DomainHost = keyof typeof DOMAIN_HOSTS | "MAIL_ZONE";
 
 const HOSTNAME =
@@ -40,17 +43,25 @@ const HOSTNAME =
 /** The base domain, or undefined when unset/empty. A scheme, port or path is refused, not stripped. */
 export const parseDomain = (raw: string | undefined): string | undefined => {
   const domain = (raw ?? "").trim().toLowerCase();
+
   if (domain === "") return undefined;
+
   if (!HOSTNAME.test(domain))
     throw new Error(`DOMAIN must be a bare hostname like example.com, got ${JSON.stringify(raw)}`);
+
   return domain;
 };
 
 /** The stage's base domain: DOMAIN for prod, staging.DOMAIN for staging, none otherwise. */
 export const stageBase = (domain: string, stage: string | undefined): string | undefined =>
-  stage === "prod" ? domain : stage === "staging" ? `staging.${domain}` : undefined;
+  Match.value(stage).pipe(
+    Match.when("prod", () => domain),
+    Match.when("staging", () => `staging.${domain}`),
+    Match.orElse(() => undefined),
+  );
 
 const host = (base: string, sub: string) => (sub === "" ? base : `${sub}.${base}`);
+
 export const originFor = (base: string, name: DomainOrigin) =>
   `https://${host(base, DOMAIN_ORIGINS[name])}`;
 
@@ -58,6 +69,7 @@ export const originFor = (base: string, name: DomainOrigin) =>
 export const hostFor = (domain: string, stage: string | undefined, name: DomainHost) => {
   if (name === "MAIL_ZONE") return stage === "prod" ? domain : undefined;
   const base = stageBase(domain, stage);
+
   return base === undefined ? undefined : host(base, DOMAIN_HOSTS[name]);
 };
 
@@ -71,18 +83,25 @@ export const domainDefaults = (
   env: Readonly<Record<string, string | undefined>>,
 ): Record<string, string> => {
   const domain = parseDomain(env.DOMAIN);
+
   if (domain === undefined) return {};
-  const out: Record<string, string> = {};
-  if (unset(env[ONBOARDING_ORIGIN])) out[ONBOARDING_ORIGIN] = `https://onboarding.${domain}`;
+  const out: Array<[string, string]> = [];
+
+  if (unset(env[ONBOARDING_ORIGIN])) out.push([ONBOARDING_ORIGIN, `https://onboarding.${domain}`]);
   const base = stageBase(domain, env.STAGE);
-  if (base === undefined) return out;
+
+  if (base === undefined) return Object.fromEntries(out);
+
   for (const name of Object.keys(DOMAIN_ORIGINS) as Array<DomainOrigin>)
-    if (unset(env[name])) out[name] = originFor(base, name);
+    if (unset(env[name])) out.push([name, originFor(base, name)]);
+
   for (const name of [...Object.keys(DOMAIN_HOSTS), "MAIL_ZONE"] as Array<DomainHost>) {
     const value = hostFor(domain, env.STAGE, name);
-    if (value !== undefined && unset(env[name])) out[name] = value;
+
+    if (value !== undefined && unset(env[name])) out.push([name, value]);
   }
-  return out;
+
+  return Object.fromEntries(out);
 };
 
 const domainConfig = Config.String("DOMAIN").pipe(
@@ -94,7 +113,9 @@ const domainConfig = Config.String("DOMAIN").pipe(
     }),
   ),
 );
+
 const stageConfig = Config.String("STAGE").pipe(Config.withDefault(""));
+
 const domainAndStage = Config.all({ domain: domainConfig, stage: stageConfig });
 
 /** Stack form of an origin: the explicit value, else derived from DOMAIN for prod/staging, else required. */
@@ -104,6 +125,7 @@ export const originConfig = (own: Config.Config<string>, name: DomainOrigin) =>
       domainAndStage.pipe(
         Config.mapEffect(({ domain, stage }) => {
           const base = domain === undefined ? undefined : stageBase(domain, stage);
+
           return base === undefined
             ? Effect.fail(configError(`${name} is not set (DOMAIN covers only prod and staging)`))
             : Effect.succeed(originFor(base, name));

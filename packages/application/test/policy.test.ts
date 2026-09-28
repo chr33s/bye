@@ -5,7 +5,7 @@ import {
   Forbidden,
   type OrgRoleName,
   Principal,
-  type PrincipalShape,
+  type PrincipalContext,
   requireOperatorAccess,
   requireOrgAdminAccess,
 } from "../src/index.ts";
@@ -13,7 +13,7 @@ import {
 // §7.1: organization-admin and operator checks go through the Authorization service, so the role
 // source (D1) and the operator allowlist are swappable facts, not hard-wired calls.
 
-const principal = (overrides: Partial<PrincipalShape> = {}): PrincipalShape => ({
+const principal = (overrides: Partial<PrincipalContext> = {}): PrincipalContext => ({
   userId: "usr_1",
   sessionId: "ses_1",
   kind: "user",
@@ -26,7 +26,7 @@ const principal = (overrides: Partial<PrincipalShape> = {}): PrincipalShape => (
 
 const provide = <A, E>(
   program: Effect.Effect<A, E, Principal | Authorization>,
-  p: PrincipalShape,
+  p: PrincipalContext,
   roles: Record<string, OrgRoleName>,
   operators: ReadonlyArray<string>,
 ) =>
@@ -44,7 +44,7 @@ const provide = <A, E>(
 
 const run = <A, E>(
   program: Effect.Effect<A, E, Principal | Authorization>,
-  p: PrincipalShape,
+  p: PrincipalContext,
   roles: Record<string, OrgRoleName>,
   operators: ReadonlyArray<string> = [],
 ) => Effect.runPromiseExit(provide(program, p, roles, operators));
@@ -52,7 +52,7 @@ const run = <A, E>(
 /** The typed failure of a denied check (fails the test if the check succeeds). */
 const denied = <A, E>(
   program: Effect.Effect<A, E, Principal | Authorization>,
-  p: PrincipalShape,
+  p: PrincipalContext,
   roles: Record<string, OrgRoleName>,
   operators: ReadonlyArray<string> = [],
 ) => Effect.runPromise(Effect.flip(provide(program, p, roles, operators)));
@@ -69,9 +69,11 @@ describe("[§7.1] Authorization service", () => {
         await run(requireOrgAdminAccess("org_1"), principal(), { "org_1:usr_1": "owner" }),
       ),
     ).toBe(true);
+
     const member = await denied(requireOrgAdminAccess("org_1"), principal(), {
       "org_1:usr_1": "member",
     });
+
     expect(member).toBeInstanceOf(Forbidden);
     expect(member).toMatchObject({ _tag: "Forbidden", reason: "administrator role required" });
     // Not a member via the principal, whatever the role table says.

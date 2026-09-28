@@ -51,12 +51,15 @@ export const senderInitials = (sender: string): string => {
   const name = sender.replace(/<[^>]*>/, "").trim() || sender.replace(/[<>]/g, "");
   const words = name.split(/[\s@._-]+/).filter(Boolean);
   const letters = words.length > 1 ? words.slice(0, 2).map((w) => w[0]) : [words[0]?.[0] ?? "?"];
+
   return letters.join("").toUpperCase();
 };
 
 export const avatarToneIndex = (sender: string): number => {
   let n = 0;
+
   for (const ch of sender.toLowerCase()) n = (n * 31 + ch.charCodeAt(0)) >>> 0;
+
   return n % AVATAR_TONES.length;
 };
 

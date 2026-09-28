@@ -61,24 +61,28 @@ export const SIGMIRROR_CLASS_MIGRATIONS: ReadonlyArray<ClassMigrationStep> = [
   { tag: "v1", newSqliteClasses: ["SigMirrorJob"] },
 ];
 
-export const CLASS_MIGRATIONS_BY_HOST: Readonly<Record<string, ReadonlyArray<ClassMigrationStep>>> =
-  {
-    MailCore: CLASS_MIGRATIONS,
-    SigMirror: SIGMIRROR_CLASS_MIGRATIONS,
-  };
+export const CLASS_MIGRATIONS_BY_HOST = {
+  MailCore: CLASS_MIGRATIONS,
+  SigMirror: SIGMIRROR_CLASS_MIGRATIONS,
+} satisfies Readonly<Record<string, ReadonlyArray<ClassMigrationStep>>>;
 
 /** Classes that must be exported by the host Worker after applying every step. */
 export const liveClasses = (steps: ReadonlyArray<ClassMigrationStep>): ReadonlyArray<string> => {
   const live = new Set<string>();
+
   for (const step of steps) {
     for (const c of step.newSqliteClasses ?? []) live.add(c);
+
     for (const r of step.renamedClasses ?? []) {
       live.delete(r.from);
       live.add(r.to);
     }
+
     for (const t of step.transferredClasses ?? []) live.add(t.to);
+
     for (const d of step.deletedClasses ?? []) live.delete(d);
   }
+
   return [...live].sort();
 };
 
@@ -102,22 +106,28 @@ export const compareManifests = (
     }
   });
   const tags = current.map((s) => s.tag);
+
   if (new Set(tags).size !== tags.length) issues.push({ message: "duplicate migration tags" });
+
   for (const step of current.slice(released.length)) {
     for (const d of step.deletedClasses ?? []) {
       if (!approvedDeletions.includes(d))
         issues.push({ message: `deleting class ${d} requires an approved decommission` });
     }
+
     for (const r of step.renamedClasses ?? []) {
       if (!approvedDeletions.includes(r.from))
         issues.push({ message: `renaming ${r.from} requires an approved decommission` });
     }
   }
+
   const before = new Set(liveClasses(released));
   const after = new Set(liveClasses(current));
+
   for (const c of before) {
     if (!after.has(c) && !approvedDeletions.includes(c))
       issues.push({ message: `class ${c} disappeared` });
   }
+
   return issues;
 };

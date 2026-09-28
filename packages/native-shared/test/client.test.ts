@@ -22,6 +22,7 @@ describe("shared client", () => {
   ) => {
     const calls: Array<{ url: string; init: Parameters<FetchLike>[1] }> = [];
     let n = 0;
+
     const client = (token?: string) =>
       new ByeClient({
         origin: "https://app.bye.test",
@@ -30,9 +31,11 @@ describe("shared client", () => {
         fetch: async (url, init) => {
           calls.push({ url, init });
           const { status, body } = respond(url, init);
+
           return { status, text: async () => JSON.stringify(body) };
         },
       });
+
     return { calls, client };
   };
 
@@ -61,6 +64,7 @@ describe("shared client", () => {
 
   it("[X01] web sessions use the same-origin cookie: no bearer, no manual Origin", async () => {
     const calls: Array<Parameters<FetchLike>[1] & { url: string }> = [];
+
     const web = new ByeClient({
       origin: "https://app.bye.test",
       cookie: true,
@@ -69,6 +73,7 @@ describe("shared client", () => {
         { status: 200, text: async () => "{}" }
       ),
     });
+
     await web.request("POST", "/v1/drafts", { a: 1 });
     expect(calls[0]).toMatchObject({
       url: "https://app.bye.test/v1/drafts",
@@ -80,6 +85,7 @@ describe("shared client", () => {
 
   it("[X02] raw bodies, query strings and API path prefixes", async () => {
     const calls: Array<{ url: string; init: Parameters<FetchLike>[1] }> = [];
+
     const cli = new ByeClient({
       origin: "http://localhost:8787/api/",
       token: "t",
@@ -89,6 +95,7 @@ describe("shared client", () => {
         { status: 200, headers: { get: () => "text/vcard" }, text: async () => "BEGIN:VCARD" }
       ),
     });
+
     expect(
       await cli.raw("PUT", "/v1/uploads/u/parts/1", new Uint8Array(3), "application/octet-stream", {
         query: { mailbox: "mbx_1", skip: undefined },
@@ -122,6 +129,7 @@ describe("shared client", () => {
           }),
       }),
     });
+
     await expect(stepUp.request("POST", "/v1/identities", {})).rejects.toMatchObject({
       status: 403,
       code: "forbidden",
@@ -132,6 +140,7 @@ describe("shared client", () => {
       status: 409,
       body: { error: { code: "too_late", message: "already submitted" } },
     }));
+
     await expect(h.client().cancelSend("mbx_1", "snd_1")).rejects.toMatchObject(
       new ByeApiError(409, "too_late", "already submitted"),
     );
@@ -139,12 +148,15 @@ describe("shared client", () => {
 
   it("[X01] offline drafts sync with revisions and keep both copies on conflict", async () => {
     const mem = new Map<string, string>();
+
     const kv: KeyValueStore = {
       getItem: async (k) => mem.get(k) ?? null,
       setItem: async (k, v) => void mem.set(k, v),
       removeItem: async (k) => void mem.delete(k),
     };
+
     const store = new DraftStore(kv);
+
     const content = {
       to: [{ address: "a@example.net" }],
       cc: [],
@@ -153,6 +165,7 @@ describe("shared client", () => {
       text: "long offline text",
       attachments: [],
     };
+
     const draft = {
       localId: "l1",
       mailboxId: "mbx_1",
@@ -163,19 +176,24 @@ describe("shared client", () => {
       state: "local" as const,
       updatedAt: 0,
     };
+
     await store.save(draft);
     const h = harness(() => ({ status: 200, body: { _tag: "Conflict", currentRevision: 4 } }));
+
     const merged = await syncDraft(h.client(), draft, async () => ({
       revision: 4,
       content: { ...content, text: "server" },
     }));
+
     expect(merged.state).toBe("conflict");
     expect(merged.conflictCopy?.text).toBe("long offline text");
     expect(merged.content.text).toBe("server");
     expect((await store.list()).map((d) => d.localId)).toEqual(["l1"]);
+
     const offline = harness(() => {
       throw new Error("offline");
     });
+
     expect(
       await syncDraft(offline.client(), { ...draft, draftId: null }, async () => ({
         revision: 0,
@@ -198,25 +216,30 @@ describe("shared client", () => {
       const seen: Array<string | undefined> = [];
       let current = "old";
       let refreshes = 0;
+
       const client = new ByeClient({
         origin: "https://app.bye.test",
         auth: {
           token: async () => current,
           onUnauthorized: async () => {
             refreshes++;
+
             if (refreshed) current = refreshed;
+
             return refreshed;
           },
         },
         fetch: async (_url, init) => {
           seen.push(init.headers.authorization);
           const status = statuses[seen.length - 1] ?? 200;
+
           return {
             status,
             text: async () => JSON.stringify(status === 200 ? { ok: true } : { error: "nope" }),
           };
         },
       });
+
       return { client, seen, refreshes: () => refreshes };
     };
 

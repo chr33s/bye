@@ -26,12 +26,14 @@ const setup = () => {
   space.init({ spaceId: "spc_1", kind: "team", organizationId: "org_1", ownerId: "usr_owner" });
   space.setMember("usr_owner", "usr_ann", "member");
   space.setMember("usr_owner", "usr_ben", "member");
+
   return { clock, storage, space };
 };
 
-const code = (f: () => unknown) => {
+const code = (f: () => void) => {
   try {
     f();
+
     return "ok";
   } catch (e) {
     return e instanceof Rejection ? e.code : String(e);
@@ -41,6 +43,7 @@ const code = (f: () => unknown) => {
 describe("shared threads and grants", () => {
   it("[O04] shares selected history and future replies without forwarding; revoke blocks later reads", () => {
     const { space, clock } = setup();
+
     const threadId = space.shareThread({
       actorId: "usr_ann",
       sourceMailboxId: "mbx_a",
@@ -50,6 +53,7 @@ describe("shared threads and grants", () => {
       grantees: ["usr_ben"],
       includeFuture: true,
     });
+
     expect(space.readThread("usr_ben", threadId).messages.map((m) => m.messageRef)).toEqual(["m1"]);
 
     clock.advance(1000);
@@ -73,6 +77,7 @@ describe("shared threads and grants", () => {
     const grant = space.sql.one<{ id: string }>(
       "SELECT id FROM grants WHERE grantee = 'usr_ben'",
     )!.id;
+
     const cursor = space.kernel.currentSeq();
     space.revoke("usr_ann", grant);
     expect(space.kernel.changesSince(cursor, 10).changes.map((c) => c.kind)).toContain("revoked");
@@ -84,6 +89,7 @@ describe("shared threads and grants", () => {
 
   it("[O04] replies are not propagated when future replies were not included", () => {
     const { space } = setup();
+
     const id = space.shareThread({
       actorId: "usr_ann",
       sourceMailboxId: "mbx_a",
@@ -93,12 +99,14 @@ describe("shared threads and grants", () => {
       grantees: ["usr_ben"],
       includeFuture: false,
     });
+
     expect(space.appendReply("evt_x", "mbx_a", "thr_2", msg("m2", 2)).accepted).toBe(false);
     expect(space.readThread("usr_ben", id).messages).toHaveLength(1);
   });
 
   it("[O04] membership suspension/removal blocks member-wide grants immediately", () => {
     const { space } = setup();
+
     const id = space.shareThread({
       actorId: "usr_ann",
       sourceMailboxId: "mbx_a",
@@ -108,6 +116,7 @@ describe("shared threads and grants", () => {
       grantees: [ALL_MEMBERS],
       includeFuture: true,
     });
+
     expect(space.canReadThread("usr_ben", id)).toBe(true);
     const v = space.membershipVersion();
     space.setMember("usr_owner", "usr_ben", null);
@@ -119,6 +128,7 @@ describe("shared threads and grants", () => {
 
   it("[O04] private comments stay inside the shared resource and never reach MIME sources", () => {
     const { space } = setup();
+
     const id = space.shareThread({
       actorId: "usr_ann",
       sourceMailboxId: "mbx_a",
@@ -128,6 +138,7 @@ describe("shared threads and grants", () => {
       grantees: ["usr_ben"],
       includeFuture: true,
     });
+
     space.addComment("usr_ben", id, "internal: they are price sensitive");
     expect(space.comments("usr_ann", id).map((c) => c.body)).toEqual([
       "internal: they are price sensitive",
@@ -141,10 +152,12 @@ describe("shared threads and grants", () => {
 
   it("[O04] hidden recipients never enter shared state even if a caller passes them", () => {
     const { space } = setup();
+
     const leaky = {
       ...msg("m1", 1),
       bcc: [{ address: "secret@example.test" }],
     } as SharedMessageInput;
+
     const id = space.shareThread({
       actorId: "usr_ann",
       sourceMailboxId: "mbx_a",
@@ -154,11 +167,13 @@ describe("shared threads and grants", () => {
       grantees: [],
       includeFuture: true,
     });
+
     expect(JSON.stringify(space.readThread("usr_ann", id))).not.toContain("secret@");
   });
 
   it("[E14] shared collections aggregate timelines and apply per-thread permissions", () => {
     const { space } = setup();
+
     const t1 = space.shareThread({
       actorId: "usr_ann",
       sourceMailboxId: "mbx_a",
@@ -168,6 +183,7 @@ describe("shared threads and grants", () => {
       grantees: [ALL_MEMBERS],
       includeFuture: true,
     });
+
     const t2 = space.shareThread({
       actorId: "usr_ann",
       sourceMailboxId: "mbx_a",
@@ -177,6 +193,7 @@ describe("shared threads and grants", () => {
       grantees: [],
       includeFuture: true,
     });
+
     const col = space.createCollection("usr_ann", "Project X", true);
     space.addToCollection("usr_ann", col, t1);
     space.addToCollection("usr_ann", col, t2);
@@ -207,6 +224,7 @@ describe("extensions / shared addresses", () => {
         }),
       ),
     ).toBe("forbidden");
+
     const r = space.receiveExtensionMail("evt_1", {
       address: "support@acme.test",
       sourceMailboxId: "mbx_ext",
@@ -214,6 +232,7 @@ describe("extensions / shared addresses", () => {
       subject: "Help",
       message: msg("h1", 1),
     });
+
     expect(r.enroll).toEqual({ board: "wfb_support", stage: "new" });
     expect(space.readThread("usr_ben", r.threadId).messages).toHaveLength(1);
     expect(space.canSendAs("usr_ann", "support@acme.test")).toBe(true);
@@ -226,6 +245,7 @@ describe("extensions / shared addresses", () => {
 describe("public thread links", () => {
   it("[O05] bearer link exposes the thread (and future replies if chosen), expires and revokes", async () => {
     const { space, clock } = setup();
+
     const id = space.shareThread({
       actorId: "usr_ann",
       sourceMailboxId: "mbx_a",
@@ -235,12 +255,15 @@ describe("public thread links", () => {
       grantees: [],
       includeFuture: true,
     });
+
     space.addComment("usr_ann", id, "private comment");
     const preview = space.previewPublicLink("usr_ann", id);
+
     const withFuture = await space.createPublicLink("usr_ann", id, {
       includeFuture: true,
       expiresAt: clock.now() + 60_000,
     });
+
     const snapshot = await space.createPublicLink("usr_ann", id, { includeFuture: false });
     await expect(
       space.createPublicLink("usr_eve", id, { includeFuture: true }),
@@ -284,6 +307,7 @@ describe("membership removal", () => {
     const space = new SharedSpaceStore(new MemoryDurableStorage(), new TestClock());
     space.init({ spaceId: "spc_1", kind: "team", organizationId: "org_1", ownerId: "usr_owner" });
     space.setMember("usr_owner", "usr_ben", "member");
+
     const threadId = space.shareThread({
       actorId: "usr_owner",
       sourceMailboxId: "mbx_a",
@@ -293,6 +317,7 @@ describe("membership removal", () => {
       grantees: ["usr_ben"],
       includeFuture: false,
     });
+
     expect(space.listThreads("usr_ben").map((t) => t.id)).toEqual([threadId]);
     space.setMember("usr_owner", "usr_ben", null);
     space.setMember("usr_owner", "usr_ben", "member");
@@ -301,6 +326,7 @@ describe("membership removal", () => {
 
   it("[§12] eraseMember revokes membership, grants and links without the owner check; idempotent", async () => {
     const { space } = setup();
+
     const threadId = space.shareThread({
       actorId: "usr_owner",
       sourceMailboxId: "mbx_a",
@@ -310,6 +336,7 @@ describe("membership removal", () => {
       grantees: ["usr_ben", "usr_ann"],
       includeFuture: true,
     });
+
     const link = await space.createPublicLink("usr_ben", threadId, { includeFuture: true });
     expect(space.eraseMember("usr_ben")).toEqual({ removed: true, grantsRevoked: 1 });
     expect(space.listMembers("usr_owner").map((m) => m.userId)).toEqual(["usr_ann", "usr_owner"]);
@@ -339,6 +366,7 @@ describe("membership removal", () => {
     const space = new SharedSpaceStore(new MemoryDurableStorage(), new TestClock());
     space.init({ spaceId: "spc_1", kind: "team", organizationId: "org_1", ownerId: "usr_owner" });
     space.setMember("usr_owner", "usr_m", "member");
+
     const threadId = space.shareThread({
       actorId: "usr_owner",
       sourceMailboxId: "mbx_a",
@@ -348,6 +376,7 @@ describe("membership removal", () => {
       grantees: ["usr_m"],
       includeFuture: true,
     });
+
     const link = await space.createPublicLink("usr_m", threadId, { includeFuture: true });
     expect((await space.resolvePublicLink(link.token)).subject).toBe("Plan");
     space.setMember("usr_owner", "usr_m", null);

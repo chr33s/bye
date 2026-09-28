@@ -22,6 +22,7 @@ export const registerServiceWorker = async (): Promise<void> => {
     location.reload();
   });
   const registration = await sw.register("/sw.js");
+
   if (registration.waiting && sw.controller) offer(registration.waiting);
   registration.addEventListener("updatefound", () => {
     const installing = registration.installing;

@@ -30,18 +30,24 @@ export const calNextReminder = (
 ): CalReminderJob | undefined => {
   if (offsetsMinutes.length === 0) return undefined;
   const maxOffset = Math.max(...offsetsMinutes) * 60_000;
+
   const occurrences = calExpandSeries(
     series,
     exceptions,
     { from: after, to: after + horizonMs + maxOffset, viewerZone },
     5000,
   );
+
   let best: CalReminderJob | undefined;
+
   for (const o of occurrences) {
     if (o.data.status === "cancelled") continue;
+
     for (const offset of offsetsMinutes) {
       const dueAt = o.startMs - offset * 60_000;
+
       if (dueAt <= after) continue;
+
       if (!best || dueAt < best.dueAt) {
         best = {
           eventId,
@@ -54,6 +60,7 @@ export const calNextReminder = (
       }
     }
   }
+
   return best;
 };
 
@@ -73,12 +80,15 @@ export const calReminderRecheckAt = (
   if (offsetsMinutes.length === 0) return undefined;
   const recheckAt = after + horizonMs;
   const later = (ms: number): boolean => ms > recheckAt;
+
   if (exceptions.some((e) => !e.cancelled && e.start && later(calInstant(e.start, viewerZone))))
     return recheckAt;
+
   const beyond = calExpand(
     { dtstart: series.dtstart, rule: series.rule, rdates: series.rdates ?? [] },
     { from: recheckAt, to: Number.MAX_SAFE_INTEGER / 2, viewerZone, maxOccurrences: 1 },
   );
+
   return beyond.some((o) => later(o.startMs)) ? recheckAt : undefined;
 };
 

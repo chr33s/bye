@@ -7,11 +7,13 @@ const queued = { draftId: "drf_1", baseRevision: 2, state: "queued-send" as cons
 describe("draft sync", () => {
   it("keeps both drafts when saves overlap", async () => {
     const data = new Map<string, string>();
+
     const store = new DraftStore({
       getItem: async (key) => data.get(key) ?? null,
       setItem: async (key, value) => void data.set(key, value),
       removeItem: async (key) => void data.delete(key),
     });
+
     const draft = (localId: string): NativeDraft => ({
       localId,
       mailboxId: "mbx_1",
@@ -36,6 +38,7 @@ describe("draft sync", () => {
         text: async () => JSON.stringify({ _tag: "Saved", revision: 3 }),
       }),
     });
+
     const pushed = await pushDraft(
       client,
       {
@@ -53,14 +56,17 @@ describe("draft sync", () => {
         attachments: [],
       },
     );
+
     expect(pushed).toEqual({ _tag: "Synced", draftId: "drf_1", revision: 3 });
     expect(syncedState(queued.state)).toBe("queued-send");
     expect(syncedState("local")).toBe("synced");
+
     const offline = new ByeClient({
       origin: "https://app.bye.test",
       cookie: true,
       fetch: async () => Promise.reject(new TypeError("offline")),
     });
+
     expect(
       await pushDraft(
         offline,

@@ -1,10 +1,12 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Predicate } from "effect";
 import { Log, LogLevel, Miniflare } from "miniflare";
 import { build } from "rolldown";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ControlAuth, ControlDirectory } from "@bye/platform-cloudflare";
+import { type JsonValue, mockAs } from "./harness.ts";
 import { COMPATIBILITY } from "../../../infra/resources/workers.ts";
 
 // Runtime validation in real workerd (via Miniflare): the production bundles, SQLite-backed
@@ -13,17 +15,20 @@ import { COMPATIBILITY } from "../../../infra/resources/workers.ts";
 // between the Node harness (which does not emulate RPC or isolates) and a deployed Worker.
 
 const ROOT = join(import.meta.dirname, "../../..");
+
 const APP = "https://app.bye.test";
+
 const QUEUES = ["ingest", "parse-scan", "index", "dispatch", "notify", "propagate", "publish"];
-const BINDING_FOR: Record<string, string> = {
-  ingest: "INGEST",
-  "parse-scan": "PARSE_SCAN",
-  index: "INDEX",
-  dispatch: "DISPATCH",
-  notify: "NOTIFY",
-  propagate: "PROPAGATE",
-  publish: "PUBLISH",
-};
+
+const BINDING_FOR = new Map([
+  ["ingest", "INGEST"],
+  ["parse-scan", "PARSE_SCAN"],
+  ["index", "INDEX"],
+  ["dispatch", "DISPATCH"],
+  ["notify", "NOTIFY"],
+  ["propagate", "PROPAGATE"],
+  ["publish", "PUBLISH"],
+]);
 
 const bundle = async (dir: string, worker: string): Promise<string> => {
   const file = join(dir, `${worker}.js`);
@@ -35,6 +40,7 @@ const bundle = async (dir: string, worker: string): Promise<string> => {
     output: { file, format: "esm" },
     logLevel: "silent",
   });
+
   return file;
 };
 
@@ -86,7 +92,7 @@ describe("MailCore in workerd", () => {
             INGRESS_JOURNALS: { className: "IngressJournalDO", useSQLite: true },
           },
           queueProducers: Object.fromEntries(
-            QUEUES.map((q) => [BINDING_FOR[q]!, { queueName: q }]),
+            QUEUES.map((q) => [BINDING_FOR.get(q)!, { queueName: q }]),
           ),
           queueConsumers: Object.fromEntries(
             QUEUES.map((q) => [
@@ -135,51 +141,61 @@ describe("MailCore in workerd", () => {
     await mf.ready;
 
     const d1 = await mf.getD1Database("DIRECTORY", "core");
+
     const migrations = readdirSync(join(ROOT, "infra/migrations/d1"))
       .filter((f) => f.endsWith(".sql"))
       .sort();
+
     for (const m of migrations) {
       const sql = readFileSync(join(ROOT, "infra/migrations/d1", m), "utf8").replace(
         /--[^\n]*\n/g,
         "\n",
       );
+
       const statements = sql
         .split(";")
         .map((s) => s.trim())
         .filter(Boolean);
+
       await d1.batch(statements.map((s) => d1.prepare(s)));
     }
+
     const account = await new ControlDirectory(d1 as never, clock).provisionPersonalAccount({
       address: "ana@bye.test",
       displayName: "Ana",
     });
+
     mailboxId = account.mailboxId;
     calendarId = account.calendarId;
     userId = account.userId;
     const origin = new URL(APP);
+
     const auth = new ControlAuth(d1 as never, clock, {
       rp: { rpId: origin.hostname, origins: [APP], requireUserVerification: true },
       totpKeys: { current: 1, keys: { 1: new Uint8Array(32) } },
       recoveryPepper: "workerd-session-key-0123456789abcdef",
     });
+
     cookie = `__Host-session=${(await auth.issueSession(account.userId, "workerd", true)).token}`;
   }, 120_000);
 
   afterAll(async () => {
     await mf?.dispose();
+
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
-  const call = async (method: string, path: string, body?: unknown) => {
-    const response = await mf.dispatchFetch(`${APP}${path}`, {
-      method,
-      headers: {
-        cookie,
-        ...(method === "GET" ? {} : { origin: APP, "content-type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+  const call = async (method: string, path: string, body?: JsonValue) => {
+    const headers =
+      method !== "GET" ? { cookie, origin: APP, "content-type": "application/json" } : { cookie };
+
+    const response = await mf.dispatchFetch(
+      `${APP}${path}`,
+      body !== undefined ? { method, headers, body: JSON.stringify(body) } : { method, headers },
+    );
+
     const text = await response.text();
+
     return { status: response.status, body: text ? JSON.parse(text) : null };
   };
 
@@ -189,8 +205,10 @@ describe("MailCore in workerd", () => {
     ms = 10_000,
   ): Promise<A> => {
     const end = Date.now() + ms;
+
     for (;;) {
       const value = await fn();
+
       if (ok(value) || Date.now() > end) return value;
       await new Promise((r) => setTimeout(r, 100));
     }
@@ -209,15 +227,19 @@ describe("MailCore in workerd", () => {
       "zanzibar body text",
       "",
     ].join("\r\n");
+
     const trigger = await mf.dispatchFetch(
       `${APP}/cdn-cgi/handler/email?from=stranger@example.net&to=ana@bye.test`,
       { method: "POST", body: raw },
     );
+
     expect(trigger.status, await trigger.clone().text()).toBe(200);
+
     const screener = await eventually(
       () => call("GET", `/v1/mailboxes/${mailboxId}/views/screener`),
       (r) => r.body?.items?.length === 1,
     );
+
     expect(screener.body.items[0].subject).toBe("Hello from workerd");
 
     const approve = await call("POST", `/v1/mailboxes/${mailboxId}/commands`, {
@@ -225,6 +247,7 @@ describe("MailCore in workerd", () => {
       commandId: "cmd_workerd_000000000001",
       decisions: [{ sender: "stranger@example.net", decision: "allow", destination: "imbox" }],
     });
+
     expect(approve.status).toBe(200);
     expect((await call("GET", `/v1/mailboxes/${mailboxId}/views/imbox`)).body.items).toHaveLength(
       1,
@@ -235,18 +258,21 @@ describe("MailCore in workerd", () => {
       () => call("GET", `/v1/mailboxes/${mailboxId}/search?q=zanzibar`),
       (r) => r.body?.results?.length === 1,
     );
+
     expect(search.body.results[0].kind).toBe("delivery");
   }, 60_000);
 
   it("[C01] calendar commands and occurrence queries run in the CalendarDO with overlap layout", async () => {
-    const stub = (await mf.getDurableObjectNamespace("CALENDARS", "core")).getByName(
-      calendarId,
-    ) as unknown as { provision(c: unknown): Promise<void> };
+    const stub: { provision(c: JsonValue): Promise<void> } = mockAs(
+      (await mf.getDurableObjectNamespace("CALENDARS", "core")).getByName(calendarId),
+    );
+
     await stub.provision({
       ownerId: userId,
       selfAddresses: ["ana@bye.test"],
       defaultZone: "Europe/London",
     });
+
     const created = await call("POST", `/v1/calendars/${calendarId}/commands`, {
       schemaVersion: 1,
       command: {
@@ -256,13 +282,16 @@ describe("MailCore in workerd", () => {
         color: "#1f3a5f",
       },
     });
+
     expect(created.status, JSON.stringify(created.body)).toBe(200);
-    const workCalendar = typeof created.body === "string" ? created.body : created.body.calendarId;
+    const workCalendar = Predicate.isString(created.body) ? created.body : created.body.calendarId;
+
     const at = (h: number, m: number) => ({
       kind: "timed",
       tzid: "Europe/London",
       local: { year: 2026, month: 10, day: 1, hour: h, minute: m, second: 0 },
     });
+
     for (const [i, [s0, e0]] of [
       [9, 10],
       [9, 11],
@@ -278,18 +307,23 @@ describe("MailCore in workerd", () => {
           end: at(e0!, 0),
         },
       });
+
       expect(r.status, JSON.stringify(r.body)).toBe(200);
     }
+
     const events = await call(
       "GET",
       `/v1/calendars/${calendarId}/events?from=2026-09-30T00:00:00Z&to=2026-10-03T00:00:00Z`,
     );
+
     expect(events.status).toBe(200);
+
     const occ = events.body.occurrences as Array<{
       startMs: number;
       columns?: number;
       column?: number;
     }>;
+
     expect(occ).toHaveLength(2);
     // 09:00 BST on 1 Oct = 08:00Z, and the two overlapping events get side-by-side columns.
     expect(new Date(occ[0]!.startMs).toISOString()).toBe("2026-10-01T08:00:00.000Z");
@@ -303,7 +337,9 @@ describe("MailCore in workerd", () => {
       address: "ana@bye.test",
       kind: "hosted",
     });
+
     expect(identity.status, JSON.stringify(identity.body)).toBe(200);
+
     const draft = await call("POST", "/v1/drafts", {
       mailboxId,
       commandId: "cmd_workerd_draft_00000001",
@@ -316,25 +352,29 @@ describe("MailCore in workerd", () => {
         attachments: [],
       },
     });
+
     expect(draft.status, JSON.stringify(draft.body)).toBe(201);
+
     const send = await call("POST", `/v1/drafts/${draft.body.draftId}/send`, {
       mailboxId,
       commandId: "cmd_workerd_send_000000001",
       revision: draft.body.revision,
       sendAt: Date.now() + 500,
     });
+
     expect(send.status, JSON.stringify(send.body)).toBe(202);
+
     // With the personal class off for the stage, the job is rejected explicitly (no silent fallback).
-    const mailbox = (await mf.getDurableObjectNamespace("MAILBOXES", "core")).getByName(
-      mailboxId,
-    ) as unknown as {
+    const mailbox: {
       sendJob(id: string): Promise<{ state: string; failure: { detail: string } | null } | null>;
-    };
+    } = mockAs((await mf.getDurableObjectNamespace("MAILBOXES", "core")).getByName(mailboxId));
+
     const job = await eventually(
       () => mailbox.sendJob(send.body.sendJobIds[0]),
       (j) => j?.state === "rejected" || j?.state === "accepted",
       20_000,
     );
+
     expect(job?.state).toBe("rejected");
     expect(job?.failure?.detail).toContain("personal is not enabled in this stage");
     const r2 = await mf.getR2Bucket("ORIGINALS", "core");
@@ -352,6 +392,7 @@ describe("MailCore in workerd", () => {
       html: "<p>published</p><script>x()</script>",
       text: "published",
     });
+
     expect(post.status, JSON.stringify(post.body)).toBe(201);
     const page = await mf.dispatchFetch("https://bye.test/@ana");
     const html = await page.text();
@@ -369,10 +410,12 @@ describe("MailCore in workerd", () => {
     // Corrupt Ana's catalog wake hint, then fire the 5-minute cron at a time whose rotation covers
     // her mailbox's shard: reconciliation must reach the real DO and rewrite the hint from its state.
     const d1 = await mf.getD1Database("DIRECTORY", "core");
+
     const row = await d1
       .prepare("SELECT shard FROM resource_catalog WHERE kind = 'mailbox' AND id = ?")
       .bind(mailboxId)
       .first<{ shard: number }>();
+
     expect(row).not.toBeNull();
     const bogus = 1;
     await d1
@@ -381,14 +424,18 @@ describe("MailCore in workerd", () => {
       .run();
     // shardsForRun: run = floor(t / 5min), shards [4·run mod 64, +4) — pick the run starting at hers.
     const time = Math.floor(row!.shard / 4) * 5 * 60_000;
+
     const res = await mf.dispatchFetch(
       `${APP}/cdn-cgi/handler/scheduled?cron=*/5+*+*+*+*&time=${time}`,
     );
+
     expect(res.status, await res.clone().text()).toBe(200);
+
     const after = await d1
       .prepare("SELECT next_wake_hint FROM resource_catalog WHERE kind = 'mailbox' AND id = ?")
       .bind(mailboxId)
       .first<{ next_wake_hint: number | null }>();
+
     expect(after!.next_wake_hint).not.toBe(bogus);
   });
 });

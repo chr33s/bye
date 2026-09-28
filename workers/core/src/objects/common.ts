@@ -32,13 +32,16 @@ export const flush = (env: CoreEnv, kernel: Parameters<typeof relayOutbox>[0], s
 export const setAlarmAt = async (storage: DurableObjectStorage, at: number | null) => {
   if (at === null) return;
   const current = await storage.getAlarm();
+
   if (current === null || current > at) await storage.setAlarm(Math.max(at, Date.now()));
 };
 
 /** Object name as provisioned by the directory (`getByName`). */
 export const nameOf = (ctx: DurableObjectState): string => {
   const name = ctx.id.name;
+
   if (!name) throw new Error("durable object must be addressed by name");
+
   return name;
 };
 

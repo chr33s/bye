@@ -23,6 +23,7 @@ export const EraseParamsSchema = Schema.Struct({
   worldHandle: Schema.optional(Schema.NullOr(Schema.String)),
   reason: Schema.optional(Schema.String),
 });
+
 export type EraseParams = typeof EraseParamsSchema.Encoded;
 
 /**
@@ -37,16 +38,23 @@ export class EraseWorkflow extends WorkflowEntrypoint<CoreEnv, EraseParams> {
     // Step results are Schema-encoded checkpoints (§7.4); names are unchanged from earlier releases.
     await promiseStep(step, "v1:tombstones", Schema.Boolean, async () => {
       await writeTombstone(env, "user", p.userId);
+
       for (const id of p.mailboxIds) await writeTombstone(env, "mailbox", id);
+
       // Closed + routes disabled before any content is removed, so no new mail is accepted.
       for (const id of p.mailboxIds) await fenceErasedMailbox(env, id);
+
       for (const id of p.calendarIds ?? []) await writeTombstone(env, "calendar", id);
+
       for (const spaceId of p.spaceIds ?? [])
         await writeTombstone(env, "space-member", spaceMemberTombstoneId(spaceId, p.userId));
+
       if (p.worldHandle)
         await writeTombstone(env, "world", worldTombstoneId(p.worldHandle, p.userId));
+
       return true;
     });
+
     for (const mailboxId of p.mailboxIds) {
       await promiseStep(
         step,
@@ -56,25 +64,30 @@ export class EraseWorkflow extends WorkflowEntrypoint<CoreEnv, EraseParams> {
         { retries: { limit: 5, delay: "30 seconds", backoff: "exponential" } },
       );
     }
+
     for (const calendarId of p.calendarIds ?? []) {
       await promiseStep(step, `v1:calendar:${calendarId}`, Schema.Boolean, () =>
         eraseCalendarContent(env, calendarId),
       );
     }
+
     for (const spaceId of p.spaceIds ?? []) {
       await promiseStep(step, `v1:space:${spaceId}`, Schema.Boolean, () =>
         eraseSpaceMembership(env, spaceId, p.userId),
       );
     }
+
     if (p.worldHandle) {
       const handle = p.worldHandle;
       await promiseStep(step, "v1:published", Schema.Boolean, () =>
         eraseWorldAuthor(env, handle, p.userId).then(() => true),
       );
     }
+
     await promiseStep(step, "v1:user-rows", Schema.Boolean, () =>
       eraseUserRows(env, p.userId).then(() => true),
     );
+
     return { v: 1, erased: p.mailboxIds.length, userId: p.userId };
   }
 }

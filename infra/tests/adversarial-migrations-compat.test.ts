@@ -30,6 +30,7 @@ const snapshot = (db: DatabaseSync): Map<string, Columns> => {
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts%' AND sql NOT LIKE 'CREATE VIRTUAL%'",
     )
     .all() as Array<{ name: string }>;
+
   return new Map(
     tables.map(({ name }) => [
       name,
@@ -52,19 +53,24 @@ const compatViolations = (
   after: Map<string, Columns>,
 ): ReadonlyArray<string> => {
   const out: Array<string> = [];
+
   for (const [table, cols] of before) {
     const next = after.get(table);
+
     if (!next) {
       out.push(`table ${table} dropped`);
       continue;
     }
+
     for (const col of cols.keys())
       if (!next.has(col)) out.push(`${table}.${col} dropped or renamed`);
+
     for (const [col, info] of next) {
       if (!cols.has(col) && info.notnull && info.dflt === null && !info.pk)
         out.push(`${table}.${col} added NOT NULL without DEFAULT`);
     }
   }
+
   return out;
 };
 
@@ -78,20 +84,25 @@ const DESTRUCTIVE = /\b(DROP\s+(TABLE|COLUMN)|RENAME\s+(TO|COLUMN))\b/i;
 export const unsanctionedDdl = (statements: ReadonlyArray<string>): ReadonlyArray<string> => {
   const sql = statements.join(";\n");
   const out: Array<string> = [];
+
   for (const m of sql.matchAll(/DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?"?(\w+)"?/gi)) {
     if (!new RegExp(`ALTER\\s+TABLE\\s+"?\\w+"?\\s+RENAME\\s+TO\\s+"?${m[1]}"?\\b`, "i").test(sql))
       out.push(`DROP TABLE ${m[1]} without a rebuild`);
   }
+
   for (const m of sql.matchAll(/ALTER\s+TABLE\s+"?(\w+)"?\s+RENAME\s+TO\s+"?(\w+)"?/gi)) {
     if (!new RegExp(`DROP\\s+TABLE\\s+(IF\\s+EXISTS\\s+)?"?${m[2]}"?\\b`, "i").test(sql))
       out.push(`RENAME ${m[1]} TO ${m[2]} outside a rebuild`);
   }
+
   if (/DROP\s+COLUMN|RENAME\s+COLUMN/i.test(sql)) out.push("DROP/RENAME COLUMN");
+
   return out;
 };
 
 describe("§15.9 expand-only schema changes (N-1 compatibility)", () => {
   const d1Dir = join(import.meta.dirname, "../migrations/d1");
+
   const files = readdirSync(d1Dir)
     .filter((f) => f.endsWith(".sql"))
     .sort();
@@ -100,6 +111,7 @@ describe("§15.9 expand-only schema changes (N-1 compatibility)", () => {
     const numbers = files.map((f) => Number(f.slice(0, 4)));
     expect(new Set(numbers).size).toBe(numbers.length);
     expect([...numbers].sort((a, b) => a - b)).toEqual(numbers);
+
     for (const f of files)
       expect(
         unsanctionedDdl([readFileSync(join(d1Dir, f), "utf8").replace(/--[^\n]*/g, "")]),
@@ -109,6 +121,7 @@ describe("§15.9 expand-only schema changes (N-1 compatibility)", () => {
 
   it("every D1 migration keeps schema N-1 readers and writers working", () => {
     const db = new DatabaseSync(":memory:");
+
     for (const f of files) {
       const before = snapshot(db);
       db.exec(readFileSync(join(d1Dir, f), "utf8"));
@@ -132,9 +145,11 @@ describe("§15.9 expand-only schema changes (N-1 compatibility)", () => {
       expect([...versions].sort((a, b) => a - b)).toEqual(versions);
       expect(new Set(versions).size).toBe(versions.length);
       const db = new DatabaseSync(":memory:");
+
       for (const m of migrations) {
         const before = snapshot(db);
         expect(unsanctionedDdl(m.statements), `${authority} v${m.version}`).toEqual([]);
+
         for (const statement of m.statements) db.exec(statement);
         expect(compatViolations(before, snapshot(db)), `${authority} v${m.version}`).toEqual([]);
       }

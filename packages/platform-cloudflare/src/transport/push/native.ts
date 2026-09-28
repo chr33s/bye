@@ -20,8 +20,10 @@ let apnsCache: { key: string; jwt: string; issuedAt: number } | null = null;
 /** APNs provider token; Apple requires refresh between 20 and 60 minutes. */
 export const apnsProviderToken = async (config: ApnsConfig, now = Date.now()): Promise<string> => {
   const cacheKey = `${config.teamId}:${config.keyId}`;
+
   if (apnsCache && apnsCache.key === cacheKey && now - apnsCache.issuedAt < 40 * 60_000)
     return apnsCache.jwt;
+
   const key = await crypto.subtle.importKey(
     "pkcs8",
     pemToPkcs8(config.privateKeyPem),
@@ -29,13 +31,16 @@ export const apnsProviderToken = async (config: ApnsConfig, now = Date.now()): P
     false,
     ["sign"],
   );
+
   const jwt = await signJwt(
     { alg: "ES256", kid: config.keyId },
     { iss: config.teamId, iat: Math.floor(now / 1000) },
     key,
     { name: "ECDSA", hash: "SHA-256" },
   );
+
   apnsCache = { key: cacheKey, jwt, issuedAt: now };
+
   return jwt;
 };
 
@@ -52,9 +57,11 @@ export const sendApns = async (
   now = Date.now(),
 ): Promise<PushResult> => {
   if (!/^[0-9a-f]{64,200}$/i.test(deviceToken)) return { _tag: "Rejected", status: 400 };
+
   const host = config.production
     ? "https://api.push.apple.com"
     : "https://api.sandbox.push.apple.com";
+
   const response = await fetchFn(`${host}/3/device/${deviceToken}`, {
     method: "POST",
     headers: {
@@ -70,6 +77,7 @@ export const sendApns = async (
       url: notification.url,
     }),
   });
+
   // APNs: 410 Unregistered → gone; 400 BadDeviceToken treated as rejected.
   return classifyPushStatus(response.status);
 };
@@ -83,10 +91,15 @@ export interface FcmServiceAccount {
 
 let fcmCache: { email: string; token: string; expiresAt: number } | null = null;
 
+export interface FcmTokenBody {
+  readonly access_token?: string;
+  readonly expires_in?: number;
+}
+
 export type TokenFetch = (
   url: string,
   init: { method: string; headers: Record<string, string>; body: string },
-) => Promise<{ readonly status: number; json(): Promise<unknown> }>;
+) => Promise<{ readonly status: number; json(): Promise<FcmTokenBody> }>;
 
 /** OAuth 2.0 JWT-bearer grant for the FCM scope (RFC 7523). */
 export const fcmAccessToken = async (
@@ -97,6 +110,7 @@ export const fcmAccessToken = async (
   if (fcmCache && fcmCache.email === account.client_email && fcmCache.expiresAt - 60_000 > now)
     return fcmCache.token;
   const tokenUri = account.token_uri ?? "https://oauth2.googleapis.com/token";
+
   const key = await crypto.subtle.importKey(
     "pkcs8",
     pemToPkcs8(account.private_key),
@@ -104,7 +118,9 @@ export const fcmAccessToken = async (
     false,
     ["sign"],
   );
+
   const iat = Math.floor(now / 1000);
+
   const assertion = await signJwt(
     { alg: "RS256", typ: "JWT" },
     {
@@ -117,19 +133,23 @@ export const fcmAccessToken = async (
     key,
     { name: "RSASSA-PKCS1-v1_5" },
   );
+
   const response = await fetchFn(tokenUri, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: `grant_type=${encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer")}&assertion=${assertion}`,
   });
+
   if (response.status !== 200) throw new Error(`fcm token http ${response.status}`);
-  const body = (await response.json()) as { access_token?: string; expires_in?: number };
+  const body = await response.json();
+
   if (!body.access_token) throw new Error("fcm token missing");
   fcmCache = {
     email: account.client_email,
     token: body.access_token,
     expiresAt: now + (body.expires_in ?? 3600) * 1000,
   };
+
   return body.access_token;
 };
 
@@ -146,6 +166,7 @@ export const sendFcm = async (
   now = Date.now(),
 ): Promise<PushResult> => {
   const token = await fcmAccessToken(fetchFn, account, now);
+
   const response = await fetchFn(
     `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(account.project_id)}/messages:send`,
     {
@@ -161,6 +182,7 @@ export const sendFcm = async (
       }),
     },
   );
+
   // FCM: 404 UNREGISTERED → gone.
   return classifyPushStatus(response.status);
 };

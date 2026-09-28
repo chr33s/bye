@@ -19,7 +19,9 @@ import { readStored, writeStored } from "../src/config.ts";
 // credentials that never leave the instance they were saved for.
 
 const A = "https://a.example";
+
 const B = "https://b.example";
+
 const saved: StoredConfig = {
   version: 2,
   selected: A,
@@ -74,6 +76,7 @@ const deps = (initial: StoredConfig, env: Record<string, string> = {}, fetch?: P
   let config = initial;
   const out: Array<string> = [];
   const err: Array<string> = [];
+
   return {
     get config() {
       return config;
@@ -114,6 +117,7 @@ describe("bye instance", () => {
       capabilities: ["device-session", "authorization-response-iss"],
       clients: [{ clientId: "bye-cli", redirectUris: [] }],
     };
+
     const meta = {
       issuer: "https://c.example",
       authorization_endpoint: "https://c.example/oauth/authorize",
@@ -121,17 +125,21 @@ describe("bye instance", () => {
       code_challenge_methods_supported: ["S256"],
       authorization_response_iss_parameter_supported: true,
     };
+
     const seen: Array<Record<string, string>> = [];
+
     const fetch: ProbeFetch = async (url, init) => {
       seen.push(init.headers);
+
       const body =
-        url === "https://c.example/.well-known/bye-instance"
-          ? doc
-          : url === "https://c.example/.well-known/oauth-authorization-server"
-            ? meta
-            : null;
+        {
+          "https://c.example/.well-known/bye-instance": doc,
+          "https://c.example/.well-known/oauth-authorization-server": meta,
+        }[url] ?? null;
+
       return { status: body ? 200 : 404, text: async () => JSON.stringify(body) };
     };
+
     const d = deps(saved, {}, fetch);
     expect(await runInstance(["add", "https://C.example"], {}, d.deps)).toBe(EXIT.ok);
     expect(d.config.instances["https://c.example"]).toEqual({ issuer: "https://c.example" });
@@ -145,6 +153,7 @@ describe("bye instance", () => {
 
   it("add accepts a loopback http dev server with BYE_INSECURE_LOOPBACK=1, as BYE_API does", async () => {
     const base = "http://localhost:1337";
+
     const doc = {
       schema: "bye.instance/1",
       baseUrl: base,
@@ -153,6 +162,7 @@ describe("bye instance", () => {
       capabilities: ["device-session", "authorization-response-iss"],
       clients: [{ clientId: "bye-cli", redirectUris: [] }],
     };
+
     const meta = {
       issuer: base,
       authorization_endpoint: `${base}/oauth/authorize`,
@@ -160,6 +170,7 @@ describe("bye instance", () => {
       code_challenge_methods_supported: ["S256"],
       authorization_response_iss_parameter_supported: true,
     };
+
     const fetch: ProbeFetch = async (url) => {
       const body =
         url === `${base}/.well-known/bye-instance`
@@ -167,8 +178,10 @@ describe("bye instance", () => {
           : url === `${base}/.well-known/oauth-authorization-server`
             ? meta
             : null;
+
       return { status: body ? 200 : 404, text: async () => JSON.stringify(body) };
     };
+
     const strict = deps(EMPTY_CONFIG, {}, fetch);
     expect(await runInstance(["add", base], {}, strict.deps)).toBe(EXIT.usage);
     const d = deps(EMPTY_CONFIG, { BYE_INSECURE_LOOPBACK: "1" }, fetch);

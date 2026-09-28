@@ -19,8 +19,10 @@ export const sandboxRecipientAllowed = (
   domains: ReadonlyArray<string>,
 ): boolean => {
   const at = address.lastIndexOf("@");
+
   if (at < 0) return false;
   const domain = address.slice(at + 1).toLowerCase();
+
   return domains.some((d) => domain === d || domain.endsWith(`.${d}`));
 };
 
@@ -33,6 +35,7 @@ export const sandboxTransport = (
     const denied = submission.envelopeRecipients.filter(
       (r) => !sandboxRecipientAllowed(r, domains),
     );
+
     if (domains.length === 0 || denied.length > 0) {
       return Effect.fail(
         new TransportFailure({
@@ -41,6 +44,7 @@ export const sandboxTransport = (
         }),
       );
     }
+
     return inner.submit(submission);
   },
 });

@@ -40,15 +40,18 @@ import { MemoryD1, MemoryDurableStorage, TestClock } from "@bye/testing";
 const setup = async () => {
   const d1 = MemoryD1.migrated();
   const clock = new TestClock();
+
   const auth = new ControlAuth(d1, clock, {
     rp: { rpId: "bye.test", origins: [], requireUserVerification: true },
     totpKeys: { current: 1, keys: { 1: new Uint8Array(32) } },
     recoveryPepper: "p",
   });
+
   const directory = new ControlDirectory(d1, clock);
   const orgs = new ControlOrganizations(d1, clock);
   const lifecycle = new ControlLifecycle(d1, clock, "s");
   const commerce = new ControlCommerce(d1, clock, null, "s");
+
   const control = controlServicesLayer({
     db: d1,
     auth,
@@ -63,10 +66,12 @@ const setup = async () => {
     registry: new ControlSharedRegistry(d1, clock),
     operators: [],
   });
+
   const alice = await directory.provisionPersonalAccount({
     address: "alice@bye.test",
     displayName: "Alice",
   });
+
   const space = new SharedSpaceStore(new MemoryDurableStorage(), clock);
   space.init({
     spaceId: "spc_1",
@@ -82,6 +87,7 @@ const setup = async () => {
     addresses: ["alice@bye.test"],
   });
   const copied: Array<string> = [];
+
   const services = Layer.mergeAll(
     control,
     Layer.succeed(
@@ -113,24 +119,29 @@ const setup = async () => {
     }),
     TestClockFx.layer(),
   );
+
   /** Run an effect as a request authenticated with `token`. */
   const run = <A, E>(token: string, effect: Effect.Effect<A, E, any>, method = "POST") =>
     Effect.runPromise(
       Effect.gen(function* () {
         yield* TestClockFx.setTime(clock.now());
+
         const authn = yield* authenticateRequest(
           { method, cookieToken: undefined, bearerToken: token, origin: null, secFetchSite: null },
           "https://app.bye.test",
         );
+
         return yield* effect.pipe(Effect.provide(requestAuthLayer(authn)));
       }).pipe(Effect.provide(services), Effect.exit) as Effect.Effect<Exit.Exit<A, E>>,
     );
+
   const failureTag = (exit: Exit.Exit<unknown, unknown>) =>
     Exit.isFailure(exit)
       ? (JSON.stringify(exit.cause).match(/"_tag":"(\w+)"/g) ?? [])
           .map((m) => m.slice(8, -1))
           .find((t) => t !== "Fail" && t !== "Cause")
       : "Success";
+
   return {
     d1,
     clock,
@@ -151,6 +162,7 @@ describe("control use cases", () => {
   it("[A03] cookie-authenticated cross-origin writes are rejected; bearer tokens are not ambient", async () => {
     const { auth, alice, services, clock } = await setup();
     const { token } = await auth.issueSession(alice.userId, "laptop");
+
     const attempt = (creds: Parameters<typeof authenticateRequest>[0]) =>
       Effect.runPromise(
         authenticateRequest(creds, "https://app.bye.test").pipe(
@@ -158,6 +170,7 @@ describe("control use cases", () => {
           Effect.exit,
         ),
       );
+
     const cross = await attempt({
       method: "POST",
       cookieToken: token,
@@ -165,7 +178,9 @@ describe("control use cases", () => {
       origin: "https://evil.test",
       secFetchSite: "cross-site",
     });
+
     expect(Exit.isFailure(cross) && JSON.stringify(cross.cause)).toContain("Forbidden");
+
     const same = await attempt({
       method: "POST",
       cookieToken: token,
@@ -173,7 +188,9 @@ describe("control use cases", () => {
       origin: "https://app.bye.test",
       secFetchSite: null,
     });
+
     expect(Exit.isSuccess(same)).toBe(true);
+
     const none = await attempt({
       method: "GET",
       cookieToken: undefined,
@@ -181,6 +198,7 @@ describe("control use cases", () => {
       origin: null,
       secFetchSite: null,
     });
+
     expect(JSON.stringify(Exit.isFailure(none) && none.cause)).toContain("Unauthenticated");
     expect(clock.now()).toBeGreaterThan(0);
   });
@@ -197,6 +215,7 @@ describe("control use cases", () => {
       ),
     ).toBe("StepUpRequired");
     const created = await run(plain.token, issueApiToken({ kind: "agent", label: "a" }));
+
     if (!Exit.isSuccess(created)) throw new Error("expected token");
     expect(created.value.scopes).toEqual(["read", "draft"]);
     expect(
@@ -216,15 +235,19 @@ describe("control use cases", () => {
   it("[X02] a device (desktop/mobile) session cannot mint API tokens that would outlive it", async () => {
     const { d1, clock, alice, run, failureTag } = await setup();
     const devices = new ControlDeviceAuth(d1, clock);
+
     const started = await devices.startDeviceAuthorization({
       clientId: "bye-cli",
       deviceName: "x",
     });
+
     expect(await devices.decideUserCode(alice.userId, started.user_code, true)).toBe(true);
+
     const tokens = await devices.pollDeviceCode({
       deviceCode: started.device_code,
       clientId: "bye-cli",
     });
+
     expect(tokens.access_token).toMatch(/^bda_/);
     expect(
       failureTag(await run(tokens.access_token, issueApiToken({ kind: "agent", label: "a" }))),
@@ -239,21 +262,25 @@ describe("control use cases", () => {
 
   it("[O02] admin mutations need an admin scope, membership and a recent step-up", async () => {
     const { auth, orgs, directory, alice, run, failureTag, clock } = await setup();
+
     const bob = await directory.provisionPersonalAccount({
       address: "bob@bye.test",
       displayName: "Bob",
     });
+
     const orgId = await orgs.createOrganization(alice.userId, {
       name: "Acme",
       kind: "domain",
       seatLimit: 5,
     });
+
     const inv = await orgs.invite(
       orgId,
       await orgs.verifiedActor(orgId, alice.userId),
       "bob@bye.test",
       "member",
     );
+
     await orgs.acceptInvitation(inv.token, bob.userId);
     const plain = await auth.issueSession(alice.userId, "x");
     expect(failureTag(await run(plain.token, suspendTeamMember(orgId, bob.userId)))).toBe(
@@ -288,6 +315,7 @@ describe("control use cases", () => {
         ),
       ),
     ).toBe("Conflict");
+
     const ok = await run(
       stepped.token,
       closeOwnAccount({
@@ -296,6 +324,7 @@ describe("control use cases", () => {
         forwardingDays: 0,
       }),
     );
+
     expect(Exit.isSuccess(ok) && ok.value.reserved).toEqual(["alice@bye.test"]);
     expect(await directory.resolveRecipient("alice@bye.test")).toEqual({
       _tag: "Rejected",
@@ -306,26 +335,31 @@ describe("control use cases", () => {
 
   it("[O02] an admin action reads the actor's role once (no re-check inside the adapter)", async () => {
     const { auth, orgs, directory, alice, run } = await setup();
+
     const bob = await directory.provisionPersonalAccount({
       address: "bob@bye.test",
       displayName: "Bob",
     });
+
     const orgId = await orgs.createOrganization(alice.userId, {
       name: "Acme",
       kind: "domain",
       seatLimit: 5,
     });
+
     const inv = await orgs.invite(
       orgId,
       await orgs.verifiedActor(orgId, alice.userId),
       "bob@bye.test",
       "member",
     );
+
     await orgs.acceptInvitation(inv.token, bob.userId);
     const stepped = await auth.issueSession(alice.userId, "x", true);
     const reads: Array<string> = [];
     const original = orgs.membership.bind(orgs);
     orgs.membership = (org: string, userId: string) => (reads.push(userId), original(org, userId));
+
     for (const action of [
       suspendTeamMember(orgId, bob.userId),
       reactivateTeamMember(orgId, bob.userId),
@@ -341,10 +375,12 @@ describe("control use cases", () => {
   it("[§7.2] a bad request through the gateway is a bad_request rejection (400), never a Conflict (409)", async () => {
     const { auth, alice, run, failureTag } = await setup();
     const stepped = await auth.issueSession(alice.userId, "laptop", true);
+
     const exit = await run(
       stepped.token,
       issueApiToken({ kind: "cli", label: "c", scopes: ["read", "bogus" as never] }),
     );
+
     expect(failureTag(exit)).toBe("Rejection");
     expect(JSON.stringify(Exit.isFailure(exit) ? exit.cause : null)).toContain(
       '"code":"bad_request"',
@@ -356,6 +392,7 @@ describe("shared use cases", () => {
   it("[O04] sharing needs mailbox access and step-up; [O05] public links carry an unguessable token", async () => {
     const { auth, alice, run, failureTag, space } = await setup();
     const plain = await auth.issueSession(alice.userId, "x");
+
     const req = {
       spaceId: "spc_1",
       sourceMailboxId: alice.mailboxId,
@@ -364,14 +401,17 @@ describe("shared use cases", () => {
       grantees: [],
       includeFuture: true,
     };
+
     expect(failureTag(await run(plain.token, shareThread(req)))).toBe("StepUpRequired");
     expect(
       failureTag(await run(plain.token, shareThread({ ...req, sourceMailboxId: "mbx_other" }))),
     ).toBe("Forbidden");
     const stepped = await auth.issueSession(alice.userId, "x", true);
     const shared = await run(stepped.token, shareThread(req));
+
     if (!Exit.isSuccess(shared)) throw new Error(String(shared.cause));
     expect(space.readThread(alice.userId, shared.value).messages).toHaveLength(2);
+
     const link = await run(
       stepped.token,
       createPublicThreadLink(
@@ -379,6 +419,7 @@ describe("shared use cases", () => {
         "https://share.bye.test",
       ),
     );
+
     if (!Exit.isSuccess(link)) throw new Error("expected link");
     const token = link.value.url.split("/").at(-1)!;
     expect(token.length).toBeGreaterThanOrEqual(43);
@@ -389,6 +430,7 @@ describe("shared use cases", () => {
     const { auth, alice, run, failureTag, world, copied } = await setup();
     const plain = await auth.issueSession(alice.userId, "x");
     const agent = await auth.createApiToken(plain.session.user_id, { kind: "agent", label: "a" });
+
     const post = {
       fromAddress: "alice@bye.test",
       title: "Hi",
@@ -397,17 +439,20 @@ describe("shared use cases", () => {
       media: [{ contentKey: "t/m/part/1", name: "a.png", contentType: "image/png" }],
       publish: true,
     };
+
     expect(failureTag(await run(agent.token, publishWorldPost(post)))).toBe("Forbidden");
     expect(Exit.isSuccess(await run(plain.token, publishWorldPost(post)))).toBe(true);
     expect(world.publicPost("hi")?.title).toBe("Hi");
     expect(copied).toEqual([
       expect.stringMatching(/^site\/[a-z0-9-]+\/media\/[a-z0-9-]+-r1-a\.png$/),
     ]);
+
     // A forged author address is refused by the World authority itself (a `forbidden` Rejection).
     const forged = await run(
       plain.token,
       publishWorldPost({ ...post, fromAddress: "ceo@evil.test" }),
     );
+
     expect(failureTag(forged)).toBe("Rejection");
     expect(JSON.stringify(Exit.isFailure(forged) ? forged.cause : null)).toContain(
       '"code":"forbidden"',

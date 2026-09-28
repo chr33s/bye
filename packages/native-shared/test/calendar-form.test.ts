@@ -8,18 +8,27 @@ const untilOf = (rrule: string | undefined) => /UNTIL=([^;]+)/.exec(rrule ?? "")
 
 const utcOf = (stamp: string): number => {
   const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(stamp)!;
+
   return Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!);
 };
 
-const daily = (timeZone: string | undefined, until: { year: number; month: number; day: number }) =>
-  buildRRule({
+const daily = (
+  timeZone: string | undefined,
+  until: { year: number; month: number; day: number },
+) => {
+  const zone: ZoneOption = {};
+
+  if (timeZone) zone.timeZone = timeZone;
+
+  return buildRRule({
     frequency: "DAILY",
     interval: 1,
     byDay: [],
     ends: { kind: "until", until },
     allDay: false,
-    ...(timeZone ? { timeZone } : {}),
+    ...zone,
   });
+};
 
 describe("buildRRule UNTIL", () => {
   it("[C02] ends at local end-of-day west of UTC so the last 18:00 occurrence survives", () => {
@@ -78,7 +87,12 @@ describe("buildRRule UNTIL", () => {
       attendees: "",
       reminders: "",
     };
+
     const built = eventPayload(form);
     expect(built.ok && built.command.rrule).toBe("FREQ=DAILY;UNTIL=20270101T075959Z");
   });
 });
+
+interface ZoneOption {
+  timeZone?: string;
+}

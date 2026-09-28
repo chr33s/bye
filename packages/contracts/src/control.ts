@@ -5,12 +5,16 @@ import { Schema } from "effect";
 
 const Bounded = (max: number) =>
   Schema.String.pipe(Schema.check(Schema.isMinLength(1), Schema.isMaxLength(max)));
+
 const UpTo = (max: number) => Schema.String.pipe(Schema.check(Schema.isMaxLength(max)));
+
 const Base64Url = (max: number) =>
   Schema.String.pipe(Schema.check(Schema.isPattern(/^[A-Za-z0-9_-]+$/), Schema.isMaxLength(max)));
+
 export const ControlEmailAddress = Schema.String.pipe(
   Schema.check(Schema.isPattern(/^[^\s@<>",]+@[^\s@<>",]+\.[^\s@<>",]+$/), Schema.isMaxLength(320)),
 );
+
 const Timestamp = Schema.Number.pipe(
   Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
 );
@@ -32,6 +36,7 @@ export const ScopeNameSchema = Schema.Literals([
 export const ChallengeRequest = Schema.Struct({
   purpose: Schema.optional(Schema.Literals(["register", "authenticate", "step-up"])),
 });
+
 export const ChallengeResponse = Schema.Struct({
   challengeId: Bounded(64),
   challenge: Base64Url(128),
@@ -42,6 +47,7 @@ const AttestationResponse = Schema.Struct({
   clientDataJSON: Base64Url(8192),
   attestationObject: Base64Url(16384),
 });
+
 const AssertionResponse = Schema.Struct({
   credentialId: Base64Url(1024),
   clientDataJSON: Base64Url(8192),
@@ -56,6 +62,7 @@ export const PasskeyRegistrationRequest = Schema.Struct({
   timeZone: Schema.optional(Bounded(64)),
   response: AttestationResponse,
 });
+
 export type PasskeyRegistrationRequest = typeof PasskeyRegistrationRequest.Type;
 
 /** Passkey sign-in and step-up: a WebAuthn assertion for an issued challenge. */
@@ -63,6 +70,7 @@ export const PasskeyAssertionRequest = Schema.Struct({
   challengeId: Bounded(64),
   response: AssertionResponse,
 });
+
 export type PasskeyAssertionRequest = typeof PasskeyAssertionRequest.Type;
 
 /** Retry signup's passkey ceremony with the signup capability. */
@@ -71,12 +79,15 @@ export const SignupRetryRequest = Schema.Struct({ userId: Bounded(64), signupTok
 export const TotpCodeRequest = Schema.Struct({
   code: Schema.String.pipe(Schema.check(Schema.isPattern(/^\d{6}$/))),
 });
+
 export const TotpEnrollment = Schema.Struct({ secret: Bounded(64), otpauthUri: Bounded(512) });
+
 export const SecurityStatusSchema = Schema.Struct({
   passkeys: Schema.Number,
   totp: Schema.Literals(["none", "pending", "enabled"]),
   recoveryCodesRemaining: Schema.Number,
 });
+
 export const AddPasskeyRequest = Schema.Struct({
   challengeId: Bounded(64),
   label: Schema.optional(Schema.String.pipe(Schema.check(Schema.isMaxLength(80)))),
@@ -96,10 +107,12 @@ export const SignupRequest = Schema.Struct({
   /** Required for short (≤4 character) addresses: a completed short-address checkout. */
   checkoutSessionId: Schema.optional(Bounded(64)),
 });
+
 export const ShortAddressCheckoutRequest = Schema.Struct({
   address: ControlEmailAddress,
   interval: Schema.optional(Schema.Literals(["monthly", "annual"])),
 });
+
 /** `hours` defaults to 24. */
 export const SupportGrantRequest = Schema.Struct({
   reason: Bounded(500),
@@ -113,7 +126,9 @@ export const SupportGrantRequest = Schema.Struct({
     ),
   ),
 });
+
 export const RecoveryCodes = Schema.Struct({ codes: Schema.Array(Bounded(32)) });
+
 export const RecoveryRequest = Schema.Struct({ address: ControlEmailAddress, code: Bounded(32) });
 
 export const SessionViewSchema = Schema.Struct({
@@ -123,6 +138,7 @@ export const SessionViewSchema = Schema.Struct({
   lastSeenAt: Timestamp,
   current: Schema.Boolean,
 });
+
 export type SessionViewSchema = typeof SessionViewSchema.Type;
 
 /** `kind` defaults to agent. */
@@ -132,7 +148,9 @@ export const CreateApiTokenRequest = Schema.Struct({
   scopes: Schema.optional(Schema.Array(ScopeNameSchema)),
   expiresAt: Schema.optional(Timestamp),
 });
+
 export type CreateApiTokenRequest = typeof CreateApiTokenRequest.Type;
+
 export const ApiTokenCreated = Schema.Struct({
   id: Bounded(64),
   token: Bounded(200),
@@ -142,6 +160,7 @@ export const ApiTokenCreated = Schema.Struct({
 // ---- organizations (O02, A01) ----
 
 export const MemberRoleSchema = Schema.Literals(["owner", "admin", "member"]);
+
 export const CreateOrganizationRequest = Schema.Struct({
   name: Bounded(200),
   kind: Schema.Literals(["domain", "family"]),
@@ -159,29 +178,37 @@ export const CreateOrganizationRequest = Schema.Struct({
     Schema.Literals(["retain", "reassign-to-admin", "forward-then-close"]),
   ),
 });
+
 /** `role` defaults to member. */
 export const InviteMemberRequest = Schema.Struct({
   address: ControlEmailAddress,
   role: Schema.optional(Schema.Literals(["admin", "member"])),
 });
+
 /** Legacy `/v1/memberships/:orgId/suspend` body. */
 export const MembershipSuspendRequest = Schema.Struct({ userId: Bounded(64) });
+
 export const AcceptInvitationRequest = Schema.Struct({ token: Base64Url(128) });
+
 export const SetRoleRequest = Schema.Struct({ role: MemberRoleSchema });
+
 export const MemberViewSchema = Schema.Struct({
   userId: Bounded(64),
   address: ControlEmailAddress,
   role: MemberRoleSchema,
   status: Schema.Literals(["active", "suspended", "removed"]),
 });
+
 export const SeatsViewSchema = Schema.Struct({
   limit: Schema.Number,
   used: Schema.Number,
   entitled: Schema.NullOr(Schema.Number),
 });
+
 export const SetSeatLimitRequest = Schema.Struct({
   limit: Schema.Number.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1))),
 });
+
 export const CreateExtensionRequest = Schema.Struct({
   domainId: Bounded(64),
   localPart: Bounded(64),
@@ -205,12 +232,14 @@ export const DomainStateSchema = Schema.Literals([
   "removing",
   "removed",
 ]);
+
 export const DnsRecordSchema = Schema.Struct({
   type: Schema.Literals(["MX", "TXT", "CNAME"]),
   name: Bounded(253),
   content: Bounded(4096),
   priority: Schema.optional(Schema.Number),
 });
+
 export const DnsOperationSchema = Schema.Union([
   Schema.Struct({ op: Schema.Literal("create"), record: DnsRecordSchema, purpose: Schema.String }),
   Schema.Struct({
@@ -227,7 +256,9 @@ export const DnsOperationSchema = Schema.Union([
     purpose: Schema.String,
   }),
 ]);
+
 export const DomainRequest = Schema.Struct({ orgId: Bounded(64), name: Bounded(253) });
+
 export const DomainViewSchema = Schema.Struct({
   id: Bounded(64),
   name: Bounded(253),
@@ -236,20 +267,24 @@ export const DomainViewSchema = Schema.Struct({
   plusAddressing: Schema.Boolean,
   catchAllMailboxId: Schema.NullOr(Schema.String),
 });
+
 export const DomainDiagnosticSchema = Schema.Struct({
   check: Schema.Literals(["ownership", "mx", "spf", "dkim", "dmarc"]),
   status: Schema.Literals(["pass", "fail", "warn"]),
   detail: Schema.String,
 });
+
 export const DomainSettingsRequest = Schema.Struct({
   plusAddressing: Schema.optional(Schema.Boolean),
   catchAllMailboxId: Schema.optional(Schema.NullOr(Schema.String)),
 });
+
 export const ZoneAuthorizationRequest = Schema.Struct({
   method: Schema.Literals(["service-zone", "delegated-token", "manual-records"]),
   /** Explicit "Switch incoming email to Bye": required when the domain's MX points elsewhere. */
   confirmCutover: Schema.optional(Schema.Boolean),
 });
+
 /** Bind the onboarding-selected zone as a customer domain (infra/onboarding/spec.md §17). */
 export const InstallationDomainRequest = Schema.Struct({
   /** Defaults to the caller's personal organization (where the owner's address lives). */
@@ -257,11 +292,13 @@ export const InstallationDomainRequest = Schema.Struct({
   /** Optional echo of the zone name; refused when it differs from the installation's. */
   name: Schema.optional(Bounded(253)),
 });
+
 /**
  * A Cloudflare API token the owner created for exactly the installation's zone
  * (infra/onboarding/spec.md §13). Only type-checked here, so a decode error never echoes it.
  */
 export const InstallationZoneTokenRequest = Schema.Struct({ token: Schema.String });
+
 export const DomainAliasRequest = Schema.Struct({ localPart: Bounded(64), mailboxId: Bounded(64) });
 
 // ---- billing and lifecycle (A02, A04) ----
@@ -275,6 +312,7 @@ export const EntitlementViewSchema = Schema.Struct({
   periodEnd: Schema.NullOr(Timestamp),
   creditsCents: Schema.Number,
 });
+
 /** Closure terms (reservation and forwarding periods) are derived server-side from the entitlement. */
 export const CloseAccountRequest = Schema.Struct({
   confirmAddress: ControlEmailAddress,
@@ -287,11 +325,13 @@ export const CloseAccountRequest = Schema.Struct({
   reserveAddressDays: Schema.optional(Schema.Number),
   forwardingDays: Schema.optional(Schema.Number),
 });
+
 export const ClosureTermsSchema = Schema.Struct({
   plan: Schema.NullOr(Schema.String),
   reserveAddressDays: Schema.Number,
   forwardingDays: Schema.Number,
 });
+
 export const CheckoutRequest = Schema.Struct({
   orgId: Schema.optional(Bounded(64)),
   plan: Schema.Literals(["personal", "family", "domain"]),
@@ -300,7 +340,9 @@ export const CheckoutRequest = Schema.Struct({
     Schema.Number.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1))),
   ),
 });
+
 export const CheckoutCreated = Schema.Struct({ sessionId: Bounded(64), url: Bounded(2048) });
+
 export const CancelSubscriptionRequest = Schema.Struct({
   orgId: Schema.optional(Bounded(64)),
   atPeriodEnd: Schema.optional(Schema.Boolean),
@@ -309,21 +351,26 @@ export const CancelSubscriptionRequest = Schema.Struct({
 // ---- platform operator tooling (§10) ----
 
 export const SendingScopeSchema = Schema.Literals(["user", "domain", "identity", "platform"]);
+
 export const SuspensionRequest = Schema.Struct({
   scope: SendingScopeSchema,
   key: Bounded(320),
   reason: Schema.optional(Bounded(500)),
 });
+
 export const SignalReviewRequest = Schema.Struct({
   resolution: Schema.Literals(["confirmed-abuse", "false-positive"]),
 });
+
 /** `reason` defaults to goodwill. */
 export const CreditRequest = Schema.Struct({
   orgId: Bounded(64),
   cents: Schema.Number.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1))),
   reason: Schema.optional(Schema.Literals(["goodwill", "refund"])),
 });
+
 export const SuppressionRequest = Schema.Struct({ address: ControlEmailAddress });
+
 export const SupportSessionRequest = Schema.Struct({ grantId: Bounded(64) });
 
 /** Push device registration (E23, C02/C10). `keys` is the Web Push subscription JSON form. */
@@ -353,13 +400,16 @@ export const ExternalIdentityCredentialRequest = Schema.Struct({
 
 // Operator routes (§6, §12; OPS_TOKEN only).
 export const OpsDiscardRequest = Schema.Struct({ note: Schema.optional(UpTo(500)) });
+
 export const OpsReindexRequest = Schema.Struct({
   mailboxId: Schema.String.pipe(Schema.check(Schema.isPattern(/^mbx_[A-Za-z0-9_-]{1,80}$/))),
 });
+
 export const OpsErasureRequest = Schema.Struct({
   userId: Schema.String.pipe(Schema.check(Schema.isPattern(/^usr_[A-Za-z0-9_-]{1,80}$/))),
   reason: Schema.optional(UpTo(200)),
 });
+
 export const OpsRestoreRequest = Schema.Struct({
   kind: Schema.Literals(["mailbox", "calendar", "space"]),
   id: Bounded(84),

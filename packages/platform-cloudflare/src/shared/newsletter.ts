@@ -1,3 +1,4 @@
+import { Match, Predicate, type Types } from "effect";
 import {
   advanceObserved,
   advanceNewsletterRecipientOutcome,
@@ -80,8 +81,11 @@ export const NEWSLETTER_TABLES: Migration = {
 
 /** A newsletter operation's lease: a crashed holder's claim expires and is then treated as Unknown. */
 export const OP_LEASE_MS = 5 * 60_000;
+
 export const OP_MAX_ATTEMPTS = 5;
+
 export const SYNC_MAX_ATTEMPTS = 8;
+
 /** Default horizon after which an unsent publication is held instead of sent late. */
 export const PUBLICATION_EXPIRY_MS = 24 * 3600_000;
 
@@ -195,9 +199,63 @@ export const NEWSLETTER_METHODS = [
   "applyEvent",
   "health",
 ] as const;
+
 export type NewsletterMethod = (typeof NEWSLETTER_METHODS)[number];
 
 const TERMINAL: ReadonlyArray<PublicationState> = ["sent", "cancelled", "failed"];
+
+/** A `publications` table row as SQLite returns it. */
+interface PublicationRecord {
+  id: string;
+  post_id: string;
+  revision: number;
+  provider: string;
+  account: string;
+  config_version: string;
+  sender: string;
+  subject: string;
+  fingerprint: string;
+  recipients: number;
+  scheduled_at: number | null;
+  expires_at: number;
+  state: string;
+  provider_ref: string | null;
+  observed: string | null;
+  cancel: string | null;
+  detail: string | null;
+}
+
+/** A `newsletter_ops` table row as SQLite returns it. */
+interface OpRecord {
+  op_id: string;
+  publication_id: string | null;
+  kind: string;
+  state: string;
+  attempts: number;
+  first_attempt_at: number | null;
+  provider_ref: string | null;
+  detail: string | null;
+}
+
+export interface PublicationPatch {
+  readonly state?: PublicationState;
+  readonly providerRef?: string;
+  readonly detail?: string | null;
+  readonly cancel?: CancellationReport;
+}
+
+export interface SnapshotEligibility {
+  readonly snapshot: number;
+  readonly eligible: number;
+  readonly removed: ReadonlyArray<string>;
+}
+
+export interface PublicationStatusView {
+  readonly publication: PublicationRow;
+  readonly outcomes: Readonly<Record<string, number>>;
+  readonly drift: number;
+  readonly ops: ReadonlyArray<OpRow>;
+}
 
 export class NewsletterLedger {
   constructor(
@@ -214,14 +272,15 @@ export class NewsletterLedger {
       "SELECT status, revision, changed_at, consent_evidence, unresolved FROM subscribers WHERE address = ?",
       address,
     );
+
     if (!s) return null;
+
     return {
-      status:
-        s.status === "confirmed"
-          ? "confirmed"
-          : s.status === "unsubscribed"
-            ? "unsubscribed"
-            : "pending",
+      status: Match.value(s.status).pipe(
+        Match.when("confirmed", () => "confirmed" as const),
+        Match.when("unsubscribed", () => "unsubscribed" as const),
+        Match.orElse(() => "pending" as const),
+      ),
       revision: Number(s.revision),
       changedAt: Number(s.changed_at ?? 0),
       consentEvidence: s.consent_evidence,
@@ -241,8 +300,9 @@ export class NewsletterLedger {
     const now = this.clock.now();
     const current = this.consent(address);
     const result = applyConsent(current, change);
-    const applied = result._tag === "Applied";
-    if (result._tag === "Applied") {
+    const applied = Predicate.isTagged(result, "Applied");
+
+    if (Predicate.isTagged(result, "Applied")) {
       const r = result.record;
       this.sql.run(
         `UPDATE subscribers SET status = ?, revision = ?, changed_at = ?, consent_evidence = ?,
@@ -264,6 +324,7 @@ export class NewsletterLedger {
       );
       this.enqueueSync(address);
     }
+
     this.sql.run(
       "INSERT INTO consent_log (address, change, source, evidence, revision, applied, occurred_at, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       address,
@@ -275,6 +336,7 @@ export class NewsletterLedger {
       change.at,
       now,
     );
+
     return applied;
   }
 
@@ -306,6 +368,7 @@ export class NewsletterLedger {
       sourceEvent,
       this.clock.now(),
     );
+
     if (inserted) this.enqueueSync(address);
   }
 
@@ -342,12 +405,15 @@ export class NewsletterLedger {
   enqueueSync(address: string): void {
     const now = this.clock.now();
     const desired = this.eligible(address);
+
     const row = this.sql.one<{ desired: number; revision: number; synced_revision: number | null }>(
       "SELECT desired, revision, synced_revision FROM contact_sync WHERE address = ?",
       address,
     );
+
     // Never synced and not eligible: the provider has nothing to exclude.
     if (!row && !desired) return;
+
     if (row && Boolean(row.desired) === desired && row.synced_revision === row.revision) return;
     this.sql.run(
       `INSERT INTO contact_sync (address, desired, revision, state, attempts, next_at, updated_at) VALUES (?, ?, 1, 'pending', 0, ?, ?)
@@ -370,6 +436,7 @@ export class NewsletterLedger {
   ): ReadonlyArray<{ address: string; subscribed: boolean; revision: number }> {
     const now = this.clock.now();
     const open = this.openPublication();
+
     return this.sql
       .all<{ address: string; desired: number; revision: number }>(
         `SELECT c.address, c.desired, c.revision FROM contact_sync c WHERE c.state = 'pending' AND c.next_at <= ?
@@ -390,13 +457,14 @@ export class NewsletterLedger {
    * Freshness for one publication: every removal, and every addition inside its snapshot, has
    * reached the provider. Additions outside the snapshot are irrelevant (and held back).
    */
-  freshness(publicationId: string): { pending: number; held: number } {
+  freshness(publicationId: string) {
     const r = this.sql.one<{ pending: number; held: number }>(
       `SELECT SUM(c.state = 'pending') AS pending, SUM(c.state = 'held') AS held FROM contact_sync c
        WHERE c.state IN ('pending', 'held') AND (c.desired = 0 OR EXISTS (
          SELECT 1 FROM publication_recipients p WHERE p.publication_id = ? AND p.address = c.address AND p.in_snapshot = 1))`,
       publicationId,
     );
+
     return { pending: Number(r?.pending ?? 0), held: Number(r?.held ?? 0) };
   }
 
@@ -407,19 +475,23 @@ export class NewsletterLedger {
         "SELECT revision, attempts FROM contact_sync WHERE address = ?",
         address,
       );
+
       if (!row || Number(row.revision) !== revision) return;
       const now = this.clock.now();
-      if (outcome._tag === "Accepted") {
+
+      if (Predicate.isTagged(outcome, "Accepted")) {
         this.sql.run(
           "UPDATE contact_sync SET state = 'synced', synced_revision = revision, detail = NULL, updated_at = ? WHERE address = ?",
           now,
           address,
         );
+
         return;
       }
+
       // Contact upserts are state-setting (not additive), so re-applying the same desired state is safe.
       const attempts = Number(row.attempts) + 1;
-      const permanent = outcome._tag === "NotAccepted" && !outcome.retryable;
+      const permanent = Predicate.isTagged(outcome, "NotAccepted") && !outcome.retryable;
       this.sql.run(
         "UPDATE contact_sync SET state = ?, attempts = ?, next_at = ?, detail = ?, updated_at = ? WHERE address = ?",
         permanent || attempts >= SYNC_MAX_ATTEMPTS ? "held" : "pending",
@@ -433,10 +505,11 @@ export class NewsletterLedger {
   }
 
   /** Freshness: nothing waiting (or held) to reach the provider. */
-  syncState(): { pending: number; held: number; oldestPendingAt: number | null } {
+  syncState() {
     const r = this.sql.one<{ pending: number; held: number; oldest: number | null }>(
       "SELECT SUM(state = 'pending') AS pending, SUM(state = 'held') AS held, MIN(CASE WHEN state = 'pending' THEN updated_at END) AS oldest FROM contact_sync",
     );
+
     return {
       pending: Number(r?.pending ?? 0),
       held: Number(r?.held ?? 0),
@@ -448,12 +521,14 @@ export class NewsletterLedger {
 
   audience(): AudienceMapping | undefined {
     const raw = this.meta("newsletter_audience");
+
     return raw ? (JSON.parse(raw) as AudienceMapping) : undefined;
   }
 
   /** Bind this creator to a provider audience. A different existing mapping is never overwritten. */
   mapAudience(mapping: AudienceMapping): void {
     const existing = this.audience();
+
     if (
       existing &&
       (existing.provider !== mapping.provider ||
@@ -469,8 +544,9 @@ export class NewsletterLedger {
 
   // ---- publications ----
 
-  private row(r: Record<string, unknown> | undefined): PublicationRow | undefined {
+  private row(r: PublicationRecord | undefined): PublicationRow | undefined {
     if (!r) return undefined;
+
     return {
       id: String(r.id),
       postId: String(r.post_id),
@@ -487,7 +563,7 @@ export class NewsletterLedger {
       state: r.state as PublicationState,
       providerRef: (r.provider_ref as string | null) ?? null,
       observed: (r.observed as ObservedBroadcastState | null) ?? null,
-      cancel: typeof r.cancel === "string" ? (JSON.parse(r.cancel) as CancellationReport) : null,
+      cancel: Predicate.isString(r.cancel) ? (JSON.parse(r.cancel) as CancellationReport) : null,
       detail: (r.detail as string | null) ?? null,
     };
   }
@@ -517,7 +593,7 @@ export class NewsletterLedger {
 
   publications(): ReadonlyArray<PublicationRow> {
     return this.sql
-      .all("SELECT * FROM publications ORDER BY created_at DESC LIMIT 100")
+      .all<PublicationRecord>("SELECT * FROM publications ORDER BY created_at DESC LIMIT 100")
       .map((r) => this.row(r)!);
   }
 
@@ -528,13 +604,16 @@ export class NewsletterLedger {
   approve(input: PublicationInput): PublicationRow {
     return this.sql.tx(() => {
       const existing = this.publicationFor(input.postId, input.revision);
+
       if (existing) return existing;
       const now = this.clock.now();
       const id = `pub_${input.postId}_r${input.revision}`;
+
       const recipients = Number(
         this.sql.one<{ n: number }>(`SELECT COUNT(*) AS n ${NewsletterLedger.ELIGIBLE_SQL}`)?.n ??
           0,
       );
+
       this.sql.run(
         `INSERT INTO publications (id, post_id, revision, provider, account, config_version, sender, subject, fingerprint,
            recipients, scheduled_at, expires_at, state, created_at, updated_at)
@@ -561,19 +640,12 @@ export class NewsletterLedger {
         id,
         now,
       );
+
       return this.publication(id)!;
     });
   }
 
-  setPublication(
-    id: string,
-    patch: {
-      readonly state?: PublicationState;
-      readonly providerRef?: string;
-      readonly detail?: string | null;
-      readonly cancel?: CancellationReport;
-    },
-  ): PublicationRow {
+  setPublication(id: string, patch: PublicationPatch): PublicationRow {
     return this.sql.tx(() => {
       const p = this.publication(id) ?? reject("not_found", "publication");
       // Terminal publications never move again (a late success cannot resurrect a cancel, etc.).
@@ -587,22 +659,20 @@ export class NewsletterLedger {
         this.clock.now(),
         id,
       );
+
       return this.publication(id)!;
     });
   }
 
   /** Recipients of the approved snapshot who are STILL eligible (later removals only narrow it). */
-  snapshotEligible(id: string): {
-    snapshot: number;
-    eligible: number;
-    removed: ReadonlyArray<string>;
-  } {
+  snapshotEligible(id: string): SnapshotEligibility {
     const snapshot = Number(
       this.sql.one<{ n: number }>(
         "SELECT COUNT(*) AS n FROM publication_recipients WHERE publication_id = ? AND in_snapshot = 1",
         id,
       )?.n ?? 0,
     );
+
     const removed = this.sql
       .all<{ address: string }>(
         `SELECT p.address FROM publication_recipients p WHERE p.publication_id = ? AND p.in_snapshot = 1
@@ -611,6 +681,7 @@ export class NewsletterLedger {
         id,
       )
       .map((r) => r.address);
+
     return { snapshot, eligible: snapshot - removed.length, removed };
   }
 
@@ -628,7 +699,9 @@ export class NewsletterLedger {
   requestCancel(id: string): PublicationRow {
     return this.sql.tx(() => {
       const p = this.publication(id) ?? reject("not_found", "publication");
+
       if (TERMINAL.includes(p.state)) return p;
+
       // Nothing reached the provider's send path yet: a local cancel is complete.
       if (
         p.state === "approved" ||
@@ -637,6 +710,7 @@ export class NewsletterLedger {
         p.state === "held"
       ) {
         const localOnly = p.state !== "draft-pending";
+
         return this.setPublication(id, {
           state: "cancelled",
           cancel: localOnly
@@ -644,6 +718,7 @@ export class NewsletterLedger {
             : { _tag: "Uncertain", detail: "draft creation outcome unknown; draft never sent" },
         });
       }
+
       return this.setPublication(id, { cancel: { _tag: "Requested" } });
     });
   }
@@ -651,10 +726,8 @@ export class NewsletterLedger {
   // ---- operations ----
 
   private op(opId: string): OpRow | undefined {
-    const r = this.sql.one<Record<string, unknown>>(
-      "SELECT * FROM newsletter_ops WHERE op_id = ?",
-      opId,
-    );
+    const r = this.sql.one<OpRecord>("SELECT * FROM newsletter_ops WHERE op_id = ?", opId);
+
     return r
       ? {
           opId: String(r.op_id),
@@ -695,13 +768,17 @@ export class NewsletterLedger {
         idempotency?.scope,
         now,
       );
+
       const row = this.sql.one<{ state: string; lease_until: number | null; next_at: number }>(
         "SELECT state, lease_until, next_at FROM newsletter_ops WHERE op_id = ?",
         opId,
       )!;
+
       let state = row.state;
+
       if (state === "in-flight" && Number(row.lease_until ?? 0) > now)
         return { _tag: "Skip", op: this.op(opId)! };
+
       if (state === "in-flight") {
         // The previous holder died mid-call: its outcome is unknown, never "not accepted".
         this.sql.run(
@@ -711,10 +788,13 @@ export class NewsletterLedger {
         );
         state = "unknown";
       }
+
       if (state === "accepted" || state === "rejected" || state === "held")
         return { _tag: "Skip", op: this.op(opId)! };
+
       if (state === "unknown") {
         const op = this.op(opId)!;
+
         const decision = retryDecision({
           outcome: { _tag: "Unknown", detail: op.detail ?? "" },
           idempotency,
@@ -723,8 +803,10 @@ export class NewsletterLedger {
           attempts: op.attempts,
           maxAttempts: OP_MAX_ATTEMPTS,
         });
-        if (decision._tag === "Hold") return { _tag: "Reconcile", op };
+
+        if (Predicate.isTagged(decision, "Hold")) return { _tag: "Reconcile", op };
       }
+
       if (Number(row.next_at) > now) return { _tag: "Skip", op: this.op(opId)! };
       this.sql.run(
         `UPDATE newsletter_ops SET state = 'in-flight', attempts = attempts + 1, first_attempt_at = COALESCE(first_attempt_at, ?),
@@ -735,6 +817,7 @@ export class NewsletterLedger {
         now,
         opId,
       );
+
       return { _tag: "Proceed", op: this.op(opId)! };
     });
   }
@@ -748,17 +831,21 @@ export class NewsletterLedger {
   ): OpRow {
     return this.sql.tx(() => {
       const op = this.op(opId) ?? reject("not_found", "operation");
+
       if (op.state === "accepted" || op.state === "rejected") return op;
       const now = this.clock.now();
-      if (outcome._tag === "Accepted") {
+
+      if (Predicate.isTagged(outcome, "Accepted")) {
         this.sql.run(
           "UPDATE newsletter_ops SET state = 'accepted', provider_ref = ?, lease_until = NULL, detail = NULL, updated_at = ? WHERE op_id = ?",
           outcome.providerRef,
           now,
           opId,
         );
+
         return this.op(opId)!;
       }
+
       const decision = retryDecision({
         outcome,
         idempotency,
@@ -767,16 +854,17 @@ export class NewsletterLedger {
         attempts: op.attempts,
         maxAttempts: OP_MAX_ATTEMPTS,
       });
-      const state =
-        outcome._tag === "NotAccepted"
-          ? decision._tag === "Retry"
-            ? "pending"
-            : outcome.retryable
-              ? "held"
-              : "rejected"
-          : decision._tag === "Retry"
-            ? "unknown"
-            : "unknown";
+
+      const state = Predicate.isTagged(outcome, "NotAccepted")
+        ? Predicate.isTagged(decision, "Retry")
+          ? "pending"
+          : outcome.retryable
+            ? "held"
+            : "rejected"
+        : Predicate.isTagged(decision, "Retry")
+          ? "unknown"
+          : "unknown";
+
       this.sql.run(
         "UPDATE newsletter_ops SET state = ?, lease_until = NULL, next_at = ?, detail = ?, updated_at = ? WHERE op_id = ?",
         state,
@@ -785,6 +873,7 @@ export class NewsletterLedger {
         now,
         opId,
       );
+
       return this.op(opId)!;
     });
   }
@@ -797,8 +886,10 @@ export class NewsletterLedger {
   ): OpRow {
     return this.sql.tx(() => {
       const op = this.op(opId) ?? reject("not_found", "operation");
+
       if (op.state !== "unknown") return op;
       const now = this.clock.now();
+
       if (evidence === "accepted")
         this.sql.run(
           "UPDATE newsletter_ops SET state = 'accepted', provider_ref = ?, detail = 'reconciled', updated_at = ? WHERE op_id = ?",
@@ -819,6 +910,7 @@ export class NewsletterLedger {
           now,
           opId,
         );
+
       return this.op(opId)!;
     });
   }
@@ -832,6 +924,7 @@ export class NewsletterLedger {
   ): OpRow {
     return this.sql.tx(() => {
       const op = this.op(opId) ?? reject("not_found", "operation");
+
       if (op.state !== "held" && op.state !== "unknown")
         reject("conflict", "operation is not held");
       this.sql.run(
@@ -843,6 +936,7 @@ export class NewsletterLedger {
         this.clock.now(),
         opId,
       );
+
       return this.op(opId)!;
     });
   }
@@ -854,24 +948,32 @@ export class NewsletterLedger {
   resumeHeld(publicationId: string): PublicationRow {
     return this.sql.tx(() => {
       const p = this.publication(publicationId) ?? reject("not_found", "publication");
+
       if (p.state !== "held") reject("conflict", "publication is not held");
       const create = this.op(`${publicationId}:create`);
       const send = this.op(`${publicationId}:send`);
+
       const unresolved = [create, send].find(
         (o) => o && (o.state === "held" || o.state === "unknown" || o.state === "in-flight"),
       );
+
       if (unresolved) reject("conflict", `operation ${unresolved.opId} is ${unresolved.state}`);
+
       const state: PublicationState =
         send?.state === "accepted"
           ? "submitted"
           : create?.state === "accepted"
             ? "drafted"
             : "approved";
-      return this.setPublication(publicationId, {
+
+      const patch: Types.Mutable<PublicationPatch> = {
         state,
-        ...(create?.providerRef ? { providerRef: create.providerRef } : {}),
         detail: "resumed by operator",
-      });
+      };
+
+      if (create?.providerRef) patch.providerRef = create.providerRef;
+
+      return this.setPublication(publicationId, patch);
     });
   }
 
@@ -892,6 +994,7 @@ export class NewsletterLedger {
   applyEvent(e: ProviderEventInput): "applied" | "ignored" | "unmapped" | "duplicate" {
     return this.sql.tx(() => {
       const now = this.clock.now();
+
       const fresh = this.sql.run(
         "INSERT OR IGNORE INTO provider_events (event_id, kind, raw_type, address, broadcast_ref, occurred_at, received_at, state) VALUES (?, ?, ?, ?, ?, ?, ?, 'unmapped')",
         e.eventId,
@@ -902,18 +1005,22 @@ export class NewsletterLedger {
         e.occurredAt,
         now,
       );
+
       if (!fresh) return "duplicate";
       const state = this.applyMapped(e);
       this.sql.run("UPDATE provider_events SET state = ? WHERE event_id = ?", state, e.eventId);
+
       return state;
     });
   }
 
   private applyMapped(e: ProviderEventInput): "applied" | "ignored" | "unmapped" {
     const address = e.address?.toLowerCase();
+
     const publication = e.broadcastRef
       ? this.row(this.sql.one("SELECT * FROM publications WHERE provider_ref = ?", e.broadcastRef))
       : undefined;
+
     if (
       e.broadcastRef &&
       !publication &&
@@ -921,9 +1028,11 @@ export class NewsletterLedger {
       e.kind !== "contact-subscribed"
     )
       return "unmapped";
+
     switch (e.kind) {
       case "contact-unsubscribed": {
         if (!address || !this.consent(address)) return "unmapped";
+
         // An account-wide provider unsubscribe is a restriction on every creator (never narrowed to
         // one list); a creator-scoped one is this creator's unsubscribe.
         if (e.scope === "provider") {
@@ -934,8 +1043,10 @@ export class NewsletterLedger {
             `provider ${e.rawType}`,
             e.eventId,
           );
+
           return "applied";
         }
+
         return this.recordConsent(
           address,
           { _tag: "Unsubscribe", source: "provider", at: e.occurredAt },
@@ -945,6 +1056,7 @@ export class NewsletterLedger {
           ? "applied"
           : "ignored";
       }
+
       case "contact-subscribed": {
         if (!address || !this.consent(address)) return "unmapped";
         // A provider-side (re)subscribe is not consent and clears no restriction: logged only.
@@ -954,26 +1066,35 @@ export class NewsletterLedger {
           "provider",
           e.eventId,
         );
+
         return "ignored";
       }
+
       case "hard-bounce":
       case "complaint": {
         if (!address) return "unmapped";
         this.restrict(address, e.kind, e.scope ?? "creator", `provider ${e.rawType}`, e.eventId);
+
         if (publication) this.recipientOutcome(publication.id, address, e.kind);
+
         return "applied";
       }
+
       case "soft-bounce":
       case "delivered": {
         if (!address || !publication) return "unmapped";
         this.recipientOutcome(publication.id, address, e.kind);
+
         return "applied";
       }
+
       case "broadcast-state": {
         if (!publication || !e.broadcastState) return "unmapped";
         this.observe(publication.id, e.broadcastState);
+
         return "applied";
       }
+
       default:
         return "unmapped";
     }
@@ -989,6 +1110,7 @@ export class NewsletterLedger {
       publicationId,
       address,
     );
+
     const next = advanceNewsletterRecipientOutcome(r?.outcome ?? null, outcome);
     // A recipient outside the approved snapshot is recorded as drift, never silently accepted.
     this.sql.run(
@@ -1012,26 +1134,26 @@ export class NewsletterLedger {
         this.clock.now(),
         publicationId,
       );
+
       if (next === "sent") return this.setPublication(publicationId, { state: "sent" });
+
       if (next === "cancelled") {
         const partial = p.observed === "sending";
+
         return this.setPublication(publicationId, {
           state: "cancelled",
           cancel: { _tag: "Confirmed", coverage: partial ? "partial" : "complete" },
         });
       }
+
       return this.publication(publicationId)!;
     });
   }
 
   /** Delivery/eligibility view for the author and operators. */
-  status(publicationId: string): {
-    publication: PublicationRow;
-    outcomes: Readonly<Record<string, number>>;
-    drift: number;
-    ops: ReadonlyArray<OpRow>;
-  } {
+  status(publicationId: string): PublicationStatusView {
     const publication = this.publication(publicationId) ?? reject("not_found", "publication");
+
     const outcomes = Object.fromEntries(
       this.sql
         .all<{ outcome: string | null; n: number }>(
@@ -1040,39 +1162,36 @@ export class NewsletterLedger {
         )
         .map((r) => [r.outcome ?? "no-event", Number(r.n)]),
     );
+
     const drift = Number(
       this.sql.one<{ n: number }>(
         "SELECT COUNT(*) AS n FROM publication_recipients WHERE publication_id = ? AND in_snapshot = 0",
         publicationId,
       )?.n ?? 0,
     );
+
     const ops = this.sql
       .all<{ op_id: string }>(
         "SELECT op_id FROM newsletter_ops WHERE publication_id = ? ORDER BY updated_at",
         publicationId,
       )
       .map((r) => this.op(r.op_id)!);
+
     return { publication, outcomes, drift, ops };
   }
 
   /** Counters for monitoring (unknown sends, oldest queued work, sync lag, cancellation uncertainty). */
-  health(): {
-    unknownOps: number;
-    heldOps: number;
-    syncPending: number;
-    syncHeld: number;
-    oldestSyncPendingAt: number | null;
-    openPublication: string | null;
-    uncertainCancels: number;
-    unmappedEvents: number;
-  } {
+  health() {
     const ops = this.sql.one<{ unknown: number; held: number }>(
       "SELECT SUM(state = 'unknown') AS unknown, SUM(state = 'held') AS held FROM newsletter_ops",
     );
+
     const sync = this.syncState();
+
     const cancels = this.sql.all<{ cancel: string }>(
       "SELECT cancel FROM publications WHERE cancel IS NOT NULL",
     );
+
     return {
       unknownOps: Number(ops?.unknown ?? 0),
       heldOps: Number(ops?.held ?? 0),
@@ -1080,8 +1199,8 @@ export class NewsletterLedger {
       syncHeld: sync.held,
       oldestSyncPendingAt: sync.oldestPendingAt,
       openPublication: this.openPublication()?.id ?? null,
-      uncertainCancels: cancels.filter(
-        (c) => (JSON.parse(c.cancel) as CancellationReport)._tag === "Uncertain",
+      uncertainCancels: cancels.filter((c) =>
+        Predicate.isTagged(JSON.parse(c.cancel) as CancellationReport, "Uncertain"),
       ).length,
       unmappedEvents: Number(
         this.sql.one<{ n: number }>(

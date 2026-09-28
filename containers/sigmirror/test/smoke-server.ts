@@ -9,15 +9,20 @@ import { build } from "rolldown";
 // container network so the job and scanner containers can reach it.
 
 const root = join(import.meta.dirname, "../../..");
+
 const port = Number(process.env.SIGMIRROR_PORT ?? "18091");
+
 const dir = mkdtempSync(join(tmpdir(), "bye-sigmirror-"));
+
 const entry = join(dir, "entry.ts");
+
 await import("node:fs/promises").then((fs) =>
   fs.writeFile(
     entry,
     `import { handleMirror } from ${JSON.stringify(join(root, "workers/sigmirror/src/mirror.ts"))};\nexport default { fetch: (r, e) => handleMirror(r, e) };\n`,
   ),
 );
+
 await build({
   input: entry,
   platform: "neutral",
@@ -36,12 +41,17 @@ const mf = new Miniflare({
   r2Persist: process.env.SIGMIRROR_R2_DIR ?? join(dir, "r2"),
   bindings: { WRITE_TOKEN: process.env.WRITE_TOKEN ?? "" },
 });
+
 const url = await mf.ready;
+
 console.log(`sigmirror listening on ${url.href}`);
+
 const stop = async () => {
   await mf.dispose();
   rmSync(dir, { recursive: true, force: true });
   process.exit(0);
 };
+
 process.on("SIGINT", stop);
+
 process.on("SIGTERM", stop);

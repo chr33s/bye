@@ -82,6 +82,7 @@ describe("ingress journal", () => {
     j.register(intent);
     j.markBlobReady("ing_1");
     j.markEnqueued("ing_1");
+
     for (let n = 1; n < REPLAY_ATTEMPT_CAP; n++) j.touchRepublished("ing_1");
     const row = j.get("ing_1")!;
     expect(row.publishAttempts).toBe(REPLAY_ATTEMPT_CAP);

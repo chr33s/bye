@@ -20,20 +20,26 @@ const dt = (s: string) => {
   const [d, t = "00:00"] = s.split("T");
   const [year, month, day] = d!.split("-").map(Number);
   const [hour, minute] = t.split(":").map(Number);
+
   return { year: year!, month: month!, day: day!, hour: hour!, minute: minute!, second: 0 };
 };
+
 const utc = (s: string) => Date.parse(`${s}Z`);
+
 const START = utc("2026-09-25T12:00:00");
+
 const GUEST = "usr_guest0000000000000000";
 
 const setup = () => {
   const ctx = makeTestCalendarStore({}, START);
+
   const { calendarId } = ctx.store.createCalendar({
     commandId: ctx.cmd(),
     actor: ctx.owner,
     name: "Personal",
     color: "#f00",
   });
+
   return { ...ctx, calendarId };
 };
 
@@ -69,6 +75,7 @@ const invitation = (sequence: number, dtstamp: number, extra: Partial<CalIcsEven
 describe("CalendarStore events", () => {
   it("[C02] creates recurring events with exceptions, highlights and countdowns", () => {
     const { store, cmd, owner, calendarId } = setup();
+
     const { eventId } = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -83,11 +90,13 @@ describe("CalendarStore events", () => {
       countdown: true,
       alarms: [10, 60],
     });
+
     const occ = store.listOccurrences({
       actor: owner,
       from: utc("2026-09-28T00:00:00"),
       to: utc("2026-10-06T00:00:00"),
     });
+
     expect(occ.map((o) => o.key)).toEqual([
       "20260928T090000",
       "20260930T090000",
@@ -97,6 +106,7 @@ describe("CalendarStore events", () => {
     expect(() =>
       store.listOccurrences({ actor: owner, from: 0, to: utc("2030-01-01T00:00:00") }),
     ).toThrow(CalendarStoreError);
+
     const multi = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -107,6 +117,7 @@ describe("CalendarStore events", () => {
         data: { summary: "Trip" },
       },
     });
+
     const trip = store
       .listOccurrences({
         actor: owner,
@@ -114,11 +125,13 @@ describe("CalendarStore events", () => {
         to: utc("2026-10-12T00:00:00"),
       })
       .find((o) => o.eventId === multi.eventId);
+
     expect(trip?.allDay).toBe(true);
   });
 
   it("[C03] edits one occurrence, future occurrences, or the series", () => {
     const { store, cmd, owner, calendarId } = setup();
+
     const { eventId } = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -130,6 +143,7 @@ describe("CalendarStore events", () => {
         data: { summary: "Daily" },
       },
     });
+
     let rev = store.getEvent(owner, eventId).revision;
     rev = store.updateEvent({
       commandId: cmd(),
@@ -150,6 +164,7 @@ describe("CalendarStore events", () => {
         changes: { data: { summary: "x" } },
       }),
     ).toThrow(/revision/);
+
     const split = store.updateEvent({
       commandId: cmd(),
       actor: owner,
@@ -159,13 +174,16 @@ describe("CalendarStore events", () => {
       occurrenceKey: "20261003T100000",
       changes: { start: calTimed(dt("2026-10-03T14:00"), "America/New_York") },
     });
+
     expect(split.splitEventId).toBeDefined();
+
     const occ = store.listOccurrences({
       actor: owner,
       from: utc("2026-09-28T00:00:00"),
       to: utc("2026-10-20T00:00:00"),
       viewerZone: "America/New_York",
     });
+
     expect(occ).toHaveLength(10);
     expect(occ.filter((o) => o.eventId === eventId)).toHaveLength(5);
     expect(occ.find((o) => o.key === "20260929T100000")?.data.summary).toBe("Special");
@@ -174,9 +192,11 @@ describe("CalendarStore events", () => {
         .filter((o) => o.eventId === split.splitEventId)
         .every((o) => o.start.kind === "timed" && o.start.local.hour === 14),
     ).toBe(true);
+
     const link = store.sql.one<{ original_uid: string; split_key: string }>(
       "SELECT original_uid, split_key FROM cal_series_links",
     );
+
     expect(link).toEqual({
       original_uid: store.getEvent(owner, eventId).uid,
       split_key: "20261003T100000",
@@ -211,6 +231,7 @@ describe("CalendarStore events", () => {
 
   it("[C02] schedules multiple reminders and invalidates obsolete jobs on edit", () => {
     const { store, cmd, owner, calendarId, clock } = setup();
+
     const { eventId } = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -222,6 +243,7 @@ describe("CalendarStore events", () => {
       },
       alarms: [60, 10],
     });
+
     const first = store.kernel.job("reminder", eventId)!;
     expect(first.dueAt).toBe(utc("2026-09-25T13:00:00"));
     // Edit moves the event: the old due job must not fire at the old time.
@@ -246,6 +268,7 @@ describe("CalendarStore events", () => {
     expect(second.fired.map((f) => f.offsetMinutes)).toEqual([10]);
     expect(second.nextAlarm).toBeNull();
     expect(outboxOf(store, "calendar.notify").filter((p) => p.kind === "reminder")).toHaveLength(2);
+
     // Cancellation removes pending reminders.
     const other = store.createEvent({
       commandId: cmd(),
@@ -258,6 +281,7 @@ describe("CalendarStore events", () => {
       },
       alarms: [5],
     });
+
     store.deleteEvent({ commandId: cmd(), actor: owner, eventId: other.eventId, scope: "series" });
     expect(store.kernel.job("reminder", other.eventId)).toBeUndefined();
   });
@@ -297,11 +321,13 @@ describe("CalendarStore events", () => {
 describe("CalendarStore invitations", () => {
   it("[C04] creates, updates, deduplicates and cancels invitations; ignores out-of-order revisions", () => {
     const { store, owner } = setup();
+
     const [created] = store.receiveInvitation({
       ingestionId: "ing_1",
       ics: invitation(1, 1000),
       sender: "boss@example.com",
     });
+
     expect(created).toMatchObject({ _tag: "Apply", action: "create" });
     const eventId = (created as { eventId: string }).eventId;
     // Redelivery of the same ingestion is a replay, not a second event.
@@ -377,12 +403,14 @@ describe("CalendarStore invitations", () => {
 
   it("[C04] [C09] accept/tentative/decline emit a real iTIP REPLY to the organizer", () => {
     const { store, cmd, owner } = setup();
+
     const [r] = store.receiveInvitation({
       ingestionId: "ing_1",
       ics: invitation(1, 1000),
       sender: "boss@example.com",
       sourceRef: { mailboxId: "mbx_1", threadId: "thr_1" },
     });
+
     const eventId = (r as { eventId: string }).eventId;
     store.respondToInvitation({ commandId: cmd(), actor: owner, eventId, partstat: "TENTATIVE" });
     const [reply] = outboxOf(store, "calendar.itip");
@@ -411,6 +439,7 @@ describe("CalendarStore invitations", () => {
 
   it("[C04] organizer sends REQUEST/CANCEL and applies attendee replies with ordering", () => {
     const { store, cmd, owner, calendarId } = setup();
+
     const { eventId, uid } = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -422,11 +451,13 @@ describe("CalendarStore invitations", () => {
       },
       attendees: [{ address: "Ann@Example.com", name: "Ann" }, { address: "me@bye.test" }],
     });
+
     expect(outboxOf(store, "calendar.itip")[0]).toMatchObject({
       method: "REQUEST",
       recipients: ["ann@example.com"],
     });
     const record = store.getEvent(owner, eventId);
+
     const asIcs: CalIcsEvent = {
       uid,
       sequence: 0,
@@ -436,6 +467,7 @@ describe("CalendarStore invitations", () => {
       attendees: record.attendees,
       alarms: [],
     };
+
     const accept = calBuildReply(asIcs, "ann@example.com", "ACCEPTED", 5000).ics;
     expect(
       store.receiveInvitation({ ingestionId: "ing_r1", ics: accept, sender: "ann@example.com" })[0],
@@ -475,6 +507,7 @@ describe("CalendarStore invitations", () => {
 describe("CalendarStore sharing, feeds and interoperability", () => {
   it("[C05] shares calendars without leaking private notes, journals or write access", () => {
     const { store, cmd, owner, calendarId } = setup();
+
     const { eventId } = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -486,6 +519,7 @@ describe("CalendarStore sharing, feeds and interoperability", () => {
       },
       privateNote: "secret",
     });
+
     expect(() => store.getEvent(GUEST, eventId)).toThrow(CalendarStoreError);
     store.grantCalendar({
       commandId: cmd(),
@@ -526,6 +560,7 @@ describe("CalendarStore sharing, feeds and interoperability", () => {
 
   it("[A04] [C05] exports and re-imports ICS without private data", () => {
     const { store, cmd, owner, calendarId } = setup();
+
     const { eventId } = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -539,6 +574,7 @@ describe("CalendarStore sharing, feeds and interoperability", () => {
       privateNote: "never export me",
       alarms: [15],
     });
+
     store.updateEvent({
       commandId: cmd(),
       actor: owner,
@@ -558,26 +594,32 @@ describe("CalendarStore sharing, feeds and interoperability", () => {
     const ics = store.exportIcs(owner);
     expect(ics).not.toContain("never export me");
     const target = makeTestCalendarStore({}, START);
+
     const cal = target.store.createCalendar({
       commandId: target.cmd(),
       actor: target.owner,
       name: "Imported",
       color: "#0f0",
     });
+
     const result = target.store.importIcs({
       commandId: target.cmd(),
       actor: target.owner,
       calendarId: cal.calendarId,
       ics,
     });
+
     expect(result).toMatchObject({ imported: 1, updated: 0 });
     const window = { from: utc("2026-09-30T00:00:00"), to: utc("2026-11-01T00:00:00") };
+
     const a = store
       .listOccurrences({ actor: owner, ...window })
       .map((o) => [o.key, o.data.summary, o.startMs]);
+
     const b = target.store
       .listOccurrences({ actor: target.owner, ...window })
       .map((o) => [o.key, o.data.summary, o.startMs]);
+
     expect(b).toEqual(a);
     expect(a).toHaveLength(3);
     // Re-import updates rather than duplicating.
@@ -595,6 +637,7 @@ describe("CalendarStore sharing, feeds and interoperability", () => {
     expect(calendarValidateFeedUrl("webcal://calendars.example.com/team.ics")).toBe(
       "https://calendars.example.com/team.ics",
     );
+
     for (const bad of [
       "http://example.com/a.ics",
       "https://127.0.0.1/a.ics",
@@ -609,7 +652,9 @@ describe("CalendarStore sharing, feeds and interoperability", () => {
     ]) {
       expect(() => calendarValidateFeedUrl(bad), bad).toThrow(CalendarStoreError);
     }
+
     const { store, cmd, owner, clock } = setup();
+
     const { calendarId } = store.addSubscription({
       commandId: cmd(),
       actor: owner,
@@ -618,7 +663,9 @@ describe("CalendarStore sharing, feeds and interoperability", () => {
       url: "https://calendars.example.com/h.ics",
       itemLimit: 2,
     });
+
     expect(store.runDueJobs().refreshes).toEqual([calendarId]);
+
     const feed = [
       "BEGIN:VCALENDAR",
       ...["a", "b", "c"].map(
@@ -627,6 +674,7 @@ describe("CalendarStore sharing, feeds and interoperability", () => {
       ),
       "END:VCALENDAR",
     ].join("\r\n");
+
     const applied = store.applySubscriptionFetch({
       calendarId,
       fetchId: "f1",
@@ -634,6 +682,7 @@ describe("CalendarStore sharing, feeds and interoperability", () => {
       body: feed,
       etag: '"v1"',
     });
+
     expect(applied.imported).toBe(2);
     expect(applied.warnings.join()).toContain("first 2");
     expect(store.subscription(calendarId)).toMatchObject({ etag: '"v1"', itemLimit: 2 });
@@ -649,6 +698,7 @@ describe("CalendarStore sharing, feeds and interoperability", () => {
         },
       }),
     ).toThrow(/read-only/);
+
     // A later fetch without an item removes it; 304 keeps contents.
     const smaller = [
       "BEGIN:VCALENDAR",
@@ -659,6 +709,7 @@ describe("CalendarStore sharing, feeds and interoperability", () => {
       "END:VEVENT",
       "END:VCALENDAR",
     ].join("\r\n");
+
     store.applySubscriptionFetch({ calendarId, fetchId: "f2", status: "ok", body: smaller });
     store.applySubscriptionFetch({ calendarId, fetchId: "f3", status: "not-modified" });
     expect(
@@ -717,6 +768,7 @@ describe("CalendarStore planning", () => {
   it("[C06] keeps week tasks without timestamps across week-start preferences", () => {
     const { store, cmd, owner, calendarId, clock } = setup();
     const sunday = calParseDate("2026-09-27");
+
     const a = store.addWeekTask({
       commandId: cmd(),
       actor: owner,
@@ -724,7 +776,9 @@ describe("CalendarStore planning", () => {
       firstWeekday: 1,
       title: "Taxes",
     });
+
     expect(a.anchor).toBe("2026-09-21");
+
     const b = store.addWeekTask({
       commandId: cmd(),
       actor: owner,
@@ -732,7 +786,9 @@ describe("CalendarStore planning", () => {
       firstWeekday: 0,
       title: "Call mom",
     });
+
     expect(b.anchor).toBe("2026-09-27");
+
     const c = store.addWeekTask({
       commandId: cmd(),
       actor: owner,
@@ -740,6 +796,7 @@ describe("CalendarStore planning", () => {
       firstWeekday: 1,
       title: "Groceries",
     });
+
     store.reorderWeekTask({ commandId: cmd(), actor: owner, taskId: c.taskId, beforeId: a.taskId });
     expect(store.listWeekTasks(calParseDate("2026-09-25"), 1).map((t) => t.title)).toEqual([
       "Groceries",
@@ -757,6 +814,7 @@ describe("CalendarStore planning", () => {
     ]);
     store.completeWeekTask({ commandId: cmd(), actor: owner, taskId: c.taskId, completed: true });
     clock.advance(60_000);
+
     const { eventId } = store.convertWeekTaskToEvent({
       commandId: cmd(),
       actor: owner,
@@ -765,6 +823,7 @@ describe("CalendarStore planning", () => {
       start: calTimed(dt("2026-09-29T18:00"), "UTC"),
       end: calTimed(dt("2026-09-29T18:30"), "UTC"),
     });
+
     expect(store.getEvent(owner, eventId).series.data.summary).toBe("Call mom");
     const converted = store.listWeekTasks(sunday, 0)[0]!;
     expect(converted.eventId).toBe(eventId);
@@ -783,12 +842,14 @@ describe("CalendarStore planning", () => {
 
   it("[C07] tracks habits and enforces one active timer with cross-device reconciliation", () => {
     const { store, cmd, owner, clock } = setup();
+
     const { habitId } = store.createHabit({
       commandId: cmd(),
       actor: owner,
       name: "Read",
       weekdays: [1, 3, 5],
     });
+
     store.setHabitCompletion({
       commandId: cmd(),
       actor: owner,
@@ -826,16 +887,19 @@ describe("CalendarStore planning", () => {
       actor: owner,
       label: "Writing",
     });
+
     // The same command retried by a flaky device does not start a second timer.
     expect(
       store.startTimer({ commandId: "cmd_phone_start", actor: owner, label: "Writing" }),
     ).toEqual(phone);
     clock.advance(30 * 60_000);
+
     const laptop = store.startTimer({
       commandId: "cmd_laptop_start",
       actor: owner,
       label: "Email",
     });
+
     expect(laptop.stoppedEntryId).toBe(phone.entryId);
     expect(store.activeTimer()?.id).toBe(laptop.entryId);
     clock.advance(10 * 60_000);
@@ -880,6 +944,7 @@ describe("CalendarStore planning", () => {
       photoKey: "cal/cal_space1/photo/0123456789abcdef0123",
     });
     store.setDayDecoration({ commandId: cmd(), actor: owner, date: day, label: "Launch day!" });
+
     const r1 = store.writeJournal({
       commandId: cmd(),
       actor: owner,
@@ -887,6 +952,7 @@ describe("CalendarStore planning", () => {
       body: "Nervous",
       expectedRevision: 0,
     });
+
     expect(() =>
       store.writeJournal({
         commandId: cmd(),
@@ -977,6 +1043,7 @@ describe("CalendarStore planning", () => {
 
   it("[C09] creates events from messages with an owner-only backlink", () => {
     const { store, cmd, owner, calendarId } = setup();
+
     const { eventId } = store.createEventFromMessage({
       commandId: cmd(),
       actor: owner,
@@ -986,6 +1053,7 @@ describe("CalendarStore planning", () => {
       start: calTimed(dt("2026-10-02T19:00"), "UTC"),
       end: calTimed(dt("2026-10-02T21:00"), "UTC"),
     });
+
     expect(store.getEvent(owner, eventId).sourceRef).toEqual({
       mailboxId: "mbx_1",
       threadId: "thr_9",
@@ -1075,19 +1143,14 @@ describe("CalendarStore planning", () => {
     const shared = store.changes(GUEST, 0).changes;
     expect(shared.length).toBeGreaterThan(0);
     expect(shared.every((c) => c.resource === "calendar" || c.resource === "event")).toBe(true);
-    expect(
-      (
-        calendarRead(store, "usr_stranger00000000000000", { type: "Changes", cursor: 0 }) as {
-          changes: Array<unknown>;
-        }
-      ).changes,
-    ).toEqual([]);
+    expect(store.changes("usr_stranger00000000000000", 0).changes).toEqual([]);
   });
 });
 
 describe("whole-series edits made from one occurrence", () => {
   it("[C03] moving one occurrence's time for the series shifts the series, keeping its first date", () => {
     const { store, cmd, owner, calendarId } = setup();
+
     const { eventId } = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -1099,8 +1162,10 @@ describe("whole-series edits made from one occurrence", () => {
         data: { summary: "Sync" },
       },
     });
+
     const occurrences = (from: string, to: string) =>
       store.listOccurrences({ actor: owner, from: utc(from), to: utc(to) });
+
     // Edited from the 2 Nov occurrence (after the clocks change): 09:00 → 10:15, end 09:30 → 10:45.
     const nov = occurrences("2026-11-02T00:00:00", "2026-11-03T00:00:00")[0]!;
     store.updateEvent({

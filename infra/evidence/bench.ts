@@ -23,6 +23,7 @@ const message = (i: number): Uint8Array => {
   const topic = WORDS[i % WORDS.length]!;
   const body = Array.from({ length: 200 }, (_, j) => WORDS[(i * 7 + j) % WORDS.length]).join(" ");
   const attachment = btoa("x".repeat(4096));
+
   return new TextEncoder().encode(
     [
       `From: sender${i % 50}@example.net`,
@@ -56,6 +57,7 @@ export const runBench = (n = 500): BenchResult => {
   const shard = makeTestSearchShard();
   const heap0 = process.memoryUsage().heapUsed;
   let indexTotal = 0;
+
   for (let i = 0; i < n; i++) {
     const t0 = performance.now();
     const parsed = parseMessage(message(i));
@@ -76,16 +78,20 @@ export const runBench = (n = 500): BenchResult => {
     });
     indexTotal += performance.now() - t1;
   }
+
   const searchTimes: Array<number> = [];
   let hits = 0;
   const queries = Math.min(100, n);
+
   for (let q = 0; q < queries; q++) {
     const i = Math.floor((q * n) / queries);
     const t0 = performance.now();
     const page = shard.candidates(`unique-token-${i}`, { limit: 10 });
     searchTimes.push(performance.now() - t0);
+
     if (page.candidates.some((c) => c.refId === `d${i}`)) hits++;
   }
+
   return {
     messages: n,
     parseP95Ms: p95(parseTimes),

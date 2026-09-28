@@ -23,6 +23,7 @@ describe("threading", () => {
           ]
         : [],
   };
+
   const base = {
     messageIdHeader: "new@x",
     inReplyTo: [],

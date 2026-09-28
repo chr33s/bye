@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { DurableObject } from "cloudflare:workers";
 import type { MailboxDeliveryCommit } from "@bye/application";
 import type { MailboxCommand, MailViewQuery } from "@bye/contracts";
@@ -45,6 +46,7 @@ export { icsUid as itipUid } from "@bye/mail-codec";
 export const MAILBOX_METADATA_BUDGET_BYTES = 10 * 1024 * 1024 * 1024;
 
 const ERASED_KEY = "erased";
+
 const ERASED_REJECTION = {
   ok: false as const,
   code: "gone" as const,
@@ -82,7 +84,9 @@ export class MailboxDO extends DurableObject<CoreEnv> {
   /** Run one store call; `settle` relays its outbox and re-arms the alarm after it commits. */
   private call<A>(f: () => A, options: { readonly settle?: boolean } = {}): A {
     const result = f();
+
     if (options.settle) this.ctx.waitUntil(this.afterCommit());
+
     return result;
   }
 
@@ -118,14 +122,17 @@ export class MailboxDO extends DurableObject<CoreEnv> {
   metadataBytes(): number {
     // Forced by Cloudflare's types: `SqlStorage` doesn't declare `databaseSize` in the pinned
     // workers-types, though the runtime provides it; PRAGMAs are the fallback.
-    const sql = this.ctx.storage.sql as unknown as {
+    const sql = this.ctx.storage.sql as {
       databaseSize?: number;
-      exec(q: string): { toArray(): Array<Record<string, unknown>> };
+      exec(q: string): { toArray(): Array<Record<string, SqlStorageValue>> };
     };
-    if (typeof sql.databaseSize === "number") return sql.databaseSize;
+
+    if (Predicate.isNumber(sql.databaseSize)) return sql.databaseSize;
+
     try {
       const pages = Number(Object.values(sql.exec("PRAGMA page_count").toArray()[0] ?? {})[0] ?? 0);
       const size = Number(Object.values(sql.exec("PRAGMA page_size").toArray()[0] ?? {})[0] ?? 0);
+
       return pages * size;
     } catch {
       return 0;
@@ -143,6 +150,7 @@ export class MailboxDO extends DurableObject<CoreEnv> {
       const mailbox = await extraUsageBytes(this.env, "mailbox", this.mailboxId);
       const owner = await ownerOfMailbox(this.env, this.mailboxId).catch(() => null);
       let exports = 0;
+
       if (owner) {
         const home = await this.env.DIRECTORY.withSession("first-primary")
           .prepare(
@@ -150,11 +158,14 @@ export class MailboxDO extends DurableObject<CoreEnv> {
           )
           .bind(owner.user_id)
           .first<{ id: string }>();
+
         if (home?.id === this.mailboxId)
           exports = (await extraUsageBytes(this.env, "user", owner.user_id)).exports;
       }
+
       const total = mailbox.parts + mailbox.bodies + mailbox.exports + exports;
       this.store.uploads.setExternalUsage(total);
+
       return total;
     } catch {
       return this.store.uploads.externalUsage();
@@ -193,11 +204,13 @@ export class MailboxDO extends DurableObject<CoreEnv> {
   async commitDelivery(input: MailboxDeliveryCommit) {
     // Permanent rejection: the ingest consumer records it and stops replaying the receipt.
     if (this.erased()) return ERASED_REJECTION;
+
     // C04: an iTIP REPLY from an unscreened sender bypasses the Screener only when the owner's
     // calendar authority confirms it organizes the event. REQUESTs are always screened.
     const organizerReply =
       this.store.ingest.needsOrganizerCheck(input.summary, input.ingestionId) &&
       (await this.ownerOrganizes(input.summary.calendarUid));
+
     return this.call(
       () =>
         this.rpc.commitDelivery(
@@ -210,8 +223,10 @@ export class MailboxDO extends DurableObject<CoreEnv> {
   /** Whether the owner's calendar organizes the event with this UID; fails closed (the reply waits in the Screener). */
   private async ownerOrganizes(uid: string | undefined): Promise<boolean> {
     if (!uid) return false;
+
     try {
       const owner = await ownerOfMailbox(this.env, this.mailboxId);
+
       return owner?.calendar_id
         ? await this.env.CALENDARS.getByName(owner.calendar_id).isOrganizerOf(uid)
         : false;
@@ -226,8 +241,10 @@ export class MailboxDO extends DurableObject<CoreEnv> {
       // Drop the transfer and the copy already written under this (erased) mailbox's prefix.
       if (input.messageKey.startsWith(`t/${this.mailboxId}/`))
         await this.env.ORIGINALS.delete(input.messageKey).catch(() => undefined);
+
       return null;
     }
+
     return this.call(
       () =>
         this.store.ingest.commitDelivery({
@@ -367,9 +384,11 @@ export class MailboxDO extends DurableObject<CoreEnv> {
   }> {
     const docKey = `${kind}:${id}`;
     const doc = await this.indexDocument(kind, id);
+
     const shard = doc
       ? this.store.search.searchPlacement(doc.docId, doc.date)
       : (this.store.search.existingPlacement(docKey) ?? this.store.search.searchShards()[0]!.name);
+
     return { doc, shard, seq: this.store.kernel.currentSeq(), docKey };
   }
 
@@ -381,6 +400,7 @@ export class MailboxDO extends DurableObject<CoreEnv> {
   recordShardHealth(name: string, storedBytes: number) {
     const health = searchShardHealth(storedBytes);
     const { opened } = this.store.search.recordShardHealth(name, storedBytes, health.rollover);
+
     if (health.alert)
       console.warn(
         JSON.stringify({
@@ -390,7 +410,9 @@ export class MailboxDO extends DurableObject<CoreEnv> {
           rollover: health.rollover,
         }),
       );
+
     if (opened) this.ctx.waitUntil(this.afterCommit());
+
     return { ...health, opened };
   }
 
@@ -411,6 +433,7 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     const messageKey = this.store.search.bodySource(kind, id);
     const body = messageKey ? await this.env.PARTS.get(bodyKeyFor(messageKey)) : null;
     const text = body ? (await body.json<StoredBody>()).text : undefined;
+
     return this.store.search.searchDocument(kind, id, text);
   }
 
@@ -419,7 +442,9 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     deliveryId: string,
   ): Promise<{ readonly messageKey: string; readonly remoteImages: boolean } | null> {
     const d = this.store.views.delivery(deliveryId);
+
     if (!d) return null;
+
     // Preference values are "proxy" | "off" (E23); "off" blocks every remote image.
     return {
       messageKey: d.messageKey,
@@ -447,7 +472,9 @@ export class MailboxDO extends DurableObject<CoreEnv> {
   attachmentFor(deliveryId: string, partId: string) {
     const d = this.store.views.delivery(deliveryId);
     const a = d?.attachments.find((x) => x.partId === partId);
+
     if (!d || !a) return null;
+
     return {
       messageKey: d.messageKey,
       filename: a.filename,
@@ -469,6 +496,7 @@ export class MailboxDO extends DurableObject<CoreEnv> {
 
   recordUploadPart(uploadId: string, partNumber: number, size: number, etag: string) {
     this.store.uploads.recordUploadPart(uploadId, partNumber, size, etag);
+
     return this.store.uploads.upload(uploadId);
   }
 
@@ -485,7 +513,8 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     // Reset the live object: its in-memory store references dropped tables. The next request
     // constructs a fresh, migrated, empty authority.
     const abort = (this.ctx as { abort?: (reason?: string) => void }).abort;
-    if (typeof abort === "function") setTimeout(() => abort.call(this.ctx, "erased"), 0);
+
+    if (Predicate.isFunction(abort)) setTimeout(() => abort.call(this.ctx, "erased"), 0);
   }
 
   /** Cron reconciliation (§6): restore wake-ups, fence stale submissions, apply retention. */
@@ -501,6 +530,7 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     this.store.sends.replayStaleDispatches(now, 15 * 60_000);
     this.store.search.replayPendingIndex();
     this.store.kernel.compactChanges(10_000);
+
     // Re-emit scans whose queue message was lost or dead-lettered (§6 replay from source state).
     for (const p of this.store.ingest.pendingScans(now - 15 * 60_000, 50)) {
       this.store.kernel.outbox("propagate", this.mailboxId, {
@@ -509,10 +539,12 @@ export class MailboxDO extends DurableObject<CoreEnv> {
         messageKey: p.messageKey,
       });
     }
+
     // Bounded: one batch here; a scheduled `retention-sweep` job drains any backlog via the alarm.
     const purged = this.store.retention.sweepRetention(now).deleted;
     await this.refreshExternalUsage().catch(() => 0);
     await this.afterCommit();
+
     return {
       nextWake: this.store.nextWakeAt(now),
       unknown,
@@ -526,6 +558,7 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     // finally re-arms the alarm and flushes the outbox even if something else here throws.
     try {
       const { failed } = this.store.runDueJobs(Date.now());
+
       for (const f of failed)
         console.error(
           JSON.stringify({

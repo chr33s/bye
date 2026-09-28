@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Schema } from "effect";
+import { Predicate, Schema } from "effect";
 import { MAX_MESSAGE_RECIPIENTS, MailDraftContent } from "@bye/contracts";
 import {
   allInChunks,
@@ -28,15 +28,20 @@ import {
 // which the test shims now enforce, and for kernel/mailbox housekeeping bounds.
 
 const DAY = 24 * 3600 * 1000;
+
 const long = (n: number) => "x".repeat(n);
 
 const setup = () => {
   const m = makeTestMailbox();
+
   const deliver = (over: Parameters<typeof summaryFixture>[0] = {}) => {
     m.clock.advance(1000);
+
     return m.store.ingest.commitDelivery(deliveryFixture(m.clock, summaryFixture(over)));
   };
+
   m.store.screener.screen([{ sender: "alice@example.com", decision: "allow" }]);
+
   return { ...m, deliver };
 };
 
@@ -64,10 +69,13 @@ describe("IN lists stay under 100 bound parameters", () => {
 
   it("listView at its 200-item maximum loads labels for every thread", () => {
     const m = setup();
+
     for (let i = 0; i < 205; i++) {
       const t = m.deliver({ subject: `t${i}` });
+
       if (i % 2 === 0) m.store.organize.setThreadLabels(t.threadId, ["even"], []);
     }
+
     const page = m.store.views.listView({ view: "everything", limit: 200 });
     expect(page.items).toHaveLength(200);
     expect(page.items.filter((t) => t.labels.includes("even")).length).toBeGreaterThan(90);
@@ -76,6 +84,7 @@ describe("IN lists stay under 100 bound parameters", () => {
   it("a thread with more than 100 deliveries loads its attachments", () => {
     const m = setup();
     const first = m.deliver({ messageIdHeader: "root@x", subject: "long thread" });
+
     for (let i = 0; i < 110; i++)
       m.deliver({
         subject: "Re: long thread",
@@ -88,24 +97,30 @@ describe("IN lists stay under 100 bound parameters", () => {
   it("SendJobs returns the latest 200 jobs, oldest first, with recipients", () => {
     const m = setup();
     const ids: Array<string> = [];
+
     for (let i = 0; i < 205; i++) {
       m.clock.advance(1);
       const { draftId } = draftTo(m, [`r${i}@example.com`]);
       const r = m.store.sends.send(draftId, { expectedRevision: 1 });
-      if (r._tag !== "Queued") throw new Error(r._tag);
+
+      if (!Predicate.isTagged(r, "Queued")) throw new Error(r._tag);
       ids.push(...r.sendJobIds);
     }
+
     const all = m.store.sends.jobs(undefined, 200);
     expect(all.map((j) => j.sendJobId)).toEqual(ids.slice(-200));
     expect(all.every((j) => j.recipients.length === 1)).toBe(true);
+
     const read = applyMailboxRead(m.store, { _tag: "SendJobs" }) as {
       items: ReadonlyArray<{ sendJobId: string }>;
     };
+
     expect(read.items.map((j) => j.sendJobId)).toEqual(ids.slice(-200));
   });
 
   it("contacts with groups export past 100 rows", () => {
     const m = setup();
+
     for (let i = 0; i < 130; i++)
       m.store.organize.putContact({
         name: `c${i}`,
@@ -194,6 +209,7 @@ describe("search bounds", () => {
 
   it("an undecodable cursor is bad_request, not a defect", () => {
     const shard = makeTestSearchShard();
+
     for (const cursor of ["%%%not-base64", btoa("not json"), btoa(JSON.stringify({ d: "x" }))])
       expect(() => shard.candidates("hello", { cursor })).toThrow(
         expect.objectContaining({ code: "bad_request" }),
@@ -205,6 +221,7 @@ describe("recipient ceiling", () => {
   const content = (to: number, cc = 0, bcc = 0) => {
     const list = (n: number, p: string) =>
       Array.from({ length: n }, (_, i) => ({ address: `${p}${i}@example.com` }));
+
     return {
       to: list(to, "t"),
       cc: list(cc, "c"),
@@ -214,6 +231,7 @@ describe("recipient ceiling", () => {
       attachments: [],
     };
   };
+
   const decode = Schema.decodeUnknownExit(MailDraftContent);
 
   it("caps each list and the combined total", () => {
@@ -225,12 +243,14 @@ describe("recipient ceiling", () => {
 
   it("group expansion past the ceiling is rejected at send", () => {
     const m = setup();
+
     for (let i = 0; i < MAX_MESSAGE_RECIPIENTS; i++)
       m.store.organize.putContact({
         name: `g${i}`,
         emails: [`g${i}@example.com`],
         groups: ["all"],
       });
+
     const { draftId } = m.store.drafts.createDraft({
       content: {
         to: [{ name: undefined, address: "extra@example.com" }],
@@ -242,6 +262,7 @@ describe("recipient ceiling", () => {
         groups: ["all"],
       },
     });
+
     expect(() => m.store.sends.send(draftId, { expectedRevision: 1 })).toThrow(
       expect.objectContaining({ code: "bad_request" }),
     );
@@ -253,6 +274,7 @@ describe("kernel housekeeping", () => {
     const sql = new Sql(storage);
     migrate(sql, "kernel", KERNEL_MIGRATIONS);
     const clock = new TestClock();
+
     return { sql, clock, kernel: new Kernel(sql, clock) };
   };
 
@@ -273,10 +295,12 @@ describe("kernel housekeeping", () => {
 
   it("prunes old receipts, published outbox rows and finished jobs in bounded batches", () => {
     const { sql, clock, kernel: k } = kernel();
+
     for (let i = 0; i < 5; i++) {
       k.receipt(`cmd${i}`, "K", () => i, { i });
       k.consume(`evt${i}`, "t", () => i);
     }
+
     const published = k.outbox("topic", "t", {});
     k.markPublished([published]);
     const pending = k.outbox("topic", "t", {});
@@ -296,6 +320,7 @@ describe("kernel housekeeping", () => {
 
     const count = (table: string) =>
       Number(sql.one<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`)!.n);
+
     expect(count("command_receipts")).toBe(1);
     expect(count("inbound_receipts")).toBe(0);
     expect(k.pendingOutbox(10).map((e) => e.eventId)).toEqual([pending]);
@@ -334,11 +359,13 @@ describe("kernel housekeeping", () => {
 describe("upload state transitions", () => {
   const upload = () => {
     const m = makeTestMailbox();
+
     const u = m.store.uploads.reserveUpload({
       filename: "a",
       contentType: "text/plain",
       declaredSize: 10,
     });
+
     return { m, u };
   };
 
@@ -386,16 +413,20 @@ describe("retention batches", () => {
 
   it("Empty removes one batch and continues from a job, sparing mail trashed afterwards", () => {
     const m = setup();
+
     const threads = Array.from(
       { length: RETENTION_BATCH + 10 },
       (_, i) => m.deliver({ subject: `s${i}` }).threadId,
     );
+
     m.store.triage.moveToTrash(threads);
+
     const r = applyMailboxCommand(m.store, {
       _tag: "Empty",
       commandId: cmd(),
       disposition: "trash",
     });
+
     expect(r).toEqual({ deleted: RETENTION_BATCH, more: true });
     m.clock.advance(1000);
     const late = m.deliver({ subject: "late" }).threadId;
@@ -414,8 +445,10 @@ describe("due jobs are isolated", () => {
     const onDue = m.store.sends.onLegacyWorldPublishDue.bind(m.store.sends);
     m.store.sends.onLegacyWorldPublishDue = (key, payload) => {
       if (key === "poison") throw new Error("boom");
+
       return onDue(key, payload);
     };
+
     m.store.triage.bubbleUp(t.threadId, m.clock.now());
     const first = m.store.runDueJobs(m.clock.now());
     expect(first.ran).toBe(1);
@@ -424,10 +457,12 @@ describe("due jobs are isolated", () => {
     ]);
     // Backed off: not due again immediately.
     expect(m.store.runDueJobs(m.clock.now()).failed).toEqual([]);
+
     for (let i = 0; i < 5; i++) {
       m.clock.advance(3600_000);
       m.store.runDueJobs(m.clock.now());
     }
+
     expect(m.store.kernel.job("world-publish", "poison")).toBeUndefined();
     expect(m.store.kernel.failedJobs(10)).toEqual([
       expect.objectContaining({ kind: "world-publish", key: "poison", error: "Error: boom" }),

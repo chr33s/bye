@@ -6,7 +6,9 @@ vi.hoisted(() => {
 
 const { draftsOwnedBy, LOCAL_OWNER_KEY, localOwnerAction, resolveConflict, saveLocalDraft } =
   await import("../src/drafts.ts");
+
 const { bindLocalOwner, onSignedOut } = await import("../src/auth.ts");
+
 type LocalDraft = import("../src/drafts.ts").LocalDraft;
 
 const local: LocalDraft = {
@@ -23,6 +25,10 @@ const local: LocalDraft = {
   state: "local",
 };
 
+interface DeleteRequest {
+  onsuccess: (() => void) | null;
+}
+
 describe("offline drafts", () => {
   it("[X01] a server conflict keeps both copies instead of last-write-wins", () => {
     const merged = resolveConflict(local, {
@@ -33,6 +39,7 @@ describe("offline drafts", () => {
       subject: "Other device",
       text: "other",
     });
+
     expect(merged.state).toBe("conflict");
     expect(merged.baseRevision).toBe(5);
     expect(merged.text).toBe("other");
@@ -69,12 +76,14 @@ describe("offline drafts are account-scoped (shared browser)", () => {
     beforeEach(() => {
       store = new Map();
       deleted = [];
+
       // A Storage stand-in whose entries are own keys (clearLocalData walks Object.keys).
       const api = {
         getItem: (k: string) => store.get(k) ?? null,
         setItem: (k: string, v: string) => void store.set(k, v),
         removeItem: (k: string) => void store.delete(k),
       };
+
       vi.stubGlobal(
         "localStorage",
         new Proxy(api, {
@@ -89,8 +98,9 @@ describe("offline drafts are account-scoped (shared browser)", () => {
       vi.stubGlobal("indexedDB", {
         deleteDatabase: (name: string) => {
           deleted.push(name);
-          const request: Record<string, (() => void) | null> = { onsuccess: null };
+          const request: DeleteRequest = { onsuccess: null };
           queueMicrotask(() => request.onsuccess?.());
+
           return request;
         },
         open: () => {

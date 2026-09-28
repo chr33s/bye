@@ -16,6 +16,7 @@ const b64u = (bytes: Uint8Array) =>
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
+
 const fromB64u = (v: string) =>
   Uint8Array.from(
     atob(
@@ -43,6 +44,7 @@ const V = {
 
 const ecPrivateJwk = (pub: string, d: string) => {
   const p = fromB64u(pub);
+
   return {
     kty: "EC",
     crv: "P-256",
@@ -66,6 +68,7 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
         },
       },
     );
+
     expect(b64u(body)).toBe(V.body);
   });
 
@@ -74,10 +77,12 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
       { p256dh: V.uaPublic, auth: V.auth },
       new TextEncoder().encode("hello") as Uint8Array<ArrayBuffer>,
     );
+
     const salt = body.slice(0, 16);
     const idlen = body[20]!;
     const asPublic = body.slice(21, 21 + idlen);
     const ciphertext = body.slice(21 + idlen);
+
     const uaPriv = await crypto.subtle.importKey(
       "jwk",
       ecPrivateJwk(V.uaPublic, V.uaPrivate),
@@ -85,6 +90,7 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
       false,
       ["deriveBits"],
     );
+
     const asKey = await crypto.subtle.importKey(
       "raw",
       asPublic,
@@ -92,9 +98,11 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
       false,
       [],
     );
+
     const ecdh = new Uint8Array(
       await crypto.subtle.deriveBits({ name: "ECDH", public: asKey }, uaPriv, 256),
     );
+
     const hk = async (salt: Uint8Array, ikm: Uint8Array, info: Uint8Array, len: number) =>
       new Uint8Array(
         await crypto.subtle.deriveBits(
@@ -103,15 +111,19 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
           len * 8,
         ),
       );
+
     const enc = new TextEncoder();
+
     const keyInfo = new Uint8Array([
       ...enc.encode("WebPush: info\0"),
       ...fromB64u(V.uaPublic),
       ...asPublic,
     ]);
+
     const ikm = await hk(fromB64u(V.auth), ecdh, keyInfo, 32);
     const cek = await hk(salt, ikm, enc.encode("Content-Encoding: aes128gcm\0"), 16);
     const nonce = await hk(salt, ikm, enc.encode("Content-Encoding: nonce\0"), 12);
+
     const plain = new Uint8Array(
       await crypto.subtle.decrypt(
         { name: "AES-GCM", iv: nonce },
@@ -119,6 +131,7 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
         ciphertext,
       ),
     );
+
     expect(new TextDecoder().decode(plain.slice(0, -1))).toBe("hello");
     expect(plain.at(-1)).toBe(2);
   });
@@ -129,12 +142,14 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
       { publicKey: V.asPublic, privateKey: V.asPrivate, subject: "mailto:ops@bye.test" },
       Date.UTC(2026, 8, 25),
     );
+
     const [, jwt, k] = /^vapid t=([^,]+), k=(.+)$/.exec(header)!;
     expect(k).toBe(V.asPublic);
     const [h, c, s] = jwt!.split(".");
     const claims = JSON.parse(new TextDecoder().decode(fromB64u(c!)));
     expect(claims).toMatchObject({ aud: "https://push.example.net", sub: "mailto:ops@bye.test" });
     expect(claims.exp - Date.UTC(2026, 8, 25) / 1000).toBeLessThanOrEqual(24 * 3600);
+
     const pub = await crypto.subtle.importKey(
       "raw",
       fromB64u(V.asPublic),
@@ -142,6 +157,7 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
       false,
       ["verify"],
     );
+
     expect(
       await crypto.subtle.verify(
         { name: "ECDSA", hash: "SHA-256" },
@@ -159,6 +175,7 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
       redirect?: string;
       signal?: AbortSignal;
     }> = [];
+
     const result = await sendWebPush(
       async (url, init) => (
         calls.push({ url, headers: init.headers, redirect: init.redirect, signal: init.signal }),
@@ -173,6 +190,7 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
       },
       { topic: "thread:thr 1!" },
     );
+
     expect(result._tag).toBe("Delivered");
     expect(calls[0]!.headers).toMatchObject({
       "content-encoding": "aes128gcm",
@@ -191,20 +209,24 @@ describe("Web Push (RFC 8291 / RFC 8292)", () => {
 });
 
 type Key = Awaited<ReturnType<typeof crypto.subtle.importKey>>;
+
 type KeyPair = { publicKey: Key; privateKey: Key };
 
 const pkcs8Pem = async (key: Key) => {
   const der = new Uint8Array((await crypto.subtle.exportKey("pkcs8", key)) as ArrayBuffer);
+
   return `-----BEGIN PRIVATE KEY-----\n${btoa(String.fromCharCode(...der))}\n-----END PRIVATE KEY-----`;
 };
 
 describe("native push adapters", () => {
   it("[E23] APNs uses a cached ES256 provider token and the device-token path", async () => {
     resetPushTokenCaches();
+
     const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
       "sign",
       "verify",
     ])) as KeyPair;
+
     const config = {
       teamId: "TEAM123456",
       keyId: "KEY1234567",
@@ -212,10 +234,12 @@ describe("native push adapters", () => {
       topic: "app.bye.mobile",
       production: false,
     };
+
     const t1 = await apnsProviderToken(config, 0);
     expect(await apnsProviderToken(config, 30 * 60_000)).toBe(t1);
     expect(await apnsProviderToken(config, 45 * 60_000)).not.toBe(t1);
     const calls: Array<{ url: string; headers: Record<string, string>; body: string }> = [];
+
     const r = await sendApns(
       async (url, init) => (
         calls.push({ url, headers: init.headers, body: String(init.body) }),
@@ -225,6 +249,7 @@ describe("native push adapters", () => {
       "a".repeat(64),
       { title: "New mail", body: "From Ana", url: "bye://mail/imbox", collapseId: "thr_1" },
     );
+
     expect(r._tag).toBe("Delivered");
     expect(calls[0]!.url).toBe(`https://api.sandbox.push.apple.com/3/device/${"a".repeat(64)}`);
     expect(calls[0]!.headers["apns-topic"]).toBe("app.bye.mobile");
@@ -253,6 +278,7 @@ describe("native push adapters", () => {
 
   it("[E23] FCM exchanges a service-account JWT once, then sends HTTP v1 messages", async () => {
     resetPushTokenCaches();
+
     const pair = (await crypto.subtle.generateKey(
       {
         name: "RSASSA-PKCS1-v1_5",
@@ -263,27 +289,34 @@ describe("native push adapters", () => {
       true,
       ["sign", "verify"],
     )) as KeyPair;
+
     const account = {
       project_id: "bye-prod",
       client_email: "push@bye.iam.example",
       private_key: await pkcs8Pem(pair.privateKey),
     };
+
     let tokenCalls = 0;
     const sent: Array<unknown> = [];
+
     const fetchFn = async (url: string, init: { body?: unknown }) => {
       if (url.includes("oauth2")) {
         tokenCalls++;
         expect(String(init.body)).toContain(
           "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer",
         );
+
         return {
           status: 200,
           json: async () => ({ access_token: "ya29.token", expires_in: 3600 }),
         };
       }
+
       sent.push(JSON.parse(String(init.body)));
+
       return { status: 200, json: async () => ({}) };
     };
+
     await sendFcm(
       fetchFn as never,
       account,

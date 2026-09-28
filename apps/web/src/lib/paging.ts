@@ -22,8 +22,10 @@ export const appendPage = <T>(
 ): Paged<T> => {
   const index = new Map(current.items.map((item, i) => [keyOf(item), i] as const));
   const items = [...current.items];
+
   for (const item of page.items) {
     const at = index.get(keyOf(item));
+
     if (at === undefined) {
       index.set(keyOf(item), items.length);
       items.push(item);
@@ -31,6 +33,7 @@ export const appendPage = <T>(
       items[at] = item;
     }
   }
+
   return { items, cursor: page.nextCursor, done: page.nextCursor === null };
 };
 
@@ -38,6 +41,8 @@ export const appendPage = <T>(
 export const nextPageQuery = (paged: Paged<unknown>, limit = 50): string | null => {
   if (paged.done) return null;
   const q = new URLSearchParams({ limit: String(limit) });
+
   if (paged.cursor) q.set("cursor", paged.cursor);
+
   return q.toString();
 };

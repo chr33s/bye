@@ -51,14 +51,17 @@ export const writeTombstone = async (
 export const reseedTombstones = async (env: CoreEnv): Promise<number> => {
   let reseeded = 0;
   let cursor: string | undefined;
+
   do {
-    const listed = await env.ORIGINALS.list({
-      prefix: TOMBSTONE_LEDGER_PREFIX,
-      limit: 1000,
-      ...(cursor ? { cursor } : {}),
-    });
+    const listed = await env.ORIGINALS.list(
+      cursor
+        ? { prefix: TOMBSTONE_LEDGER_PREFIX, limit: 1000, cursor }
+        : { prefix: TOMBSTONE_LEDGER_PREFIX, limit: 1000 },
+    );
+
     for (const o of listed.objects) {
       const [kind = "", rawId = ""] = o.key.slice(TOMBSTONE_LEDGER_PREFIX.length).split("/");
+
       const r = await env.DIRECTORY.prepare(
         "INSERT INTO erasure_tombstones (resource_kind, resource_id, erased_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
       )
@@ -68,10 +71,13 @@ export const reseedTombstones = async (env: CoreEnv): Promise<number> => {
           o.uploaded instanceof Date ? o.uploaded.getTime() : Date.now(),
         )
         .run();
+
       reseeded += r.meta.changes ?? 0;
     }
+
     cursor = listed.truncated ? listed.cursor : undefined;
   } while (cursor);
+
   return reseeded;
 };
 
@@ -82,18 +88,22 @@ export const planErasure = async (
   reason: string,
 ): Promise<ErasurePlan> => {
   const db = env.DIRECTORY.withSession("first-primary");
+
   const mailboxes = await db
     .prepare("SELECT id FROM mailboxes WHERE owner_user_id = ?")
     .bind(userId)
     .all<{ id: string }>();
+
   const calendars = await db
     .prepare("SELECT id FROM calendars WHERE owner_user_id = ?")
     .bind(userId)
     .all<{ id: string }>();
+
   const user = await db
     .prepare("SELECT primary_address FROM users WHERE id = ?")
     .bind(userId)
     .first<{ primary_address: string }>();
+
   // Space membership lives in each SharedSpaceDO; D1 keeps an index when the control area provides
   // one (`space_memberships`). Without it, membership removal follows account closure instead.
   const spaces = await db
@@ -101,10 +111,12 @@ export const planErasure = async (
     .bind(userId)
     .all<{ id: string }>()
     .catch(() => ({ results: [] as Array<{ id: string }> }));
+
   // Closure rewrites the address to `released:<userId>:<address>`; recover the original so the
   // World handle is still found when erasure is started by closure.
   const address = user?.primary_address.replace(`released:${userId}:`, "");
   const handle = address ? await ownedWorldHandle(env, userId, address) : null;
+
   return {
     v: 1,
     userId,
@@ -147,21 +159,29 @@ export const startErasure = async (
 ): Promise<{ readonly instanceId: string; readonly plan: ErasurePlan }> => {
   const plan = await planErasure(env, userId, reason);
   await writeTombstone(env, "user", userId);
+
   for (const id of plan.mailboxIds) await writeTombstone(env, "mailbox", id);
+
   for (const id of plan.mailboxIds) await fenceErasedMailbox(env, id);
+
   for (const id of plan.calendarIds) await writeTombstone(env, "calendar", id);
+
   for (const spaceId of plan.spaceIds)
     await writeTombstone(env, "space-member", spaceMemberTombstoneId(spaceId, userId));
+
   if (plan.worldHandle)
     await writeTombstone(env, "world", worldTombstoneId(plan.worldHandle, userId));
   const instanceId = `erase-${userId}`;
+
   try {
     await env.ERASE_ACCOUNT.create({ id: instanceId, params: plan });
   } catch (e) {
     // Already running/finished: tombstones still guarantee completion via replay.
     if (!String(e).match(/already|exists/i)) throw e;
   }
+
   metric("erasure.started", 1);
+
   return { instanceId, plan };
 };
 
@@ -200,21 +220,28 @@ export const mailboxErased = async (
 const purgePrefix = async (bucket: R2Bucket, prefix: string): Promise<number> => {
   let removed = 0;
   let cursor: string | undefined;
+
   do {
-    const listed = await bucket.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
+    const listed = await bucket.list(
+      cursor ? { prefix, limit: 1000, cursor } : { prefix, limit: 1000 },
+    );
+
     if (listed.objects.length) {
       await bucket.delete(listed.objects.map((o) => o.key));
       removed += listed.objects.length;
     }
+
     cursor = listed.truncated ? listed.cursor : undefined;
   } while (cursor);
+
   return removed;
 };
 
 /** Optional RPCs owned by other areas; missing methods are tolerated (tombstone replay retries). */
-const tryRpc = async (fn: () => Promise<unknown>): Promise<boolean> => {
+const tryRpc = async <R>(fn: () => Promise<R>): Promise<boolean> => {
   try {
     await fn();
+
     return true;
   } catch {
     return false;
@@ -223,9 +250,11 @@ const tryRpc = async (fn: () => Promise<unknown>): Promise<boolean> => {
 
 export const eraseMailboxContent = async (env: CoreEnv, mailboxId: string): Promise<number> => {
   await fenceErasedMailbox(env, mailboxId);
+
   const removed =
     (await purgePrefix(env.ORIGINALS, `t/${mailboxId}/`)) +
     (await purgePrefix(env.PARTS, `t/${mailboxId}/`));
+
   // Every search shard, including ones opened by size rollover (`search:<mailbox>:<ts>`), not just
   // the base shard. The shard catalog lives in the mailbox authority, so every clear must succeed
   // BEFORE the authority is erased: a failure throws (the Workflow step retries, replay does not
@@ -243,6 +272,7 @@ export const eraseMailboxContent = async (env: CoreEnv, mailboxId: string): Prom
   )
     .bind(Date.now(), mailboxId)
     .run();
+
   return removed;
 };
 
@@ -254,8 +284,10 @@ export const mailboxShardNames = async (
   // Never degrades to the base shard alone: an unreadable catalog fails the erase step (retried)
   // rather than skipping rollover shards whose names only the catalog records.
   const names = new Set<string>([`search:${mailboxId}`]);
+
   for (const shard of await env.MAILBOXES.getByName(mailboxId).searchShards())
     names.add(shard.name);
+
   return [...names];
 };
 
@@ -263,6 +295,7 @@ export const eraseCalendarContent = async (env: CoreEnv, calendarId: string): Pr
   // Day photos live in PARTS under the calendar's own prefix (`cal/<id>/photo/…`), outside any
   // mailbox prefix; the authority only holds references to them.
   await purgePrefix(env.PARTS, `cal/${calendarId}/`);
+
   return tryRpc(() => env.CALENDARS.getByName(calendarId).eraseAll());
 };
 
@@ -290,10 +323,13 @@ export const ownedWorldHandle = async (
   address: string,
 ): Promise<string | null> => {
   const natural = worldHandle(address, new URL(env.APP_ORIGIN).hostname.replace(/^app\./, ""));
+
   for (const handle of [natural, await worldFallbackHandle(address, natural)]) {
     const r = await worldStub(env, handle).worldAuthorId();
+
     if (r.ok && r.value === userId) return handle;
   }
+
   return null;
 };
 
@@ -311,6 +347,7 @@ export const eraseWorldAuthor = async (
   userId: string | null,
 ): Promise<boolean> => {
   const erased = unwrapRpc(await worldStub(env, handle).eraseWorld(userId));
+
   if (erased) {
     await erasePublished(env, handle);
     // Private site-render markers (`t/world/<handle>/site-rendered/…`) in PARTS.
@@ -321,6 +358,7 @@ export const eraseWorldAuthor = async (
       env.DIRECTORY.prepare("DELETE FROM newsletter_refs WHERE handle = ?").bind(handle),
     ]);
   }
+
   return erased;
 };
 
@@ -366,9 +404,12 @@ const replayAndVerify = async (env: CoreEnv, t: TombstoneRow): Promise<boolean> 
         error: String(error).slice(0, 200),
       }),
     );
+
     return false;
   }
+
   await markVerified(env, t);
+
   return true;
 };
 
@@ -394,9 +435,12 @@ export const replayTombstonesFor = async (
           .bind(kind, id)
           .all<TombstoneRow>()
   ).results;
+
   let replayed = 0;
+
   for (const t of rows) if (await replayAndVerify(env, t)) replayed++;
   metric("erasure.tombstones.replayed", replayed, { scope: kind });
+
   return { replayed };
 };
 
@@ -412,9 +456,12 @@ export const replayUnverifiedTombstones = async (
       .bind(limit)
       .all<TombstoneRow>()
   ).results;
+
   let replayed = 0;
+
   for (const t of rows) if (await replayAndVerify(env, t)) replayed++;
   metric("erasure.tombstones.replayed", replayed, { scope: "unverified" });
+
   return { replayed };
 };
 
@@ -430,6 +477,7 @@ export const replayTombstones = async (
   // Keyset pagination over (erased_at, kind, id): every tombstone is replayed, however many exist.
   let replayed = 0;
   let after: { erased_at: number; resource_kind: string; resource_id: string } | null = null;
+
   for (;;) {
     const page: ReadonlyArray<{
       erased_at: number;
@@ -446,11 +494,15 @@ export const replayTombstones = async (
             ).bind(pageSize)
       ).all<{ erased_at: number; resource_kind: TombstoneKind; resource_id: string }>()
     ).results;
+
     for (const t of page) if (await replayAndVerify(env, t)) replayed++;
+
     if (page.length < pageSize) break;
     after = page.at(-1)!;
   }
+
   metric("erasure.tombstones.replayed", replayed);
+
   return { replayed };
 };
 
@@ -474,12 +526,15 @@ const replayTombstone = async (
       );
       break;
     }
+
     case "space-member": {
       const sep = t.resource_id.indexOf(":");
+
       if (sep > 0)
         await eraseSpaceMembership(env, t.resource_id.slice(0, sep), t.resource_id.slice(sep + 1));
       break;
     }
+
     case "user":
       await eraseUserRows(env, t.resource_id);
       break;

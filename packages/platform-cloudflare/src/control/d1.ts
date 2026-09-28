@@ -1,16 +1,30 @@
 // Narrow D1 binding interface (§7.1). Real `D1Database` satisfies it structurally.
 
+/** A value D1 can bind as a statement parameter. */
+export type D1Value = string | number | boolean | null | undefined | ArrayBuffer | Uint8Array;
+
+/** A column value read back from D1. */
+export type D1Column = string | number | boolean | null | ArrayBuffer;
+
+/** Default row for untyped reads. */
+export type D1Row = Record<string, D1Column>;
+
+/** The per-statement result of a `batch` call. */
+export interface D1BatchResult {
+  readonly meta?: { readonly changes?: number };
+}
+
 export interface D1StatementLike {
-  bind(...values: Array<unknown>): D1StatementLike;
-  first<T = Record<string, unknown>>(): Promise<T | null>;
-  all<T = Record<string, unknown>>(): Promise<{ results: Array<T> }>;
+  bind(...values: Array<D1Value>): D1StatementLike;
+  first<T = D1Row>(): Promise<T | null>;
+  all<T = D1Row>(): Promise<{ results: Array<T> }>;
   run(): Promise<{ meta: { changes: number } }>;
 }
 
 export interface D1SessionLike {
   prepare(query: string): D1StatementLike;
   /** Atomic: all statements commit or none do. */
-  batch(statements: Array<D1StatementLike>): Promise<Array<unknown>>;
+  batch(statements: Array<D1StatementLike>): Promise<Array<D1BatchResult>>;
 }
 
 export interface D1Like extends D1SessionLike {
@@ -22,12 +36,10 @@ export interface D1Like extends D1SessionLike {
 export const primary = (db: D1Like): D1SessionLike =>
   db.withSession ? db.withSession("first-primary") : db;
 
-export const q = (db: D1SessionLike, query: string, ...values: Array<unknown>): D1StatementLike =>
+export const q = (db: D1SessionLike, query: string, ...values: Array<D1Value>): D1StatementLike =>
   db
     .prepare(query)
-    .bind(
-      ...values.map((v) => (v === undefined ? null : typeof v === "boolean" ? (v ? 1 : 0) : v)),
-    );
+    .bind(...values.map((v) => (v === undefined ? null : v === true ? 1 : v === false ? 0 : v)));
 
 // Bounded `IN (...)` lists (D1 binds at most 100 parameters): use `inListChunks`/`MAX_IN_LIST`
 // from durable/sql.ts, shared with Durable Object SQLite.
@@ -59,8 +71,8 @@ export const audit = (
   );
 
 /** Rows changed by one statement of a `batch` result (D1 returns `{ meta: { changes } }` per statement). */
-export const changesOf = (result: unknown): number =>
-  Number((result as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0);
+export const changesOf = (result: D1BatchResult | undefined): number =>
+  Number(result?.meta?.changes ?? 0);
 
 /**
  * Audit row that is written only if the PREVIOUS statement in the same `batch` changed a row

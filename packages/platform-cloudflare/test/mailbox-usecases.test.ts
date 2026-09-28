@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Layer, Result } from "effect";
+import { Effect, Layer, Result, type Schema } from "effect";
 import {
   COMMAND_GUARDS,
   CurrentAuthentication,
@@ -8,7 +8,7 @@ import {
   ingestCommit,
   MailboxFacts,
   Principal,
-  type PrincipalShape,
+  type PrincipalContext,
   readMailboxView,
 } from "@bye/application";
 import { LocalMailboxRepositoryLive } from "@bye/platform-cloudflare";
@@ -20,7 +20,7 @@ import {
   TestClock,
 } from "@bye/testing";
 
-const principal = (over: Partial<PrincipalShape>): PrincipalShape => ({
+const principal = (over: Partial<PrincipalContext>): PrincipalContext => ({
   userId: "usr_a",
   sessionId: "ses_a",
   kind: "user",
@@ -34,14 +34,17 @@ const principal = (over: Partial<PrincipalShape>): PrincipalShape => ({
 describe("mailbox use cases (Effect v4)", () => {
   const a = makeTestMailbox("mbx_alice00000000000000000");
   const b = makeTestMailbox("mbx_bob000000000000000000");
+
   const stores = new Map([
     [a.mailboxId, a.store],
     [b.mailboxId, b.store],
   ]);
+
   const repo = LocalMailboxRepositoryLive((id) => stores.get(id)!);
+
   /** Request layer for principal `p`: the repository plus the services command guards read. */
   const as = (
-    p: PrincipalShape,
+    p: PrincipalContext,
     opts: {
       steppedUp?: boolean;
       canSendAs?: boolean;
@@ -74,16 +77,19 @@ describe("mailbox use cases (Effect v4)", () => {
   it("[E21] principals are authorized independently: each reads only its own mailbox", async () => {
     const alice = principal({ userId: "usr_a", mailboxIds: [a.mailboxId] });
     const bob = principal({ userId: "usr_b", mailboxIds: [b.mailboxId] });
-    const run = (p: PrincipalShape, mailboxId: string) =>
+
+    const run = (p: PrincipalContext, mailboxId: string) =>
       Effect.runPromise(
         Effect.result(readMailboxView(mailboxId, { view: "imbox" }).pipe(Effect.provide(as(p)))),
       );
+
     const [r1, r2, r3, r4] = await Promise.all([
       run(alice, a.mailboxId),
       run(bob, b.mailboxId),
       run(alice, b.mailboxId),
       run(bob, a.mailboxId),
     ]);
+
     expect(Result.isSuccess(r1) && Result.isSuccess(r2)).toBe(true);
     expect(Result.isFailure(r3) && r3.failure._tag).toBe("Forbidden");
     expect(Result.isFailure(r4) && r4.failure._tag).toBe("Forbidden");
@@ -95,6 +101,7 @@ describe("mailbox use cases (Effect v4)", () => {
       scopes: ["read", "draft"],
       mailboxIds: [a.mailboxId],
     });
+
     const send = await Effect.runPromise(
       Effect.result(
         executeMailboxCommand(a.mailboxId, {
@@ -105,7 +112,9 @@ describe("mailbox use cases (Effect v4)", () => {
         }).pipe(Effect.provide(as(agent))),
       ),
     );
+
     expect(Result.isFailure(send) && send.failure._tag).toBe("Forbidden");
+
     const draft = await Effect.runPromise(
       executeMailboxCommand(a.mailboxId, {
         _tag: "CreateDraft",
@@ -120,11 +129,13 @@ describe("mailbox use cases (Effect v4)", () => {
         },
       }).pipe(Effect.provide(as(agent))),
     );
+
     expect(draft).toMatchObject({ revision: 1 });
   });
 
   it("wire commands are decoded at the boundary; expected rejections map to structured errors", async () => {
     const alice = principal({ mailboxIds: [a.mailboxId] });
+
     const bad = await Effect.runPromise(
       Effect.result(
         executeMailboxCommand(a.mailboxId, {
@@ -134,7 +145,9 @@ describe("mailbox use cases (Effect v4)", () => {
         }).pipe(Effect.provide(as(alice))),
       ),
     );
+
     expect(Result.isFailure(bad) && bad.failure._tag).toBe("SchemaError");
+
     const missing = await Effect.runPromise(
       Effect.result(
         executeMailboxCommand(a.mailboxId, {
@@ -145,6 +158,7 @@ describe("mailbox use cases (Effect v4)", () => {
         }).pipe(Effect.provide(as(alice))),
       ),
     );
+
     expect(Result.isFailure(missing) && missing.failure).toMatchObject({
       _tag: "MailboxRejected",
       code: "not_found",
@@ -163,13 +177,15 @@ describe("mailbox use cases (Effect v4)", () => {
         receivedAt: a.clock.now(),
       }).pipe(Effect.provide(repo)),
     );
+
     expect(committed).toMatchObject({ disposition: "screening", replayed: false });
   });
 
   it("[§10] command guards: step-up, send-as, redelivery source checks and rule targets", async () => {
     const owner = principal({ mailboxIds: [a.mailboxId] });
+
     const tagOf = async (
-      command: Record<string, unknown>,
+      command: Record<string, Schema.Json>,
       opts: Parameters<typeof as>[1] = {},
       p = owner,
     ) => {
@@ -181,8 +197,10 @@ describe("mailbox use cases (Effect v4)", () => {
           }).pipe(Effect.provide(as(p, opts))),
         ),
       );
+
       return Result.isFailure(r) ? r.failure._tag : "ok";
     };
+
     expect(Object.keys(COMMAND_GUARDS).sort()).toEqual([
       "AddForwardingDestination",
       "AddIdentity",
@@ -205,12 +223,14 @@ describe("mailbox use cases (Effect v4)", () => {
     );
     // Redelivery: both mailboxes authorized, then quarantine/scan/existence of the source.
     const both = principal({ mailboxIds: [a.mailboxId, b.mailboxId] });
+
     const redeliver = {
       _tag: "Redeliver",
       deliveryId: "dlv_1",
       targetMailboxId: b.mailboxId,
       mode: "copy",
     };
+
     expect(await tagOf(redeliver)).toBe("Forbidden"); // no send access to the target
     expect(await tagOf(redeliver, { source: null }, both)).toBe("NotFound");
     expect(
@@ -240,10 +260,12 @@ describe("mailbox use cases (Effect v4)", () => {
       new TestClock(),
       "world@bye.test",
     );
+
     w.ctx.cmd("setup-identity", "AddIdentity", () =>
       w.identities.addIdentity({ address: "me@bye.test", name: "Me", kind: "hosted" }),
     );
     stores.set("mbx_world0000000000000000", w);
+
     const draftTo = (to: string) =>
       w.drafts.createDraft({
         content: {
@@ -255,7 +277,8 @@ describe("mailbox use cases (Effect v4)", () => {
           attachments: [],
         },
       }).draftId;
-    const send = (scopes: PrincipalShape["scopes"], draftId: string, commandId: string) =>
+
+    const send = (scopes: PrincipalContext["scopes"], draftId: string, commandId: string) =>
       Effect.runPromise(
         Effect.result(
           executeMailboxCommand("mbx_world0000000000000000", {
@@ -272,6 +295,7 @@ describe("mailbox use cases (Effect v4)", () => {
           ),
         ),
       );
+
     const agent = await send(["read", "draft", "send"], draftTo("world@bye.test"), "p1");
     expect(Result.isFailure(agent) && agent.failure).toMatchObject({
       _tag: "MailboxRejected",
@@ -282,11 +306,13 @@ describe("mailbox use cases (Effect v4)", () => {
     expect(Result.isSuccess(await send(["read", "draft", "send"], draftTo("x@y.test"), "p2"))).toBe(
       true,
     );
+
     const publisher = await send(
       ["read", "draft", "send", "publish"],
       draftTo("world@bye.test"),
       "p3",
     );
+
     expect(Result.isSuccess(publisher)).toBe(true);
     expect(w.sends.jobs().filter((j) => j.trafficClass === "publish")).toHaveLength(1);
   });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ControlAuth, ControlDirectory } from "@bye/platform-cloudflare";
+import { type D1Value, ControlAuth, ControlDirectory } from "@bye/platform-cloudflare";
 import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import {
@@ -12,15 +12,13 @@ import {
 } from "../src/erasure.ts";
 import { AUDIT_RETENTION_DAYS, PRUNE_PAGE, pruneLedgers } from "../src/scheduled.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, installWebSocketPair, makeHarness } from "./harness.ts";
+import { type Harness, installWebSocketPair, makeHarness, executionContext } from "./harness.ts";
 
 // Erasure row/credential cleanup, tombstone ledger reseeding, daily ledger retention (§12) and
 // credential-scoped live socket closing (§8) over the in-memory bindings.
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
+
 const DAY = 24 * 3600_000;
 
 const account = async (h: Harness, address: string) => {
@@ -28,16 +26,18 @@ const account = async (h: Harness, address: string) => {
     address,
     displayName: address.split("@")[0]!,
   });
+
   const auth = new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env));
   const session = await auth.issueSession(a.userId, "laptop", true);
   const token = await auth.createApiToken(a.userId, { kind: "cli", label: "cli" });
+
   return { ...a, session: session.token, apiToken: token.token };
 };
 
 const get = async (h: Harness, path: string, headers: Record<string, string>) =>
   (await handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, { headers }), h.env, ctx)).status;
 
-const count = async (h: Harness, sql: string, ...binds: Array<unknown>) =>
+const count = async (h: Harness, sql: string, ...binds: Array<D1Value>) =>
   (await h.d1
     .prepare(sql)
     .bind(...binds)
@@ -55,6 +55,7 @@ describe("erasure", () => {
   it("[§12] eraseUserRows revokes every credential, deletes passkeys and push devices, and purges exports", async () => {
     const ana = await account(h, "ana@bye.test");
     const bob = await account(h, "bob@bye.test");
+
     for (const u of [ana, bob]) {
       await h.d1
         .prepare(
@@ -70,6 +71,7 @@ describe("erasure", () => {
         .run();
       await h.buckets.EXPORTS.put(`t/${u.userId}/export/e1/all.mbox`, "mbox");
     }
+
     const cookie = (u: typeof ana) => ({ cookie: `__Host-session=${u.session}` });
     const bearer = (u: typeof ana) => ({ authorization: `Bearer ${u.apiToken}` });
     expect(await get(h, "/v1/security/sessions", cookie(ana))).toBe(200);
@@ -132,6 +134,7 @@ describe("erasure", () => {
   it("[§12] reseedTombstones restores D1 tombstones from the R2 ledger across list pages", async () => {
     await writeTombstone(h.env, "user", "usr_a", Date.now() - DAY);
     await writeTombstone(h.env, "space-member", "spc_1:usr_a", Date.now() - DAY);
+
     // More ledger entries than one list page (1000) so the key cursor is followed.
     for (let i = 0; i < 1001; i++)
       await h.buckets.ORIGINALS.put(
@@ -142,11 +145,13 @@ describe("erasure", () => {
     await h.d1.prepare("DELETE FROM erasure_tombstones").run();
     expect(await reseedTombstones(h.env)).toBe(1003);
     expect(await count(h, "SELECT COUNT(*) AS n FROM erasure_tombstones")).toBe(1003);
+
     const row = await h.d1
       .prepare(
         "SELECT resource_id, erased_at FROM erasure_tombstones WHERE resource_kind = 'space-member'",
       )
       .first<{ resource_id: string; erased_at: number }>();
+
     // IDs are decoded from the key; erased_at comes from the ledger object's upload time.
     expect(row).toEqual({ resource_id: "spc_1:usr_a", erased_at: Date.now() });
     // Idempotent: nothing new on a second pass.
@@ -163,6 +168,7 @@ describe("erasure", () => {
     });
     expect(await calendar.mayObserve(ana.userId)).toBe(true);
     const ws = installWebSocketPair();
+
     try {
       const instance = h.namespaces.CALENDARS.instance(ana.calendarId);
       await instance.fetch(
@@ -202,11 +208,13 @@ describe("daily ledger pruning", () => {
   it("[§12] pruneLedgers drops rows past each retention window and keeps held, unmapped and pending rows", async () => {
     const now = Date.now();
     const ana = await account(h, "ana@bye.test");
-    const run = (sql: string, ...binds: Array<unknown>) =>
+
+    const run = (sql: string, ...binds: Array<D1Value>) =>
       h.d1
         .prepare(sql)
         .bind(...binds)
         .run();
+
     // push_deliveries: 30 days.
     for (const [key, age] of [
       ["old", 31],
@@ -217,6 +225,7 @@ describe("daily ledger pruning", () => {
         key,
         now - age * DAY,
       );
+
     // dead_letters: resolved ones after 90 days; held ones are kept however old.
     for (const [id, state, age] of [
       ["dl_old", "replayed", 91],
@@ -230,6 +239,7 @@ describe("daily ledger pruning", () => {
         state,
         state === "held" ? null : now - age * DAY,
       );
+
     // blob_gc_intents: deleted ones after 30 days; retained/pending kept.
     for (const [key, state, age] of [
       ["gc_old", "deleted", 31],
@@ -242,6 +252,7 @@ describe("daily ledger pruning", () => {
         state,
         now - age * DAY,
       );
+
     // send_unknowns: resolved ones after 90 days; unresolved kept.
     for (const [id, resolved] of [
       ["su_old", now - 91 * DAY],
@@ -253,6 +264,7 @@ describe("daily ledger pruning", () => {
         id,
         resolved,
       );
+
     // oauth_codes: one day past expiry.
     for (const [hash, expires] of [
       ["oc_old", now - 2 * DAY],
@@ -264,6 +276,7 @@ describe("daily ledger pruning", () => {
         ana.userId,
         expires,
       );
+
     // newsletter_events: applied after 90 days; unmapped/received kept for review.
     for (const [id, state, age] of [
       ["ne_old", "applied", 91],
@@ -277,6 +290,7 @@ describe("daily ledger pruning", () => {
         now - age * DAY,
         state,
       );
+
     // shared_propagation: finished ones after 30 days; pending kept.
     for (const [key, state, age] of [
       ["sp_old", "applied", 31],
@@ -295,6 +309,7 @@ describe("daily ledger pruning", () => {
 
     const keys = async (sql: string) =>
       (await h.d1.prepare(sql).all<{ k: string }>()).results.map((r) => r.k).sort();
+
     expect(await keys("SELECT dedupe_key AS k FROM push_deliveries")).toEqual(["new"]);
     expect(await keys("SELECT id AS k FROM dead_letters")).toEqual(["dl_held", "dl_new"]);
     expect(await keys("SELECT object_key AS k FROM blob_gc_intents")).toEqual([
@@ -327,11 +342,13 @@ describe("identity-table retention", () => {
   it("[§12] pruneLedgers bounds audit, challenges, sessions, device credentials and lockouts", async () => {
     const now = Date.now();
     const ana = await account(h, "ana@bye.test");
-    const run = (sql: string, ...binds: Array<unknown>) =>
+
+    const run = (sql: string, ...binds: Array<D1Value>) =>
       h.d1
         .prepare(sql)
         .bind(...binds)
         .run();
+
     // More than one prune page of old audit rows, plus a recent one.
     for (let i = 0; i < PRUNE_PAGE + 5; i++)
       await run(
@@ -343,6 +360,7 @@ describe("identity-table retention", () => {
       "INSERT INTO audit_log (id, actor_id, action, target, created_at) VALUES ('aud_new', 'a', 'x', 't', ?)",
       now - (AUDIT_RETENTION_DAYS - 1) * DAY,
     );
+
     for (const [id, expires] of [
       ["chl_old", now - 2 * DAY],
       ["chl_new", now],
@@ -352,6 +370,7 @@ describe("identity-table retention", () => {
         id,
         expires,
       );
+
     for (const [id, expires, revoked] of [
       ["ses_expired", now - 31 * DAY, null],
       ["ses_revoked", now + DAY, now - 31 * DAY],
@@ -365,6 +384,7 @@ describe("identity-table retention", () => {
         expires,
         revoked,
       );
+
     for (const [id, absolute, revoked] of [
       ["dvs_dead", now - 31 * DAY, null],
       ["dvs_live", now + 90 * DAY, null],
@@ -389,6 +409,7 @@ describe("identity-table retention", () => {
         absolute,
       );
     }
+
     await run(
       "INSERT INTO auth_lockouts (user_id, kind, failures, window_start, locked_until) VALUES (?, 'totp', 2, ?, NULL)",
       ana.userId,
@@ -436,17 +457,23 @@ describe("live socket credential tags", () => {
     });
     const instance = h.namespaces.CALENDARS.instance(ana.calendarId);
     const ws = installWebSocketPair();
+
     try {
-      for (const cred of ["ses_a", "ses_b", "ses_a", null])
+      for (const cred of ["ses_a", "ses_b", "ses_a", null]) {
+        const headers = new Headers({ upgrade: "websocket" });
+
+        if (cred) headers.set("x-bye-credential", cred);
         expect(
           (
             await instance.fetch(
               new Request("https://do/live", {
-                headers: { upgrade: "websocket", ...(cred ? { "x-bye-credential": cred } : {}) },
+                headers,
               }),
             )
           ).status,
         ).toBe(200);
+      }
+
       const [a1, b, a2, untagged] = ws.created;
       const state = h.namespaces.CALENDARS.state(ana.calendarId);
       expect(state.getTags(a1!)).toEqual(["cred:ses_a"]);

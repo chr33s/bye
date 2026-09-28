@@ -27,6 +27,7 @@ export const DomainParams = Schema.Struct({
   domainId: Schema.String,
   actorId: Schema.String,
 });
+
 export type DomainParams = typeof DomainParams.Type;
 
 const DnsResult = Schema.Struct({ applied: Schema.Number, conflicts: Schema.Number });
@@ -74,6 +75,7 @@ export const recordedAuthorization = (
   automated: boolean,
 ): ZoneAuthorizationMethod | null => {
   if (link.zoneAuthMethod !== null) return link.zoneAuthMethod;
+
   const authorized = [
     "zone-authorized",
     "dns-configured",
@@ -81,7 +83,9 @@ export const recordedAuthorization = (
     "outbound-tested",
     "active",
   ];
+
   if (!authorized.includes(state)) return null;
+
   return automated ? "service-zone" : "manual-records";
 };
 
@@ -92,6 +96,7 @@ const Method = Schema.NullOr(
 export class ProvisionDomainWorkflow extends WorkflowEntrypoint<CoreEnv, DomainParams> {
   override async run(event: Readonly<WorkflowEvent<DomainParams>>, step: WorkflowStep) {
     const { domainId, actorId } = decodeParams(DomainParams)(event.payload);
+
     // The token is resolved (and decrypted) inside each step and dropped with it: step results
     // and Workflow state never hold it.
     const nameOf = async () =>
@@ -101,30 +106,36 @@ export class ProvisionDomainWorkflow extends WorkflowEntrypoint<CoreEnv, DomainP
           .bind(domainId)
           .first<{ name: string }>()
       )?.name ?? null;
+
     const onboarding = async (method: ZoneAuthorizationMethod | null) =>
       new DomainOnboarding(
         this.env.DIRECTORY,
         kernelClock,
         await onboardingDepsFor(this.env, await nameOf(), method),
       );
+
     await promiseStep(
       step,
       "v1:prove-ownership",
       Schema.Boolean,
       async () => {
         await (await onboarding(null)).proveOwnership(domainId, actorId);
+
         return true;
       },
       { retries: { limit: 30, delay: "2 minutes", backoff: "linear" } },
     );
+
     const recorded = await promiseStep(step, "v1:recorded-authorization", Method, async () => {
       const ob = await onboarding(null);
+
       return recordedAuthorization(
         await ob.domains.mailLink(domainId),
         (await ob.domains.get(domainId)).state,
         (await zoneApiToken(this.env, await nameOf())) !== null,
       );
     });
+
     const method: ZoneAuthorizationMethod =
       recorded ??
       (
@@ -133,16 +144,20 @@ export class ProvisionDomainWorkflow extends WorkflowEntrypoint<CoreEnv, DomainP
           timeout: "7 days",
         })
       ).payload.method;
+
     await promiseStep(step, "v1:authorize-zone", Schema.Boolean, async () => {
       await (await onboarding(method)).domains.authorizeZone(domainId, actorId, { method });
+
       return true;
     });
+
     const dns = await promiseStep(
       step,
       "v1:configure-dns",
       DnsResult,
       async () => {
         const r = await (await onboarding(method)).configureDns(domainId, actorId);
+
         // Throwing keeps the step retrying until the customer resolves conflicts / DNS propagates.
         if (r.domain.state === "zone-authorized")
           throw new Error(
@@ -151,17 +166,21 @@ export class ProvisionDomainWorkflow extends WorkflowEntrypoint<CoreEnv, DomainP
               .map((d) => d.check)
               .join(",")}`,
           );
+
         return { applied: r.applied.length, conflicts: r.conflicts.length };
       },
       { retries: { limit: 72, delay: "10 minutes", backoff: "constant" } },
     );
+
     await promiseStep(
       step,
       "v1:inbound-test",
       Schema.Boolean,
       async () => {
         const r = await (await onboarding(method)).testInbound(domainId, actorId);
+
         if (!r.passed) throw new Error(`inbound not ready: ${r.detail}`);
+
         return true;
       },
       { retries: { limit: 36, delay: "10 minutes", backoff: "constant" } },
@@ -172,15 +191,19 @@ export class ProvisionDomainWorkflow extends WorkflowEntrypoint<CoreEnv, DomainP
       Schema.Boolean,
       async () => {
         const r = await (await onboarding(method)).testOutbound(domainId, actorId);
+
         if (!r.passed) throw new Error("outbound authentication not aligned");
+
         return true;
       },
       { retries: { limit: 36, delay: "10 minutes", backoff: "constant" } },
     );
     await promiseStep(step, "v1:activate", Schema.Boolean, async () => {
       await (await onboarding(method)).activate(domainId, actorId);
+
       return true;
     });
+
     return { domainId, state: "active", applied: dns.applied };
   }
 }

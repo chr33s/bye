@@ -268,15 +268,18 @@ export class MemoryStore implements OnboardingStore {
   async takePending(state: string) {
     const p = this.pending.get(state) ?? null;
     this.pending.delete(state);
+
     return p;
   }
   async prunePending(now: number) {
     let removed = 0;
+
     for (const [state, p] of this.pending)
       if (p.expiresAt < now) {
         this.pending.delete(state);
         removed++;
       }
+
     return removed;
   }
   async putReview(r: Review) {
@@ -302,8 +305,10 @@ export class MemoryStore implements OnboardingStore {
   }
   async acquireWriter(installationId: string, operationId: string) {
     const holder = this.writers.get(installationId);
+
     if (holder !== undefined && holder !== operationId) return holder;
     this.writers.set(installationId, operationId);
+
     return null;
   }
   async releaseWriter(installationId: string, operationId: string) {
@@ -334,6 +339,7 @@ export class FileStore implements OnboardingStore {
   readonly dir: string;
   constructor(dir: string) {
     this.dir = dir;
+
     for (const sub of ["installations", "pending", "reviews", "approvals", "operations", "locks"])
       mkdirSync(join(dir, sub), { recursive: true, mode: 0o700 });
     mkdirSync(join(dir, "events"), { recursive: true, mode: 0o700 });
@@ -341,13 +347,15 @@ export class FileStore implements OnboardingStore {
 
   private path(kind: string, id: string) {
     if (!SAFE_ID.test(id)) throw new Error(`invalid ${kind} id`);
+
     return join(this.dir, kind, `${id}.json`);
   }
   private read<T>(kind: string, id: string): T | null {
     const p = this.path(kind, id);
+
     return existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as T) : null;
   }
-  private write(kind: string, id: string, value: unknown) {
+  private write<T>(kind: string, id: string, value: T) {
     const p = this.path(kind, id);
     const tmp = `${p}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 });
@@ -385,13 +393,16 @@ export class FileStore implements OnboardingStore {
     if (!SAFE_ID.test(state)) return null;
     const p = this.path("pending", state);
     const claimed = `${p}.taken.${process.pid}`;
+
     try {
       renameSync(p, claimed); // atomic: exactly one caller wins
     } catch {
       return null;
     }
+
     const value = JSON.parse(readFileSync(claimed, "utf8")) as PendingAuthorization;
     rmSync(claimed, { force: true });
+
     return value;
   }
   /**
@@ -401,12 +412,15 @@ export class FileStore implements OnboardingStore {
   async prunePending(now: number) {
     const dir = join(this.dir, "pending");
     let removed = 0;
+
     for (const f of readdirSync(dir)) {
       const file = join(dir, f);
+
       try {
         const stale = f.endsWith(".json")
           ? (JSON.parse(readFileSync(file, "utf8")) as PendingAuthorization).expiresAt < now
           : statSync(file).mtimeMs < now - STRAY_PENDING_MS;
+
         if (stale) {
           rmSync(file, { force: true });
           removed++;
@@ -415,6 +429,7 @@ export class FileStore implements OnboardingStore {
         // Claimed or removed concurrently, or unreadable: a later sweep retries.
       }
     }
+
     return removed;
   }
   async putReview(r: Review) {
@@ -442,13 +457,16 @@ export class FileStore implements OnboardingStore {
   }
   async acquireWriter(installationId: string, operationId: string) {
     const p = this.path("locks", installationId);
+
     try {
       const fd = openSync(p, "wx", 0o600);
       writeFileSync(fd, JSON.stringify({ operationId, pid: process.pid }));
       closeSync(fd);
+
       return null;
     } catch {
       const holder = await this.writerHolder(installationId);
+
       return holder === operationId ? null : (holder ?? "unknown");
     }
   }
@@ -472,7 +490,9 @@ export class FileStore implements OnboardingStore {
   async events(installationId: string) {
     if (!SAFE_ID.test(installationId)) return [];
     const p = join(this.dir, "events", `${installationId}.jsonl`);
+
     if (!existsSync(p)) return [];
+
     return readFileSync(p, "utf8")
       .split("\n")
       .filter(Boolean)

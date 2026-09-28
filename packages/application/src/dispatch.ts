@@ -68,9 +68,11 @@ export const dispatch = (sendJobId: string) =>
     const jobs = yield* JobStore;
     const transport = yield* MailTransport;
     const submission = yield* jobs.claim(sendJobId);
+
     if (submission === null) return;
 
     const outcome = yield* Effect.result(transport.submit(submission));
+
     if (Result.isFailure(outcome)) {
       yield* jobs.failed(sendJobId, outcome.failure);
     } else {
@@ -111,11 +113,11 @@ const refuse = (
   kind: TransportFailure["kind"],
   detail: string,
   blockedBy?: "suspended" | "budget" | "all-suppressed",
-): DispatchDecision => ({
-  _tag: "Refuse",
-  failure: new TransportFailure({ kind, detail }),
-  ...(blockedBy ? { blockedBy } : {}),
-});
+): DispatchDecision => {
+  const failure = new TransportFailure({ kind, detail });
+
+  return blockedBy ? { _tag: "Refuse", failure, blockedBy } : { _tag: "Refuse", failure };
+};
 
 /**
  * The dispatch-time policy: forwarding waits for (and respects) the inbound scan; hosted senders
@@ -127,30 +129,38 @@ export const decideDispatch = (job: DispatchJobFacts) =>
     if (job.trafficClass === "forwarding") {
       if (job.forwardingScan === "pending")
         return refuse("RetryableBeforeAcceptance", "awaiting attachment scan");
+
       if (job.forwardingScan === "infected" || job.forwardingScan === "failed")
         return refuse("Rejected", `message scan ${job.forwardingScan}`);
     }
+
     const hosted = job.trafficClass !== "external-identity" && job.trafficClass !== "forwarding";
+
     const allowed =
       !hosted || (yield* (yield* Directory).mailboxMaySendAs(job.mailboxId, job.from));
+
     // Authorization first: the policy check reserves budget, and an unauthorized send must not.
     if (!allowed) return refuse("Rejected", "sender not authorized");
+
     const verdict = yield* (yield* SendingPolicyService).check({
       userId: job.budgetUserId,
       identity: job.from,
       recipients: job.recipients,
     });
+
     if (!verdict.allowed) {
       // Budgets retry later; suspensions and fully suppressed recipient sets are rejected.
       return verdict.reason === "budget"
         ? refuse("RetryableBeforeAcceptance", `sending budget (${verdict.scope})`, "budget")
         : refuse("Rejected", `sending ${verdict.reason}`, verdict.reason);
     }
+
     const decision: DispatchDecision = {
       _tag: "Proceed",
       suppressed: new Set(verdict.suppressed.map((a) => a.toLowerCase())),
       reserved: verdict.reserved ?? 0,
     };
+
     return decision;
   }).pipe(Effect.withSpan("mail.dispatch.policy"));
 

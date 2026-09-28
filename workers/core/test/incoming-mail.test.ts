@@ -10,21 +10,27 @@ import { inboundMessage, makeHarness, rfc822 } from "./harness.ts";
 describe("incoming-email verification message", () => {
   it("records a message to the domain's verification address without storing or bouncing it", async () => {
     const h = makeHarness();
+
     const owner = await new ControlDirectory(h.env.DIRECTORY, kernelClock).provisionPersonalAccount(
       { address: "owner@bye.test", displayName: "Owner" },
     );
+
     const orgId = await new ControlOrganizations(h.env.DIRECTORY, kernelClock).createOrganization(
       owner.userId,
       { name: "Example", kind: "domain", seatLimit: 2 },
     );
+
     const domains = new ControlDomains(h.env.DIRECTORY, kernelClock);
+
     const d = await domains.requestFromInstallation(orgId, owner.userId, {
       name: "example.test",
       accountId: "acc_1",
       zoneId: "zone_1",
     });
+
     await domains.recordAuthorization(d.id, owner.userId, "manual-records");
     const probe = (await domains.mailLink(d.id)).inboundProbe!;
+
     const raw = rfc822({
       from: "someone@elsewhere.test",
       to: probe.address,
@@ -32,12 +38,14 @@ describe("incoming-email verification message", () => {
       body: "hi",
       messageId: "p1@elsewhere.test",
     });
+
     // A wrong token is an ordinary (unknown) recipient.
     const wrong = inboundMessage(
       "someone@elsewhere.test",
       "bye-verify-000000000000000000000000@example.test",
       raw,
     );
+
     expect((await handleInbound(wrong, h.env))._tag).toBe("Rejected");
     expect((await domains.mailLink(d.id)).inboundProbe!.receivedAt).toBeNull();
 

@@ -7,6 +7,7 @@ describe("native deep links", () => {
     for (const v of vectors as ReadonlyArray<{ input: string; route: string | null }>) {
       expect({ input: v.input, route: deepLinkToRoute(v.input) }).toEqual(v);
     }
+
     expect(deepLinkToRoute("mailto:%ZZ")).toBeNull();
     expect(deepLinkToRoute("bye://mail/%ZZ")).toBeNull();
   });
@@ -19,6 +20,7 @@ describe("native routes", () => {
     const route = deepLinkToRoute(
       "bye://compose?text=Look%20at%20this&url=https%3A%2F%2Fexample.net%2Fa&subject=FYI",
     );
+
     expect(parseRoute(route!)).toEqual({
       screen: "compose",
       subject: "FYI",

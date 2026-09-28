@@ -16,7 +16,9 @@ import {
 // SQLite-backed DO storage from node:sqlite. Global fetch is poisoned to prove no egress.
 
 const TOKEN = "state-token-0123456789abcdef";
+
 const KEY_V1 = `v1:${"11".repeat(32)}`;
+
 const KEY_V2 = `v2:${"22".repeat(32)}`;
 
 class Backups {
@@ -26,7 +28,7 @@ class Backups {
   }
   async list({ prefix }: { prefix: string }) {
     return {
-      objects: [...this.objects.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })),
+      objects: [...this.objects.keys()].flatMap((key) => (key.startsWith(prefix) ? [{ key }] : [])),
     };
   }
   async delete(keys: string | Array<string>) {
@@ -37,18 +39,22 @@ class Backups {
 const makeBackend = (encryptionKey = KEY_V1) => {
   const storage = new MemoryDurableStorage();
   const backups = new Backups();
+
   const env: StateEnv = {
     STATE_TOKEN: TOKEN,
     STATE_ENCRYPTION_KEY: encryptionKey,
     BACKUPS: backups,
     STATE: { getByName: () => object },
   };
+
   let object = new StateStoreObject({ storage: storage as never }, env);
   const serve = (request: Request) => handleStateRequest(request, env);
+
   const rekey = (key: string) => {
-    (env as { STATE_ENCRYPTION_KEY: string }).STATE_ENCRYPTION_KEY = key;
+    Object.assign(env, { STATE_ENCRYPTION_KEY: key });
     object = new StateStoreObject({ storage: storage as never }, env);
   };
+
   return { storage, backups, env, serve, rekey, object: () => object };
 };
 
@@ -83,6 +89,7 @@ describe("HTTP state backend (§15.6/§15.7)", () => {
     const { serve } = makeBackend();
     const store = await run(clientFor(serve));
     const fqn = "MailboxPlatform/Mailboxes/ns%2Fweird key";
+
     const value = {
       status: "created",
       kind: "Cloudflare.DurableObject",
@@ -90,6 +97,7 @@ describe("HTTP state backend (§15.6/§15.7)", () => {
       props: { className: "MailboxDO" },
       attr: { id: "abc" },
     };
+
     expect(
       await run(store.get({ stack: "MailboxPlatform", stage: "staging", fqn })),
     ).toBeUndefined();
@@ -154,9 +162,11 @@ describe("HTTP state backend (§15.6/§15.7)", () => {
         value: { status: "created", attr: { token: Redacted.make("hunter2") } } as never,
       }),
     );
-    const back = (await run(
+
+    const back: { attr: { token: Redacted.Redacted<string> } } = (await run(
       store.get({ stack: "s", stage: "dev-1", fqn: "Secret" }),
-    )) as unknown as { attr: { token: unknown } };
+    )) as never;
+
     expect(Redacted.isRedacted(back.attr.token)).toBe(true);
     expect(Redacted.value(back.attr.token as Redacted.Redacted<string>)).toBe("hunter2");
   });
@@ -193,11 +203,13 @@ describe("HTTP state backend (§15.6/§15.7)", () => {
     await run(
       rotated.set({ stack: "s", stage: "prod", fqn: "Db2", value: { status: "created" } as never }),
     );
+
     const versions = (
       backend.storage.db.prepare("SELECT value FROM entries ORDER BY fqn").all() as Array<{
         value: string;
       }>
     ).map((r) => r.value.split(".")[0]);
+
     expect(versions).toEqual(["v1", "v2"]);
   });
 
@@ -228,12 +240,15 @@ describe("HTTP state backend (§15.6/§15.7)", () => {
 
   it("keeps at most the retention window of snapshots", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
+
     try {
       const backend = makeBackend();
+
       for (let i = 0; i < 35; i++) {
         vi.setSystemTime(Date.UTC(2026, 0, 1) + i * 86_400_000);
         await backend.object().alarm();
       }
+
       expect(backend.backups.objects.size).toBe(30);
     } finally {
       vi.useRealTimers();
@@ -242,10 +257,12 @@ describe("HTTP state backend (§15.6/§15.7)", () => {
 
   it("has no outbound network or telemetry code in the worker source", async () => {
     const { readFileSync } = await import("node:fs");
+
     const source = readFileSync(new URL("../core.ts", import.meta.url).pathname, "utf8").replace(
       /\/\/.*$/gm,
       "",
     );
+
     // The DO's own `fetch` handler and the stub call are allowed; any other fetch call is egress.
     expect(source).not.toMatch(/(?<!async |\.)\bfetch\s*\((?!request: Request\))/);
     expect(source).not.toMatch(/globalThis\.fetch|connect\(/);

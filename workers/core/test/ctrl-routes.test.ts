@@ -10,6 +10,10 @@ import {
   inboundMessage,
   rfc822,
   enablePersonalMail,
+  executionContext,
+  mockAs,
+  type JsonRecord,
+  type StepResult,
 } from "./harness.ts";
 import { handleInbound } from "../src/inbound.ts";
 import { binaryToBytes, mboxEntryText } from "@bye/mail-codec";
@@ -32,10 +36,7 @@ import { renderNewsletter } from "../src/newsletter.ts";
   }
 };
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 interface Account {
   readonly userId: string;
@@ -50,36 +51,45 @@ const signup = async (h: Harness, address: string, steppedUp = true): Promise<Ac
   const account = await new ControlDirectory(h.env.DIRECTORY, kernelClock).provisionPersonalAccount(
     { address, displayName: address.split("@")[0]! },
   );
+
   const session = await new ControlAuth(
     h.env.DIRECTORY,
     kernelClock,
     await authConfig(h.env),
   ).issueSession(account.userId, "test", steppedUp);
+
   return { ...account, cookie: `__Host-session=${session.token}` };
 };
 
-const call = async (
+const call = async <JsonValue>(
   h: Harness,
   a: Account | null,
   method: string,
   path: string,
-  json?: unknown,
+  json?: JsonValue,
 ) => {
+  const requestHeaders = new Headers();
+
+  if (a) requestHeaders.set("cookie", a.cookie);
+
+  if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+  if (json !== undefined) requestHeaders.set("content-type", "application/json");
+
   const response = await handleFetch(
-    new Request(path.startsWith("http") ? path : `${h.env.APP_ORIGIN}${path}`, {
-      method,
-      headers: {
-        ...(a ? { cookie: a.cookie } : {}),
-        ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-        ...(json !== undefined ? { "content-type": "application/json" } : {}),
-      },
-      ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
-    }),
+    new Request(
+      path.startsWith("http") ? path : `${h.env.APP_ORIGIN}${path}`,
+      json !== undefined
+        ? { method, headers: requestHeaders, body: JSON.stringify(json) }
+        : { method, headers: requestHeaders },
+    ),
     h.env,
     ctx,
   );
+
   const text = await response.text();
   const type = response.headers.get("content-type") ?? "";
+
   return {
     status: response.status,
     headers: response.headers,
@@ -89,6 +99,7 @@ const call = async (
 };
 
 let n = 0;
+
 const cmdId = () => `cmd_${(++n).toString(36).padStart(20, "0")}`;
 
 describe("control routes", () => {
@@ -102,27 +113,33 @@ describe("control routes", () => {
 
   it("[A02] billing refuses an unknown interval instead of defaulting to annual", async () => {
     const alice = await signup(h, "alice@bye.test");
+
     const checkout = await call(h, alice, "POST", "/v1/billing/checkout", {
       orgId: alice.organizationId,
       plan: "plus",
       interval: "weekly",
     });
+
     expect(checkout.status).toBe(400);
     expect(checkout.body.error.code).toBe("bad_request");
+
     const change = await call(h, alice, "POST", "/v1/billing/plan", {
       orgId: alice.organizationId,
       plan: "plus",
       interval: "",
     });
+
     expect(change.status).toBe(400);
   });
 
   it("[A03] security settings: recovery codes need step-up and are shown once; sessions and tokens are listable and revocable", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const plain = {
       ...ana,
       cookie: `__Host-session=${(await new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env)).issueSession(ana.userId, "other", false)).token}`,
     };
+
     expect((await call(h, plain, "POST", "/v1/security/recovery-codes", {})).status).toBe(403);
     const codes = await call(h, ana, "POST", "/v1/security/recovery-codes", {});
     expect(codes.status).toBe(201);
@@ -135,6 +152,7 @@ describe("control routes", () => {
 
     const token = await call(h, ana, "POST", "/v1/tokens", { kind: "cli", label: "laptop" });
     expect(token.status).toBe(201);
+
     const bearer = async () =>
       (
         await handleFetch(
@@ -145,11 +163,15 @@ describe("control routes", () => {
           ctx,
         )
       ).status;
+
     expect(await bearer()).toBe(200);
+
     const listTokens = async () => {
       const r = await call(h, ana, "GET", "/v1/tokens");
+
       return (r.body.items ?? r.body) as Array<{ id: string }>;
     };
+
     expect((await listTokens()).some((t) => t.id === token.body.id)).toBe(true);
     expect((await call(h, ana, "DELETE", `/v1/tokens/${token.body.id}`)).status).toBe(200);
     // Revocation is real: the token no longer authenticates and is gone from the list.
@@ -166,23 +188,29 @@ describe("control routes", () => {
 
   it("[O02] organizations: create with step-up, invite, accept, list members and audit", async () => {
     const owner = await signup(h, "owner@bye.test");
+
     const org = await call(h, owner, "POST", "/v1/orgs", {
       kind: "domain",
       name: "Acme",
       seatLimit: 5,
     });
+
     expect(org.status).toBe(201);
     const orgId = org.body.orgId ?? org.body.id;
+
     // Refresh the principal so the new organization is visible.
     const invite = await call(h, owner, "POST", `/v1/orgs/${orgId}/invitations`, {
       address: "bob@bye.test",
       role: "member",
     });
+
     expect(invite.status).toBe(201);
     const bob = await signup(h, "bob@bye.test");
+
     const accepted = await call(h, bob, "POST", "/v1/invitations/accept", {
       token: invite.body.token,
     });
+
     expect(accepted.status).toBe(200);
     const members = await call(h, owner, "GET", `/v1/orgs/${orgId}/members`);
     expect(JSON.stringify(members.body)).toContain(bob.userId);
@@ -197,27 +225,34 @@ describe("control routes", () => {
 
   it("[O02] malformed admin bodies are 400s, never silent defaults", async () => {
     const owner = await signup(h, "owner@bye.test");
+
     const bad = [
       ["POST", "/v1/orgs", { kind: "corporate", name: "Acme" }],
       ["POST", "/v1/orgs", { kind: "domain", name: "Acme", seatLimit: "five" }],
       ["POST", "/v1/orgs", { kind: "domain", name: "Acme", reassignmentPolicy: "keep" }],
     ] as const;
+
     for (const [method, path, body] of bad) {
       const r = await call(h, owner, method, path, body);
       expect([path, r.status, r.body?.error?.code]).toEqual([path, 400, "bad_request"]);
     }
+
     const org = await call(h, owner, "POST", "/v1/orgs", { kind: "domain", name: "Acme" });
     expect(org.status).toBe(201);
     expect(org.body.seatLimit).toBe(5); // documented default, not a silent coercion
     const orgId = org.body.id;
+
     const typo = await call(h, owner, "POST", `/v1/orgs/${orgId}/invitations`, {
       address: "bob@bye.test",
       role: "owner",
     });
+
     expect(typo.status).toBe(400);
+
     const defaulted = await call(h, owner, "POST", `/v1/orgs/${orgId}/invitations`, {
       address: "bob@bye.test",
     });
+
     expect(defaulted.status).toBe(201);
     expect((await call(h, owner, "PUT", `/v1/orgs/${orgId}/seats`, {})).status).toBe(400);
   });
@@ -229,12 +264,14 @@ describe("control routes", () => {
       commandId: cmdId(),
       name: "secret-label-name",
     });
+
     const rows = (
       await h.d1
         .prepare("SELECT actor_id, action, target, detail FROM audit_log WHERE actor_id = ?")
         .bind(ana.userId)
         .all<{ action: string; target: string; detail: string }>()
     ).results;
+
     const write = rows.find((r) => r.target.includes("/commands"));
     expect(write).toBeDefined();
     expect(JSON.stringify(rows)).not.toContain("secret-label-name");
@@ -295,17 +332,21 @@ describe("control routes", () => {
       h.env,
     );
     await h.drain();
+
     const thread = (await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`)).body
       .items[0];
+
     const detail = await call(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${thread.threadId}`,
     );
+
     const spaceId = (
       await call(h, ana, "POST", "/v1/spaces", { organizationId: ana.organizationId })
     ).body.spaceId as string;
+
     const shared = await call(h, ana, "POST", "/v1/shared-threads", {
       spaceId,
       mailboxId: ana.mailboxId,
@@ -314,21 +355,26 @@ describe("control routes", () => {
       grantees: [],
       includeFuture: false,
     });
+
     const sharedThreadId = shared.body as string;
+
     const preview = await call(
       h,
       ana,
       "GET",
       `/v1/spaces/${spaceId}/threads/${sharedThreadId}/public-preview`,
     );
+
     expect(preview.status).toBe(200);
     expect(JSON.stringify(preview.body)).toContain("Launch");
     expect(JSON.stringify(preview.body)).not.toContain("hidden@example.net");
+
     const link = await call(h, ana, "POST", "/v1/public-links", {
       spaceId,
       threadId: sharedThreadId,
       includeFuture: false,
     });
+
     const [, token] = new URL(link.body.url).pathname.split("/").slice(2);
     const gateway = new PublicGateway({} as never, h.env);
     expect(await gateway.resolveShareLink(spaceId, token!)).not.toBeNull();
@@ -341,11 +387,13 @@ describe("control routes", () => {
 
   it("[P01] World: draft → preview → publish → unpublish writes and removes public copies", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const draft = await call(h, ana, "POST", "/v1/world/drafts", {
       title: "Draft post",
       html: "<p>body</p>",
       text: "body",
     });
+
     expect(draft.status).toBe(201);
     const postId = draft.body.postId as string;
     const preview = await call(h, ana, "GET", `/v1/world/posts/${postId}/preview`);
@@ -365,40 +413,50 @@ describe("control routes", () => {
 
   it("[P01] publish is one durable pipeline: the FANOUT instance re-renders a site the synchronous attempt lost, once", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const created = await call(h, ana, "POST", "/v1/world/posts", {
       from: "ana@bye.test",
       title: "Durable",
       html: "<p>d</p>",
       text: "d",
     });
+
     expect(created.status).toBe(201);
     const postId = created.body.postId as string;
     const instance = h.workflows.FANOUT?.find((w) => w.id.startsWith(`fan-ana-${postId}-r`));
     expect(instance).toBeDefined();
+
     const sitePages = () =>
       [...h.buckets.PUBLISHED.objects.keys()].filter((k) => k.startsWith("site/ana/posts/"));
+
     expect(sitePages().length).toBeGreaterThan(0);
+
     // Crash after commit: the synchronous render never landed.
     for (const k of sitePages()) h.buckets.PUBLISHED.objects.delete(k);
+
     for (const k of [...h.buckets.PARTS.objects.keys()].filter((k) =>
       k.startsWith("t/world/ana/site-rendered/"),
     ))
       h.buckets.PARTS.objects.delete(k);
     const executed: Array<string> = [];
+
     const step = {
       do: async (name: string, ...args: ReadonlyArray<unknown>) => (
         executed.push(name),
-        (args.at(-1) as () => Promise<unknown>)()
+        (args.at(-1) as () => Promise<StepResult>)()
       ),
     };
+
     const run = () =>
       new FanoutWorkflow({} as never, h.env).run(
         { payload: instance!.params, instanceId: instance!.id, timestamp: new Date() } as never,
         step as never,
       );
+
     await run();
     expect(executed.slice(0, 2)).toEqual(["v1:site", "v2:approve"]);
     expect(sitePages().length).toBeGreaterThan(0);
+
     // A replay finds the version recorded as rendered and leaves the site alone.
     for (const k of sitePages()) h.buckets.PUBLISHED.objects.delete(k);
     await run();
@@ -417,6 +475,7 @@ describe("control routes", () => {
         })
       ).status,
     ).toBe(200);
+
     const draft = await call(h, ana, "POST", "/v1/drafts", {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
@@ -429,11 +488,13 @@ describe("control routes", () => {
         attachments: [],
       },
     });
+
     const sent = await call(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
       revision: draft.body.revision,
     });
+
     expect(sent.status).toBe(202);
     // A publish-only send is one real send job of the `publish` class (undo goes through cancelSend).
     expect(sent.body.sendJobIds).toHaveLength(1);
@@ -443,8 +504,10 @@ describe("control routes", () => {
     ).toBe("publish");
     // Publishing honours the undo window: nothing is public until it elapses.
     await h.drain();
+
     const published = () =>
       [...h.buckets.PUBLISHED.objects.keys()].some((k) => k.startsWith("site/ana/posts/"));
+
     expect(published()).toBe(false);
     vi.setSystemTime(Date.now() + 60_000);
     await h.namespaces.MAILBOXES.instance(ana.mailboxId).alarm();
@@ -466,9 +529,11 @@ describe("control routes", () => {
       .prepare("UPDATE domains SET state = 'ownership-proven' WHERE id = ?")
       .bind(created.body.id)
       .run();
+
     const auth = await call(h, ana, "POST", `/v1/domains/${created.body.id}/authorize-zone`, {
       method: "manual-records",
     });
+
     expect(auth.status).toBe(202);
     expect(h.workflowEvents.PROVISION_DOMAIN).toEqual([
       { id: retryId, type: "zone-authorized", payload: { method: "manual-records" } },
@@ -486,8 +551,10 @@ describe("control routes", () => {
       address: "ana@bye.test",
       kind: "hosted",
     });
+
     const published = () =>
       [...h.buckets.PUBLISHED.objects.keys()].some((k) => k.startsWith("site/ana/posts/"));
+
     for (const to of [
       [{ address: "world@bye.test" }],
       [{ address: "world@bye.test" }, { address: "bob@example.net" }],
@@ -497,15 +564,18 @@ describe("control routes", () => {
         commandId: cmdId(),
         content: { to, cc: [], bcc: [], subject: "Oops", text: "not yet", attachments: [] },
       });
+
       const sent = await call(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
         mailboxId: ana.mailboxId,
         commandId: cmdId(),
         revision: draft.body.revision,
       });
+
       const undo = await call(h, ana, "POST", `/v1/send-jobs/${sent.body.sendJobIds[0]}/cancel`, {
         mailboxId: ana.mailboxId,
         commandId: cmdId(),
       });
+
       expect(undo.body._tag).toBe("Cancelled");
       vi.setSystemTime(Date.now() + 60_000);
       await h.namespaces.MAILBOXES.instance(ana.mailboxId).alarm();
@@ -517,6 +587,7 @@ describe("control routes", () => {
   it("[A03] signup records the browser time zone for the calendar (invalid zones are rejected)", async () => {
     const real = globalThis.fetch;
     globalThis.fetch = (async () => Response.json({ success: true })) as typeof fetch;
+
     try {
       const bad = await call(h, null, "POST", "/auth/signup", {
         address: "zoe@bye.test",
@@ -524,23 +595,27 @@ describe("control routes", () => {
         turnstile: "t",
         timeZone: "Mars/Olympus",
       });
+
       expect(bad.status).toBe(400);
+
       const ok = await call(h, null, "POST", "/auth/signup", {
         address: "zoe@bye.test",
         displayName: "Zoe",
         turnstile: "t",
         timeZone: "Europe/Berlin",
       });
+
       expect(ok.status).toBe(201);
+
       const cal = await h.d1
         .prepare("SELECT id FROM calendars WHERE owner_user_id = ?")
         .bind(ok.body.userId)
         .first<{ id: string }>();
-      const store = (
-        h.namespaces.CALENDARS.instance(cal!.id) as unknown as {
-          ctx: { storage: { kv: { get(k: string): { defaultZone: string } } } };
-        }
-      ).ctx.storage.kv.get("config");
+
+      const store = mockAs<{
+        ctx: { storage: { kv: { get(k: string): { defaultZone: string } } } };
+      }>(h.namespaces.CALENDARS.instance(cal!.id)).ctx.storage.kv.get("config");
+
       expect(store.defaultZone).toBe("Europe/Berlin");
     } finally {
       globalThis.fetch = real;
@@ -579,17 +654,21 @@ describe("control routes", () => {
       h.env,
     );
     await h.drain();
+
     const thread = (await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`)).body
       .items[0];
+
     const detail = await call(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${thread.threadId}`,
     );
+
     const spaceId = (
       await call(h, ana, "POST", "/v1/spaces", { organizationId: ana.organizationId })
     ).body.spaceId as string;
+
     const sharedThreadId = (
       await call(h, ana, "POST", "/v1/shared-threads", {
         spaceId,
@@ -600,6 +679,7 @@ describe("control routes", () => {
         includeFuture: true,
       })
     ).body as string;
+
     await handleInbound(
       inboundMessage(
         "bob@example.net",
@@ -625,9 +705,11 @@ describe("control routes", () => {
     const { handleInbound } = await import("../src/inbound.ts");
     const { inboundMessage, rfc822 } = await import("./harness.ts");
     const owner = await signup(h, "owner@bye.test");
+
     const org = (
       await call(h, owner, "POST", "/v1/orgs", { kind: "domain", name: "Acme", seatLimit: 5 })
     ).body;
+
     const orgId = org.orgId ?? org.id;
     await h.d1
       .prepare(
@@ -635,12 +717,14 @@ describe("control routes", () => {
       )
       .bind(orgId)
       .run();
+
     const ext = await call(h, owner, "POST", `/v1/orgs/${orgId}/extensions`, {
       domainId: "dom_acme",
       localPart: "support",
       memberIds: [owner.userId],
       displayName: "Support",
     });
+
     expect(ext.status).toBe(201);
     expect(ext.body.address).toBe("support@acme.test");
     await handleInbound(
@@ -694,10 +778,7 @@ describe("space change feed and live channels", () => {
     }
   };
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
 
   interface Account {
     readonly userId: string;
@@ -713,20 +794,24 @@ describe("space change feed and live channels", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     await h.env.CALENDARS.getByName(account.calendarId).provision({
       ownerId: account.userId,
       selfAddresses: [address],
       defaultZone: "UTC",
     });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -737,28 +822,35 @@ describe("space change feed and live channels", () => {
     };
   };
 
-  const call = async (
+  const call = async <JsonValue>(
     h: Harness,
     a: Account | null,
     method: string,
     path: string,
-    json?: unknown,
+    json?: JsonValue,
     headers: Record<string, string> = {},
   ) => {
+    const requestHeaders = new Headers();
+
+    if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(headers ?? {})) requestHeaders.set(k, v);
+
     const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(json !== undefined ? { "content-type": "application/json" } : {}),
-          ...headers,
-        },
-        ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
-      }),
+      new Request(
+        `${h.env.APP_ORIGIN}${path}`,
+        json !== undefined
+          ? { method, headers: requestHeaders, body: JSON.stringify(json) }
+          : { method, headers: requestHeaders },
+      ),
       h.env,
       ctx,
     );
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
@@ -775,9 +867,11 @@ describe("space change feed and live channels", () => {
   it("[§8] spaces expose a member-only change feed", async () => {
     const ana = await signup(h, "ana@bye.test");
     const eve = await signup(h, "eve@bye.test");
+
     const spaceId = (
       await call(h, ana, "POST", "/v1/spaces", { organizationId: ana.organizationId })
     ).body.spaceId as string;
+
     await h.env.SHARED_SPACES.getByName(`space:${spaceId}`).setMember(
       ana.userId,
       "usr_other",
@@ -792,9 +886,11 @@ describe("space change feed and live channels", () => {
 
   it("[§8] cookie-authenticated /v1/live upgrades must come from the app origin; bearer upgrades need none", async () => {
     const ana = await signup(h, "ana@bye.test");
-    const calObj = h.namespaces.CALENDARS.instance(ana.calendarId) as unknown as {
+
+    const calObj = h.namespaces.CALENDARS.instance(ana.calendarId) as {
       fetch(r: Request): Promise<Response>;
     };
+
     calObj.fetch = async () => new Response(null, { status: 204 });
     const path = `/v1/live?calendar=${ana.calendarId}`;
     const ws = { upgrade: "websocket" };
@@ -820,6 +916,7 @@ describe("space change feed and live channels", () => {
       "ok",
     ]);
     h.d1.failing = true;
+
     try {
       const down = await handleFetch(new Request(`${h.env.APP_ORIGIN}/healthz`), h.env, ctx);
       expect([down.status, down.headers.get("cache-control"), await down.text()]).toEqual([
@@ -835,23 +932,30 @@ describe("space change feed and live channels", () => {
   it("[§8] /v1/live authorizes calendars and spaces, tags the socket with the verified credential, and sends seq hints", async () => {
     const ana = await signup(h, "ana@bye.test");
     const eve = await signup(h, "eve@bye.test");
+
     const spaceId = (
       await call(h, ana, "POST", "/v1/spaces", { organizationId: ana.organizationId })
     ).body.spaceId as string;
+
     const forwarded: Array<string | null> = [];
+
     const capture = async (r: Request) => (
       forwarded.push(r.headers.get("x-bye-credential")),
       new Response(null, { status: 204 })
     );
-    const spaceObj = h.namespaces.SHARED_SPACES.instance(`space:${spaceId}`) as unknown as {
+
+    const spaceObj = h.namespaces.SHARED_SPACES.instance(`space:${spaceId}`) as {
       fetch(r: Request): Promise<Response>;
     };
-    const calObj = h.namespaces.CALENDARS.instance(ana.calendarId) as unknown as {
+
+    const calObj = h.namespaces.CALENDARS.instance(ana.calendarId) as {
       fetch(r: Request): Promise<Response>;
     };
+
     const realSpaceFetch = spaceObj.fetch.bind(spaceObj);
     spaceObj.fetch = capture;
     calObj.fetch = capture;
+
     const live = (a: Account, query: string) =>
       call(h, a, "GET", `/v1/live?${query}`, undefined, {
         upgrade: "websocket",
@@ -869,11 +973,13 @@ describe("space change feed and live channels", () => {
 
     // Seq hints: the accepted socket gets the current sequence, then a newer one after a change.
     const sent: Array<number> = [];
+
     const socket = {
       send: (d: string) => sent.push((JSON.parse(d) as { seq: number }).seq),
       close: () => undefined,
     };
-    const g = globalThis as unknown as { WebSocketPair?: unknown; Response: typeof Response };
+
+    const g = globalThis as { WebSocketPair?: unknown; Response: typeof Response };
     const RealResponse = g.Response;
     g.WebSocketPair = class {
       0 = {};
@@ -884,6 +990,7 @@ describe("space change feed and live channels", () => {
         super(body, init?.status === 101 ? { ...init, status: 200 } : init);
       }
     } as typeof Response;
+
     try {
       await realSpaceFetch(
         new Request("https://do/live", {
@@ -894,6 +1001,7 @@ describe("space change feed and live channels", () => {
       g.Response = RealResponse;
       delete g.WebSocketPair;
     }
+
     expect(sent).toHaveLength(1);
     const space = h.env.SHARED_SPACES.getByName(`space:${spaceId}`);
     await space.setMember(ana.userId, eve.userId, "member");
@@ -920,10 +1028,12 @@ describe("MBOX export paging", () => {
 
   it("[A04] pages through every message into one multipart MBOX; retries and re-completion are safe; bytes are preserved", async () => {
     const h = makeHarness();
+
     const account = await new ControlDirectory(
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address: "ana@bye.test", displayName: "Ana" });
+
     for (let i = 0; i < 5; i++) {
       const raw = rfc822({
         from: "bob@example.net",
@@ -932,17 +1042,21 @@ describe("MBOX export paging", () => {
         body: `body ${i} ünïcode`,
         messageId: `m${i}@example.net`,
       });
+
       await handleInbound(inboundMessage("bob@example.net", "ana@bye.test", raw), h.env);
     }
+
     await h.drain();
 
     const key = "t/usr/export/e1/mbx.mbox";
     const upload = await h.env.EXPORTS.createMultipartUpload(key);
     let state: MboxState = { cursor: null, parts: [], carry: null };
     let i = 0;
+
     do {
       const input = state;
       const carryKey = `carry/${i}`;
+
       const first = await appendMboxPage(
         h.env,
         account.mailboxId,
@@ -953,6 +1067,7 @@ describe("MBOX export paging", () => {
         2,
         64,
       );
+
       // A retried step with the same input produces the same progress.
       const retried = await appendMboxPage(
         h.env,
@@ -964,10 +1079,12 @@ describe("MBOX export paging", () => {
         2,
         64,
       );
+
       expect(retried).toEqual(first);
       state = first;
       i++;
     } while (state.cursor);
+
     expect(i).toBe(3);
     expect(state.parts.length).toBeGreaterThan(1);
     await completeMbox(h.env, key, upload.uploadId, state);
@@ -975,9 +1092,11 @@ describe("MBOX export paging", () => {
     await completeMbox(h.env, key, upload.uploadId, { cursor: null, parts: [], carry: null });
 
     const mbox = new Uint8Array(await (await h.env.EXPORTS.get(key))!.arrayBuffer());
+
     const originals = [...h.buckets.ORIGINALS.objects.entries()].filter(([k]) =>
       k.includes("/orig/"),
     );
+
     const expected = originals.reduce(
       (n, [, o]) =>
         n +
@@ -985,8 +1104,10 @@ describe("MBOX export paging", () => {
           .byteLength,
       0,
     );
+
     expect(Math.abs(mbox.byteLength - expected)).toBeLessThan(originals.length * 64);
     const text = new TextDecoder().decode(mbox);
+
     for (let m = 0; m < 5; m++) expect(text).toContain(`body ${m} ünïcode`);
     expect((text.match(/^From /gm) ?? []).length).toBe(5);
   });
@@ -1086,10 +1207,8 @@ describe("signup, publishing and webhooks", () => {
     }
   };
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
+
   let n = 0;
   const cmdId = () => `cmd_xh_${(++n).toString(36).padStart(16, "0")}`;
 
@@ -1105,15 +1224,18 @@ describe("signup, publishing and webhooks", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -1129,28 +1251,27 @@ describe("signup, publishing and webhooks", () => {
     path: string,
     init: { json?: unknown; body?: BodyInit; headers?: Record<string, string> } = {},
   ) => {
-    const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(init.json !== undefined ? { "content-type": "application/json" } : {}),
-          ...init.headers,
-        },
-        ...(init.json !== undefined
-          ? { body: JSON.stringify(init.json) }
-          : init.body !== undefined
-            ? { body: init.body }
-            : {}),
-      }),
-      h.env,
-      ctx,
-    );
+    const requestHeaders = new Headers();
+
+    if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (init.json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(init.headers ?? {})) requestHeaders.set(k, v);
+
+    const requestInit: RequestInit = { method, headers: requestHeaders };
+
+    if (init.json !== undefined) requestInit.body = JSON.stringify(init.json);
+    else if (init.body !== undefined) requestInit.body = init.body;
+
+    const r = await handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, requestInit), h.env, ctx);
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
-  const command = (h: Harness, a: Account, body: Record<string, unknown>) =>
+  const command = (h: Harness, a: Account, body: JsonRecord) =>
     call(h, a, "POST", `/v1/mailboxes/${a.mailboxId}/commands`, {
       json: { commandId: cmdId(), ...body },
     });
@@ -1169,11 +1290,13 @@ describe("signup, publishing and webhooks", () => {
   it("[A01] signup refuses reserved system local parts and malformed addresses on the service domain", async () => {
     const real = globalThis.fetch;
     globalThis.fetch = (async () => Response.json({ success: true })) as typeof fetch;
+
     try {
       const attempt = (address: string) =>
         call(h, null, "POST", "/auth/signup", {
           json: { address, displayName: "x", turnstile: "t" },
         });
+
       for (const reserved of [
         "world@bye.test",
         "no-reply@bye.test",
@@ -1181,6 +1304,7 @@ describe("signup, publishing and webhooks", () => {
         "abuse@bye.test",
       ])
         expect((await attempt(reserved)).status).toBe(403);
+
       for (const malformed of [
         "@bye.test",
         "a..b@bye.test",
@@ -1198,6 +1322,7 @@ describe("signup, publishing and webhooks", () => {
   it("[P01] custom-domain users publish via world@<service domain>; world@<their domain> is ordinary mail", async () => {
     const carl = await signup(h, "carl@acme.test");
     await command(h, carl, { _tag: "AddIdentity", address: "carl@acme.test", kind: "hosted" });
+
     const send = async (to: string) => {
       const draft = await call(h, carl, "POST", "/v1/drafts", {
         json: {
@@ -1213,15 +1338,18 @@ describe("signup, publishing and webhooks", () => {
           },
         },
       });
+
       return (
         await call(h, carl, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
           json: { mailboxId: carl.mailboxId, commandId: cmdId(), revision: draft.body.revision },
         })
       ).body.sendJobIds as Array<string>;
     };
+
     const classOf = async (to: string) =>
       (await h.namespaces.MAILBOXES.instance(carl.mailboxId).sendJob((await send(to))[0]!))
         ?.trafficClass;
+
     expect(await classOf("world@acme.test")).not.toBe("publish");
     expect(await classOf("world@bye.test")).toBe("publish");
     expect((await call(h, carl, "GET", "/v1/world")).body.publishAddress).toBe("world@bye.test");
@@ -1234,6 +1362,7 @@ describe("signup, publishing and webhooks", () => {
       html: `<p>ok</p><script>steal()</script><img src="x" onerror="steal()">`,
       text: "ok",
     });
+
     expect(raw).toContain("ok");
     expect(raw).not.toMatch(/<script/i);
     expect(raw).not.toMatch(/onerror/i);
@@ -1246,6 +1375,7 @@ describe("signup, publishing and webhooks", () => {
       html: `<p>x</p><img src="https://tracker.example/p.png" alt="a"><img src="http://plain.example/q.png" alt="b">`,
       text: "x",
     });
+
     expect(html).not.toContain("tracker.example");
     expect(html).not.toContain("plain.example");
     expect(html).toContain(`${h.env.MAIL_ORIGIN}/img?u=`);
@@ -1283,10 +1413,12 @@ describe("public share rendering", () => {
         blockedTrackers: 0,
       }),
     );
+
     const gateway = Object.create(PublicGateway.prototype) as {
       env: unknown;
       resolveShareLink(s: string, t: string): Promise<{ messages: Array<{ html: string }> } | null>;
     };
+
     gateway.env = {
       ...h.env,
       SHARED_SPACES: {
@@ -1327,10 +1459,8 @@ describe("step-up signalling", () => {
     }
   };
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
+
   let n = 0;
   const cmdId = () => `cmd_xh_${(++n).toString(36).padStart(16, "0")}`;
 
@@ -1346,15 +1476,18 @@ describe("step-up signalling", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -1370,28 +1503,27 @@ describe("step-up signalling", () => {
     path: string,
     init: { json?: unknown; body?: BodyInit; headers?: Record<string, string> } = {},
   ) => {
-    const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(init.json !== undefined ? { "content-type": "application/json" } : {}),
-          ...init.headers,
-        },
-        ...(init.json !== undefined
-          ? { body: JSON.stringify(init.json) }
-          : init.body !== undefined
-            ? { body: init.body }
-            : {}),
-      }),
-      h.env,
-      ctx,
-    );
+    const requestHeaders = new Headers();
+
+    if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (init.json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(init.headers ?? {})) requestHeaders.set(k, v);
+
+    const requestInit: RequestInit = { method, headers: requestHeaders };
+
+    if (init.json !== undefined) requestInit.body = JSON.stringify(init.json);
+    else if (init.body !== undefined) requestInit.body = init.body;
+
+    const r = await handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, requestInit), h.env, ctx);
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
-  const command = (h: Harness, a: Account, body: Record<string, unknown>) =>
+  const command = (h: Harness, a: Account, body: JsonRecord) =>
     call(h, a, "POST", `/v1/mailboxes/${a.mailboxId}/commands`, {
       json: { commandId: cmdId(), ...body },
     });
@@ -1408,24 +1540,30 @@ describe("step-up signalling", () => {
 
   it("[§10] only real step-up refusals carry the machine-readable stepUp marker", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const fresh = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(ana.userId, "t", false);
+
     const notStepped = { ...ana, token: fresh.token };
+
     const needs = await command(h, notStepped, {
       _tag: "AddIdentity",
       address: "ana@bye.test",
       kind: "hosted",
     });
+
     expect(needs.status).toBe(403);
     expect(needs.body.error.details).toMatchObject({ stepUp: true });
+
     const refused = await command(h, ana, {
       _tag: "AddIdentity",
       address: "ceo@bye.test",
       kind: "hosted",
     });
+
     expect(refused.status).toBe(403);
     expect(refused.body.error.details?.stepUp).toBeUndefined();
   });
@@ -1446,44 +1584,62 @@ describe("read-only credentials", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address: "ana@bye.test", displayName: "ana" });
+
     const auth = new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env));
     const session = await auth.issueSession(account.userId, "t", true);
+
     const agent = await auth.createApiToken(session.session.user_id, {
       kind: "agent",
       label: "ro",
       scopes: ["read"],
     });
+
     return { account, cookie: `__Host-session=${session.token}`, bearer: `Bearer ${agent.token}` };
   };
-  const req = (method: string, path: string, headers: Record<string, string>, json?: unknown) =>
-    handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...headers,
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(json !== undefined ? { "content-type": "application/json" } : {}),
-        },
-        ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
-      }),
+
+  const req = <JsonValue>(
+    method: string,
+    path: string,
+    headers: Record<string, string>,
+    json?: JsonValue,
+  ) => {
+    const requestHeaders = new Headers();
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(headers ?? {})) requestHeaders.set(k, v);
+
+    return handleFetch(
+      new Request(
+        `${h.env.APP_ORIGIN}${path}`,
+        json !== undefined
+          ? { method, headers: requestHeaders, body: JSON.stringify(json) }
+          : { method, headers: requestHeaders },
+      ),
       h.env,
       ctx,
     );
+  };
 
   it("[O03] read-only credentials can read a space but never change it", async () => {
     const { account, cookie, bearer } = await owner();
+
     const created = await req(
       "POST",
       "/v1/spaces",
       { cookie },
       { organizationId: account.organizationId },
     );
+
     expect(created.status).toBe(201);
     const { spaceId } = (await created.json()) as { spaceId: string };
     // Real, existing targets (the owner's own membership), so a refusal cannot be "not found".
     const self = account.userId;
     const ro = { authorization: bearer };
     expect((await req("GET", `/v1/spaces/${spaceId}/members`, ro)).status).toBe(200);
+
     for (const [method, path, json] of [
       ["POST", "/v1/spaces", { organizationId: account.organizationId }],
       ["PUT", `/v1/spaces/${spaceId}/members/${self}`, { role: "member" }],
@@ -1509,6 +1665,7 @@ describe("read-only credentials", () => {
         expect.stringMatching(/^missing scope (write|admin|draft)$/),
       ]);
     }
+
     const members = await (await req("GET", `/v1/spaces/${spaceId}/members`, ro)).text();
     // The owner is still the space's admin: neither the demotion nor the removal happened.
     expect(members).toContain(self);
@@ -1528,6 +1685,7 @@ describe("read-only credentials", () => {
     expect(started.status).toBe(202);
     const { exportId } = (await started.json()) as { exportId: string };
     const ro = { authorization: bearer };
+
     for (const [method, path, json] of [
       ["DELETE", "/v1/devices/dvs_real", undefined],
       ["POST", "/v1/exports", {}],
@@ -1542,6 +1700,7 @@ describe("read-only credentials", () => {
         expect.stringMatching(/missing scope|interactive session/),
       ]);
     }
+
     // Nothing happened: the device session survives and no second export was started.
     expect(
       await h.d1.prepare("SELECT revoked_at FROM device_sessions WHERE id = 'dvs_real'").first(),

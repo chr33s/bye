@@ -33,6 +33,7 @@ describe("MIME container NDJSON protocol", () => {
     const lines = [...parseToLines(new TextEncoder().encode(message(3)), 1)].map((l) =>
       JSON.parse(l),
     );
+
     expect(lines[0].type).toBe("meta");
     expect(lines[0].summary.subject).toBe("Big one");
     expect(lines[0].body.html).not.toContain("<script");
@@ -51,6 +52,7 @@ describe("MIME container NDJSON protocol", () => {
         maxDecodedBytes: 1 << 20,
       }),
     ].map((l) => JSON.parse(l));
+
     expect(lines[0].truncated).toBe(true);
     const parts = lines.slice(1);
     expect(parts.length).toBeGreaterThanOrEqual(1);

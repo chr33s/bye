@@ -90,9 +90,12 @@ const usedIn = (
   window: number,
 ): number => {
   const row = usage.find((u) => u.scope === scope && u.key === key);
+
   return Number((window === HOUR ? row?.hour : row?.day) ?? 0);
 };
+
 const DAY = 24 * HOUR;
+
 const REVIEW_WINDOW = 7 * DAY;
 
 /** The application's `SendingDecision`, narrowed to this adapter's scopes. */
@@ -131,8 +134,10 @@ export class SendingPolicy {
       userId,
       userId,
     ).first<{ created_at: number | null }>();
+
     const created = row?.created_at ?? null;
     const ageDays = created !== null ? (this.clock.now() - Number(created)) / DAY : 0;
+
     return RAMP_TIERS.find((t) => ageDays < t.maxAgeDays)!.perDay;
   }
 
@@ -157,19 +162,25 @@ export class SendingPolicy {
   async reserve(input: SendingInput): Promise<SendingVerdict> {
     return guardD1("sending-policy", async () => {
       const { verdict, deliverable, checks } = await this.evaluate(input);
+
       if (!verdict.allowed || deliverable === 0) return verdict;
       const identity = normalizeAddress(input.identity);
       const now = this.clock.now();
+
       const results = await this.db.batch([
         ...this.increments(input.userId, identity, deliverable),
         this.usageStatement(this.db, input.userId, identity, this.bucket(now)),
       ]);
+
       const usage = (results.at(-1) as { results?: Array<UsageRow> } | undefined)?.results ?? [];
       let remaining = Number.POSITIVE_INFINITY;
+
       for (const [scope, key, limit, window] of checks) {
         const used = usedIn(usage, scope, key, window);
+
         if (used > limit) {
           await this.db.batch(this.increments(input.userId, identity, -deliverable));
+
           return {
             allowed: false,
             reason: "budget",
@@ -178,8 +189,10 @@ export class SendingPolicy {
             suppressed: verdict.suppressed,
           };
         }
+
         remaining = Math.min(remaining, limit - used);
       }
+
       return { allowed: true, suppressed: verdict.suppressed, remaining, reserved: deliverable };
     });
   }
@@ -191,6 +204,7 @@ export class SendingPolicy {
     readonly recipients: number;
   }): Promise<void> {
     const n = Math.max(0, Math.floor(input.recipients));
+
     if (n === 0) return;
     await this.db.batch(this.increments(input.userId, normalizeAddress(input.identity), -n));
   }
@@ -202,6 +216,7 @@ export class SendingPolicy {
     bucket: number,
   ): D1StatementLike {
     const scopeArgs = sendingScopes(userId, identity).flatMap(([scope, key]) => [scope, key]);
+
     // Day window per scope, plus the hour window (the platform's budget is hourly).
     return q(
       db,
@@ -226,11 +241,13 @@ export class SendingPolicy {
     const db = primary(this.db);
     const scopes = sendingScopes(input.userId, identity);
     const scopeArgs = scopes.flatMap(([scope, key]) => [scope, key]);
+
     const [suppressedRows, suspendedRows, usage, userBudget] = await Promise.all([
       // D1 binds at most 100 parameters per statement: look suppressions up in bounded chunks,
       // one after another.
       (async () => {
         const found: Array<{ address: string }> = [];
+
         for (const chunk of inListChunks(recipients)) {
           const rows = await q(
             db,
@@ -238,8 +255,10 @@ export class SendingPolicy {
             ...chunk,
             now,
           ).all<{ address: string }>();
+
           found.push(...rows.results);
         }
+
         return found;
       })(),
       q(
@@ -254,26 +273,33 @@ export class SendingPolicy {
         .then((r) => r.results),
       this.dailyBudget(input.userId),
     ]);
+
     const suppressed = suppressedRows.map((r) => r.address);
     const deliverable = recipients.length - suppressed.length;
+
     const checks: ReadonlyArray<readonly [SendingScope, string, number, number]> = [
       ["user", input.userId, userBudget, DAY],
       ["identity", identity, this.limits.identityPerDay, DAY],
       ["domain", domain, this.limits.domainPerDay, DAY],
       ["platform", "*", this.limits.platformPerHour, HOUR],
     ];
+
     const decide = (): SendingVerdict => {
       const isSuspended = (scope: SendingScope, key: string) =>
         suspendedRows.some((r) => r.scope === scope && r.key === key);
+
       for (const [scope, key] of scopes) {
         if (isSuspended(scope, key))
           return { allowed: false, reason: "suspended", scope, suppressed };
       }
+
       if (recipients.length > 0 && deliverable === 0)
         return { allowed: false, reason: "all-suppressed", suppressed };
       let remaining = Number.POSITIVE_INFINITY;
+
       for (const [scope, key, limit, window] of checks) {
         const used = usedIn(usage, scope, key, window);
+
         if (used + deliverable > limit)
           return {
             allowed: false,
@@ -284,8 +310,10 @@ export class SendingPolicy {
           };
         remaining = Math.min(remaining, limit - used - deliverable);
       }
+
       return { allowed: true, suppressed, remaining };
     };
+
     return { verdict: decide(), deliverable, checks };
   }
 
@@ -337,10 +365,12 @@ export class SendingPolicy {
   }): Promise<{ readonly suspended: boolean }> {
     const identity = normalizeAddress(input.identity);
     const field = input.outcome === "complaint" ? "complained" : "bounced";
+
     const statements: Array<D1StatementLike> = [
       this.increment("user", input.userId, field, 1),
       this.increment("identity", identity, field, 1),
     ];
+
     if (input.outcome !== "soft-bounce")
       statements.push(
         this.suppressStatement(
@@ -352,22 +382,27 @@ export class SendingPolicy {
     await this.db.batch(statements);
 
     const since = this.bucket(this.clock.now()) - REVIEW_WINDOW;
+
     const r = await q(
       primary(this.db),
       "SELECT COALESCE(SUM(sent), 0) AS sent, COALESCE(SUM(bounced), 0) AS bounced, COALESCE(SUM(complained), 0) AS complained FROM sending_counters WHERE scope = 'user' AND key = ? AND window_start >= ?",
       input.userId,
       since,
     ).first<{ sent: number; bounced: number; complained: number }>();
+
     const sent = Number(r?.sent ?? 0);
+
     if (sent < this.limits.minVolume) return { suspended: false };
     const complaintRate = Number(r?.complained ?? 0) / sent;
     const bounceRate = Number(r?.bounced ?? 0) / sent;
+
     const signal =
       complaintRate > this.limits.maxComplaintRate
         ? "complaint-rate"
         : bounceRate > this.limits.maxBounceRate
           ? "bounce-rate"
           : null;
+
     if (!signal || (await this.isSuspended("user", input.userId))) return { suspended: false };
     await this.db.batch([
       q(
@@ -381,6 +416,7 @@ export class SendingPolicy {
       ),
       this.suspendStatement("user", input.userId, `auto:${signal}`, "system"),
     ]);
+
     return { suspended: true };
   }
 
@@ -426,6 +462,7 @@ export class SendingPolicy {
       "DELETE FROM suppressions WHERE address = ?",
       normalizeAddress(address),
     ).run();
+
     return meta.changes === 1;
   }
 
@@ -445,6 +482,7 @@ export class SendingPolicy {
 
   async lift(scope: SendingScope, key: string, actorId: string): Promise<boolean> {
     const results = await this.db.batch(this.liftStatements(scope, key, actorId));
+
     return changesOf(results[0]) === 1;
   }
 
@@ -455,6 +493,7 @@ export class SendingPolicy {
     actorId: string,
   ): Array<D1StatementLike> {
     const now = this.clock.now();
+
     return [
       q(
         this.db,
@@ -494,6 +533,7 @@ export class SendingPolicy {
       detail: string;
       created_at: number;
     }>();
+
     return rows.results.map((r) => ({
       id: r.id,
       scope: r.scope,
@@ -515,6 +555,7 @@ export class SendingPolicy {
       "SELECT scope, key FROM sending_signals WHERE id = ? AND reviewed_at IS NULL",
       id,
     ).first<{ scope: SendingScope; key: string }>();
+
     if (!s) return reject("not_found", "signal");
     // Review and (for a false positive) the lift commit together.
     await this.db.batch([

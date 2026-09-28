@@ -7,10 +7,12 @@ describe("client error reports", () => {
   it("keeps engine messages but drops application error text", () => {
     const engine = toErrorReport(new TypeError("x is not a function"), "error", 1);
     expect(engine).toMatchObject({ name: "TypeError", message: "x is not a function", at: 1 });
+
     const app = toErrorReport(
       new Error("Subject: quarterly numbers for bob@example.net"),
       "boundary",
     );
+
     expect(app.name).toBe("Error");
     expect(app).not.toHaveProperty("message");
     expect(JSON.stringify(app)).not.toContain("bob@example.net");

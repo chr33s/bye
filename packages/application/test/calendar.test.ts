@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Exit, Layer } from "effect";
+import { Effect, Exit, Layer, type Schema } from "effect";
 import {
   calendarCreateEventFromMessage,
   calendarCreateFeedToken,
@@ -11,7 +11,7 @@ import {
   calendarServeFeed,
   LocationSearch,
   Principal,
-  type PrincipalShape,
+  type PrincipalContext,
   type Scope,
 } from "@bye/application";
 import { calendarFeedFetcherLive, calendarRepositoryLocal } from "@bye/platform-cloudflare";
@@ -23,7 +23,7 @@ const principal = (
   userId: string,
   scopes: ReadonlyArray<Scope>,
   mailboxIds: ReadonlyArray<string> = [],
-): PrincipalShape => ({
+): PrincipalContext => ({
   userId,
   sessionId: `ses_${userId}`,
   kind: "user",
@@ -36,12 +36,15 @@ const principal = (
 const setup = (fetchFn: typeof fetch = async () => new Response("", { status: 500 })) => {
   const ctx = makeTestCalendarStore({}, Date.UTC(2026, 8, 25, 12));
   const repo = calendarRepositoryLocal(() => ctx.store);
+
   const locations = Layer.succeed(LocationSearch, {
     search: (q) => Effect.succeed([{ label: `${q.text} Café`, address: "1 Main St" }]),
   });
+
   const run = <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromiseExit(effect);
+
   const as =
-    (p: PrincipalShape) =>
+    (p: PrincipalContext) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       run(
         effect.pipe(
@@ -55,14 +58,18 @@ const setup = (fetchFn: typeof fetch = async () => new Response("", { status: 50
           ),
         ) as Effect.Effect<A, E, never>,
       );
+
   return { ...ctx, as };
 };
 
-const envelope = (command: object) => ({ schemaVersion: 1, command });
+const envelope = (command: Schema.Json) => ({ schemaVersion: 1, command });
+
 const ok = <A, E>(exit: Exit.Exit<A, E>): A => {
   if (Exit.isFailure(exit)) throw new Error(`expected success: ${JSON.stringify(exit.cause)}`);
+
   return exit.value;
 };
+
 const failureTag = <A, E>(exit: Exit.Exit<A, E>): string | undefined =>
   Exit.isFailure(exit)
     ? (JSON.stringify(exit.cause).match(
@@ -75,6 +82,7 @@ describe("calendar use cases", () => {
     const { as, owner } = setup();
     const full = as(principal(owner, ["read", "calendar"]));
     const readOnlyAgent = as({ ...principal(owner, ["read", "draft"]), kind: "agent" });
+
     const created = ok(
       await full(
         calendarExecuteCommand(
@@ -83,6 +91,7 @@ describe("calendar use cases", () => {
         ),
       ),
     ) as { calendarId: string };
+
     expect(
       failureTag(
         await readOnlyAgent(
@@ -127,17 +136,20 @@ describe("calendar use cases", () => {
         ),
       ),
     );
+
     const occ = ok(
       await readOnlyAgent(
         calendarListOccurrences(SPACE, { from: Date.UTC(2026, 8, 26), to: Date.UTC(2026, 8, 28) }),
       ),
     );
+
     expect(occ.map((o) => [o.key, o.data.summary, new Date(o.startMs).toISOString()])).toEqual([
       ["20260926T090000", "Standup", "2026-09-26T07:00:00.000Z"],
       ["20260927T090000", "Standup", "2026-09-27T07:00:00.000Z"],
     ]);
     // A stale revision surfaces as a structured conflict, not a defect.
     const [first] = occ;
+
     const conflict = await full(
       calendarExecuteCommand(
         SPACE,
@@ -151,6 +163,7 @@ describe("calendar use cases", () => {
         }),
       ),
     );
+
     expect(JSON.stringify(Exit.isFailure(conflict) && conflict.cause)).toContain(
       '"code":"conflict"',
     );
@@ -160,6 +173,7 @@ describe("calendar use cases", () => {
     const { as, owner } = setup();
     const calendarOnly = as({ ...principal(owner, ["read", "calendar"]), kind: "agent" });
     const withSend = as({ ...principal(owner, ["read", "calendar", "send"]), kind: "agent" });
+
     const { calendarId } = ok(
       await withSend(
         calendarExecuteCommand(
@@ -168,6 +182,7 @@ describe("calendar use cases", () => {
         ),
       ),
     ) as { calendarId: string };
+
     const invite = (commandId: string) =>
       calendarExecuteCommand(
         SPACE,
@@ -181,6 +196,7 @@ describe("calendar use cases", () => {
           attendees: [{ address: "guest@example.test" }],
         }),
       );
+
     expect(failureTag(await calendarOnly(invite("s2")))).toBe("Forbidden");
     ok(await withSend(invite("s3")));
   });
@@ -214,12 +230,14 @@ describe("calendar use cases", () => {
 
   it("[C09] creating an event from a message requires mailbox access", async () => {
     const { as, owner, store, cmd } = setup();
+
     const { calendarId } = store.createCalendar({
       commandId: cmd(),
       actor: owner,
       name: "P",
       color: "#000",
     });
+
     const body = {
       schemaVersion: 1,
       commandId: "m1",
@@ -237,6 +255,7 @@ describe("calendar use cases", () => {
         local: { year: 2026, month: 10, day: 1, hour: 13, minute: 0, second: 0 },
       },
     };
+
     expect(
       failureTag(
         await as(principal(owner, ["read", "calendar"], ["mbx_other"]))(
@@ -244,11 +263,13 @@ describe("calendar use cases", () => {
         ),
       ),
     ).toBe("Forbidden");
+
     const { eventId } = ok(
       await as(principal(owner, ["read", "calendar"], ["mbx_mine"]))(
         calendarCreateEventFromMessage(SPACE, body),
       ),
     );
+
     expect(store.getEvent(owner, eventId).sourceRef).toEqual({
       mailboxId: "mbx_mine",
       threadId: "thr_1",
@@ -257,13 +278,16 @@ describe("calendar use cases", () => {
 
   it("[C05] issues private feed tokens once, stores only hashes, and revokes them", async () => {
     const { as, owner, store, cmd } = setup();
+
     const { calendarId } = store.createCalendar({
       commandId: cmd(),
       actor: owner,
       name: "P",
       color: "#000",
     });
+
     const user = as(principal(owner, ["read", "calendar"]));
+
     const { token } = ok(
       await user(
         calendarCreateFeedToken(SPACE, {
@@ -274,6 +298,7 @@ describe("calendar use cases", () => {
         }),
       ),
     );
+
     expect(
       store.sql.all("SELECT token_hash FROM cal_feed_tokens").map((r) => r.token_hash),
     ).not.toContain(token);
@@ -282,9 +307,11 @@ describe("calendar use cases", () => {
     expect(ok(await anonymous(calendarServeFeed(SPACE, token)))).toContain("BEGIN:VCALENDAR");
     expect(failureTag(await anonymous(calendarServeFeed(SPACE, "A".repeat(43))))).toBe("NotFound");
     expect(failureTag(await anonymous(calendarServeFeed(SPACE, "../../etc")))).toBe("NotFound");
+
     const hash = store.sql.one<{ token_hash: string }>(
       "SELECT token_hash FROM cal_feed_tokens",
     )!.token_hash;
+
     ok(
       await user(
         calendarExecuteCommand(
@@ -299,21 +326,26 @@ describe("calendar use cases", () => {
   it("[C05] refreshes subscriptions with validators, bounded bodies, and redirect SSRF checks", async () => {
     const requests: Array<{ url: string; headers: Record<string, string> }> = [];
     let mode: "ok" | "304" | "redirect-private" | "huge" = "ok";
+
     const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
       requests.push({
         url: input instanceof Request ? input.url : String(input),
         headers: (init?.headers ?? {}) as Record<string, string>,
       });
+
       if (mode === "redirect-private")
         return new Response(null, {
           status: 302,
           headers: { location: "https://169.254.169.254/latest/meta-data" },
         });
+
       if (mode === "304") return new Response(null, { status: 304 });
+
       if (mode === "huge")
         return new Response("x".repeat(6 * 1024 * 1024), {
           headers: { "content-type": "text/calendar" },
         });
+
       return new Response(
         "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:h1\r\nDTSTART;VALUE=DATE:20261225\r\nSUMMARY:Christmas\r\nEND:VEVENT\r\nEND:VCALENDAR",
         {
@@ -321,7 +353,9 @@ describe("calendar use cases", () => {
         },
       );
     }) as typeof fetch;
+
     const { as, owner, store, cmd, clock } = setup(fetchFn);
+
     const { calendarId } = store.addSubscription({
       commandId: cmd(),
       actor: owner,
@@ -329,6 +363,7 @@ describe("calendar use cases", () => {
       color: "#0a0",
       url: "https://feeds.example.com/h.ics",
     });
+
     const system = as(principal("usr_system", []));
     expect(ok(await system(calendarRefreshSubscription(SPACE, calendarId, "r1")))).toMatchObject({
       imported: 1,
@@ -372,12 +407,14 @@ describe("calendar use cases", () => {
 
   it("[C01] concurrent principals never share authorization context", async () => {
     const { as, owner, store, cmd } = setup();
+
     const { calendarId } = store.createCalendar({
       commandId: cmd(),
       actor: owner,
       name: "Private",
       color: "#000",
     });
+
     store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -389,10 +426,12 @@ describe("calendar use cases", () => {
       },
     });
     const query = { from: Date.UTC(2026, 8, 25), to: Date.UTC(2026, 8, 28) };
+
     const [mine, theirs] = await Promise.all([
       as(principal(owner, ["read"]))(calendarListOccurrences(SPACE, query)),
       as(principal("usr_stranger", ["read"]))(calendarListOccurrences(SPACE, query)),
     ]);
+
     expect(ok(mine)).toHaveLength(1);
     expect(ok(theirs)).toHaveLength(0);
   });

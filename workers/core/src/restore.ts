@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 // Data restore (§12 recovery objective, restore drills). SQLite-backed Durable Objects keep 30 days
 // of point-in-time recovery: resolve a bookmark for the requested time, arm it for the next
 // session, then abort the object so the next request starts from the restored state. D1 is
@@ -23,9 +24,12 @@ export class RestoreRejected extends Error {
 /** Validate a requested restore point against the platform's recovery window. */
 export const validateRestorePoint = (at: number, now: number): number => {
   if (!Number.isFinite(at)) throw new RestoreRejected("restore point must be a timestamp");
+
   if (at >= now) throw new RestoreRejected("restore point must be in the past");
+
   if (now - at > PITR_WINDOW_MS)
     throw new RestoreRejected("restore point is outside the 30-day recovery window");
+
   return Math.floor(at);
 };
 
@@ -40,15 +44,18 @@ export const pointInTimeRestore = async (
 ): Promise<{ readonly bookmark: string; readonly at: number }> => {
   const point = validateRestorePoint(at, now);
   const storage = ctx.storage as Partial<PitrStorage>;
+
   if (
-    typeof storage.getBookmarkForTime !== "function" ||
-    typeof storage.onNextSessionRestoreBookmark !== "function"
+    !Predicate.isFunction(storage.getBookmarkForTime) ||
+    !Predicate.isFunction(storage.onNextSessionRestoreBookmark)
   ) {
     throw new RestoreRejected("this storage back-end does not support point-in-time recovery");
   }
+
   const bookmark = await storage.getBookmarkForTime(point);
   await storage.onNextSessionRestoreBookmark(bookmark);
   setTimeout(() => ctx.abort("point-in-time restore"), 0);
+
   return { bookmark, at: point };
 };
 
@@ -65,12 +72,14 @@ export const awaitRestart = async (
   sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)),
 ): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
+
   for (let delay = 50; ; delay = Math.min(delay * 2, 1_000)) {
     try {
       if ((await epoch()) !== before) return;
     } catch {
       // the aborting instance may reject calls; keep polling
     }
+
     if (Date.now() > deadline)
       throw new RestoreRejected("restored object did not restart in time; tombstones not replayed");
     await sleep(delay);

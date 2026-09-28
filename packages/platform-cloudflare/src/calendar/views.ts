@@ -8,6 +8,7 @@ import {
   calStartOfDay,
   calYearOverview,
 } from "@bye/calendar-engine";
+import { Predicate } from "effect";
 import type { Kernel } from "../durable/kernel.ts";
 import { CalendarInterop } from "./interop.ts";
 import {
@@ -27,13 +28,17 @@ const ftsQuery = (input: string): string | undefined => {
   const terms: Array<string> = [];
   const negatives: Array<string> = [];
   const re = /(-?)"([^"]+)"|(-?)(\S+)/g;
+
   for (let m = re.exec(input); m; m = re.exec(input)) {
     const negative = (m[1] ?? m[3]) === "-";
     const text = (m[2] ?? m[4] ?? "").replace(/"/g, "").trim();
+
     if (!text) continue;
     (negative ? negatives : terms).push(`"${text}"`);
   }
+
   if (terms.length === 0) return undefined;
+
   return [terms.join(" "), ...negatives.map((n) => `NOT ${n}`)].join(" ");
 };
 
@@ -44,9 +49,11 @@ export abstract class CalendarViews extends CalendarInterop {
   /** Search events, week tasks, journal, tracked time, habits, and day labels. Private kinds are owner-only. */
   search(actor: string, query: string, limit = 25): Array<CalendarSearchHit> {
     const match = ftsQuery(query);
+
     if (!match) return [];
     const owner = this.isOwner(actor);
     const readable = new Set(this.listCalendars(actor).map((c) => c.id));
+
     const rows = this.sql.all<{
       doc_id: string;
       kind: CalendarSearchHit["kind"];
@@ -57,6 +64,7 @@ export abstract class CalendarViews extends CalendarInterop {
       match,
       Math.min(Math.max(limit, 1), 100) * 3,
     );
+
     return rows
       .filter((r) =>
         r.kind === "event"
@@ -77,6 +85,7 @@ export abstract class CalendarViews extends CalendarInterop {
   ): Array<{ date: string; occurrences: ReadonlyArray<CalendarOccurrenceView> }> {
     const zone = viewerZone ?? this.zone;
     const span = Math.min(Math.max(days, 1), 92);
+
     const occurrences = this.listOccurrences({
       actor,
       from: calStartOfDay(from, zone),
@@ -85,6 +94,7 @@ export abstract class CalendarViews extends CalendarInterop {
       visibleOnly: true,
       calendarIds,
     });
+
     return calAgenda(occurrences, zone, from, span).map((d) => ({
       date: d.date,
       occurrences: d.occurrences as ReadonlyArray<CalendarOccurrenceView>,
@@ -96,9 +106,10 @@ export abstract class CalendarViews extends CalendarInterop {
     const zone = viewerZone ?? this.zone;
     const start = calStartOfDay({ year, month: 1, day: 1 }, zone);
     const end = calStartOfDay({ year: year + 1, month: 1, day: 1 }, zone);
-    const counts: Record<string, number> = {};
+    const counts = new Map<string, number>();
     // Expansion windows are bounded (§9); a year is covered in two halves.
     const mid = calStartOfDay({ year, month: 7, day: 1 }, zone);
+
     for (const [a, b] of [
       [start, mid],
       [mid, end],
@@ -108,32 +119,23 @@ export abstract class CalendarViews extends CalendarInterop {
         zone,
         year,
       );
-      for (const [k, v] of Object.entries(part)) counts[k] = (counts[k] ?? 0) + v;
+
+      for (const [k, v] of Object.entries(part)) counts.set(k, (counts.get(k) ?? 0) + v);
     }
-    return counts;
+
+    return Object.fromEntries(counts);
   }
 
   /**
    * Day view model (C01/C08): timed + all-day occurrences, night-hours state, and private day context
    * for the owner. Occurrences are expanded ONCE (two days, as the day context needs) and reused.
    */
-  day(
-    actor: string,
-    date: CalLocalDate,
-    viewerZone?: string,
-  ): {
-    date: string;
-    zone: string;
-    occurrences: Array<CalendarOccurrenceView>;
-    nightHoursBusy: boolean;
-    nightHoursCollapsed: boolean;
-    waking: { startMinute: number; endMinute: number };
-    context: CalendarDayContext | undefined;
-  } {
+  day(actor: string, date: CalLocalDate, viewerZone?: string): CalendarDayView {
     const zone = viewerZone ?? this.zone;
     const from = calStartOfDay(date, zone);
     const to = calStartOfDay(calAddDays(date, 1), zone);
     const owner = this.isOwner(actor);
+
     const twoDays = this.listOccurrences({
       actor,
       from,
@@ -141,12 +143,15 @@ export abstract class CalendarViews extends CalendarInterop {
       viewerZone: zone,
       visibleOnly: true,
     });
+
     // Same overlap rule as occurrence expansion (a zero-length occurrence still occupies its instant).
     const occurrences = twoDays.filter(
       (o) => o.startMs < to && Math.max(o.endMs, o.startMs + 1) > from,
     );
+
     const prefs = owner ? this.preferences() : { ...CALENDAR_DEFAULT_PREFERENCES, timeZone: zone };
     const nightHoursBusy = calNightHoursBusy(occurrences, date, zone, prefs.waking);
+
     return {
       date: calFormatDate(date),
       zone,
@@ -162,16 +167,13 @@ export abstract class CalendarViews extends CalendarInterop {
   }
 
   /** Month grid (C01 month/date picker): counts per day plus the first weekday preference. */
-  month(
-    actor: string,
-    year: number,
-    month: number,
-    viewerZone?: string,
-  ): { year: number; month: number; firstWeekday: number; counts: Record<string, number> } {
+  month(actor: string, year: number, month: number, viewerZone?: string): CalendarMonthView {
     const zone = viewerZone ?? this.zone;
     const first = { year, month, day: 1 };
+
     const next =
       month === 12 ? { year: year + 1, month: 1, day: 1 } : { year, month: month + 1, day: 1 };
+
     const occurrences = this.listOccurrences({
       actor,
       from: calStartOfDay(first, zone),
@@ -179,7 +181,9 @@ export abstract class CalendarViews extends CalendarInterop {
       viewerZone: zone,
       visibleOnly: true,
     });
+
     const prefix = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-`;
+
     return {
       year,
       month,
@@ -195,15 +199,11 @@ export abstract class CalendarViews extends CalendarInterop {
   }
 
   /** Home-screen widget (C10): the owner's next events, running timer and open week tasks. */
-  widgetSnapshot(viewerZone?: string): {
-    upcoming: Array<CalendarOccurrenceView>;
-    activeTimer: CalendarTimeEntry | undefined;
-    weekTasks: Array<CalendarWeekTask>;
-    today: string;
-  } {
+  widgetSnapshot(viewerZone?: string): CalendarWidgetSnapshot {
     const zone = viewerZone ?? this.zone;
     const now = this.clock.now();
     const today = calDateInZone(now, zone);
+
     return {
       upcoming: this.listOccurrences({
         actor: this.config.ownerId,
@@ -229,18 +229,48 @@ export abstract class CalendarViews extends CalendarInterop {
    */
   changes(actor: string, cursor: number, limit = 500): ReturnType<Kernel["changesSince"]> {
     const page = this.kernel.changesSince(cursor, limit);
+
     if (this.isOwner(actor)) return page;
     const readable = new Set(this.listCalendars(actor).map((c) => c.id));
+
     return {
       ...page,
       changes: page.changes.filter((c) => {
         const calendarId = (c.payload as { calendarId?: unknown } | null)?.calendarId;
+
         return (
           CALENDAR_SCOPED.has(c.resource) &&
-          typeof calendarId === "string" &&
+          Predicate.isString(calendarId) &&
           readable.has(calendarId)
         );
       }),
     };
   }
+}
+
+/** One day for a viewer: occurrences plus the waking-hours context. */
+export interface CalendarDayView {
+  date: string;
+  zone: string;
+  occurrences: Array<CalendarOccurrenceView>;
+  nightHoursBusy: boolean;
+  nightHoursCollapsed: boolean;
+  waking: { startMinute: number; endMinute: number };
+  context: CalendarDayContext | undefined;
+}
+
+/** Per-day occurrence counts of one month. */
+export interface CalendarMonthView {
+  year: number;
+  month: number;
+  firstWeekday: number;
+  counts: Record<string, number>;
+}
+
+/** What the home-screen widget shows. */
+export interface CalendarWidgetSnapshot {
+  upcoming: Array<CalendarOccurrenceView>;
+  activeTimer: CalendarTimeEntry | undefined;
+  weekTasks: Array<CalendarWeekTask>;
+  today: string;
 }

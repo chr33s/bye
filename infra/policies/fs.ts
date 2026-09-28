@@ -35,26 +35,33 @@ export const sourceFiles = (
 ): Array<string> => {
   const skipped = new Set([...SKIPPED_DIRS, ...skip]);
   const out: Array<string> = [];
+
   const walk = (dir: string): void => {
     let entries: Array<string>;
+
     try {
       entries = readdirSync(dir);
     } catch {
       return;
     }
+
     for (const entry of entries) {
       if (skipped.has(entry) || entry.startsWith(".")) continue;
       const full = join(dir, entry);
       let isDir: boolean;
+
       try {
         isDir = statSync(full).isDirectory();
       } catch {
         continue;
       }
+
       if (isDir) walk(full);
       else if (ext.test(entry)) out.push(full);
     }
   };
+
   for (const dir of dirs) walk(join(root, dir));
+
   return out.sort();
 };

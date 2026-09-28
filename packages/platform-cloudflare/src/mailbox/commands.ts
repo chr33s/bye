@@ -1,3 +1,6 @@
+import { Option, Predicate, Schema } from "effect";
+import type { JsonValue } from "../durable/kernel.ts";
+import { reject } from "./context.ts";
 import type { MailboxCommand, MailboxCommandTag } from "@bye/contracts";
 import type { MailboxStore } from "./store.ts";
 import type { MailboxDraftContent } from "./types.ts";
@@ -6,6 +9,7 @@ type WireContent = Extract<MailboxCommand, { _tag: "CreateDraft" }>["content"];
 
 const toDraftContent = (c: WireContent): MailboxDraftContent => {
   const addr = (list: WireContent["to"]) => list.map((a) => ({ name: a.name, address: a.address }));
+
   return { ...c, to: addr(c.to), cc: addr(c.cc), bcc: addr(c.bcc) };
 };
 
@@ -17,16 +21,21 @@ type CommandOf<K extends MailboxCommandTag> = Extract<MailboxCommand, { _tag: K 
  * response shape changed still replay correctly.
  */
 interface Handler<C> {
-  readonly run: (store: MailboxStore, c: C) => unknown;
-  readonly present?: (result: never) => unknown;
+  readonly run: (store: MailboxStore, c: C) => CommandResult;
+  readonly present?: (result: never) => CommandResult;
 }
 
-const handler = <C, R>(
-  run: (store: MailboxStore, c: C) => R,
-  present?: (result: R) => unknown,
-): Handler<C> => ({ run, ...(present ? { present } : {}) });
+/** What a command replays and returns: a JSON value, nothing, or a draft-save outcome carrying the stored draft. */
+type CommandResult = JsonValue | void | ReturnType<MailboxStore["drafts"]["saveDraft"]>;
 
-const HANDLERS: { readonly [K in MailboxCommandTag]: Handler<CommandOf<K>> } = {
+const handler = <C, R extends CommandResult>(
+  run: (store: MailboxStore, c: C) => R,
+  present?: (result: R) => CommandResult,
+): Handler<C> => (present ? { run, present } : { run });
+
+const decodePreferenceValue = Schema.decodeUnknownOption(Schema.Json);
+
+const HANDLERS = {
   Screen: handler((s, c) => s.screener.screen(c.decisions)),
   ClearScreener: handler((s, c) => s.screener.clearScreener(c.boundary)),
   SetPolicy: handler((s, c) => s.screener.setPolicy(c.kind, c.subject, c.policy)),
@@ -97,7 +106,13 @@ const HANDLERS: { readonly [K in MailboxCommandTag]: Handler<CommandOf<K>> } = {
   ),
   DeleteContact: handler((s, c) => s.organize.deleteContact(c.contactId)),
   ImportContacts: handler((s, c) => s.organize.importContacts(c.contacts)),
-  SetPreference: handler((s, c) => s.automation.setPreference(c.key, c.value)),
+  SetPreference: handler((s, c) => {
+    const value = decodePreferenceValue(c.value);
+
+    if (Option.isNone(value)) return reject("bad_request", `invalid value for ${c.key}`);
+
+    return s.automation.setPreference(c.key, value.value);
+  }),
   SetNotifyOptIn: handler((s, c) => s.automation.setNotifyOptIn(c.kind, c.subject, c.on)),
   SetNotificationSettings: handler((s, c) =>
     s.automation.setNotificationSettings({ quietHours: c.quietHours, devices: c.devices }),
@@ -125,12 +140,11 @@ const HANDLERS: { readonly [K in MailboxCommandTag]: Handler<CommandOf<K>> } = {
   VerifyIdentity: handler((s, c) => s.identities.verifyIdentity(c.identityId, c.token)),
   ResendIdentityChallenge: handler((s, c) => s.identities.resendIdentityChallenge(c.identityId)),
   ClearRecentSearches: handler((s) => s.automation.clearRecentSearches()),
-  CreateDraft: handler((s, c) =>
-    s.drafts.createDraft({
-      ...(c.threadId ? { threadId: c.threadId } : {}),
-      content: toDraftContent(c.content),
-    }),
-  ),
+  CreateDraft: handler((s, c) => {
+    const content = toDraftContent(c.content);
+
+    return s.drafts.createDraft(c.threadId ? { threadId: c.threadId, content } : { content });
+  }),
   CreateReplyDraft: handler(
     (s, c) =>
       s.drafts.createReplyDraft(c.threadId, c.mode, s.views.getThread(c.threadId).deliveries),
@@ -142,15 +156,20 @@ const HANDLERS: { readonly [K in MailboxCommandTag]: Handler<CommandOf<K>> } = {
   DeleteDraft: handler((s, c) => s.drafts.deleteDraft(c.draftId)),
   // Publish-by-mail needs the "publish" scope, stamped on the command by the application layer
   // after decoding (never client-supplied); absent means not allowed.
-  Send: handler((s, c) =>
-    s.sends.send(c.draftId, {
+  Send: handler((s, c) => {
+    let options: Parameters<typeof s.sends.send>[1] = {
       expectedRevision: c.expectedRevision,
       publishAllowed: (c as { readonly publishAllowed?: unknown }).publishAllowed === true,
-      ...(c.sendAt !== undefined ? { sendAt: c.sendAt } : {}),
-      ...(c.afterSend ? { afterSend: c.afterSend } : {}),
-      ...(c.individually !== undefined ? { individually: c.individually } : {}),
-    }),
-  ),
+    };
+
+    if (c.sendAt !== undefined) options = { ...options, sendAt: c.sendAt };
+
+    if (c.afterSend) options = { ...options, afterSend: c.afterSend };
+
+    if (c.individually !== undefined) options = { ...options, individually: c.individually };
+
+    return s.sends.send(c.draftId, options);
+  }),
   CancelSend: handler((s, c) => s.sends.cancelSend(c.sendJobId)),
   ResolveUnknownSend: handler((s, c) => s.sends.resolveUnknown(c.sendJobId, c.decision)),
   ReserveUpload: handler((s, c) => s.uploads.reserveUpload(c)),
@@ -167,7 +186,7 @@ const HANDLERS: { readonly [K in MailboxCommandTag]: Handler<CommandOf<K>> } = {
       summary: s.ingest.deliverySummary(c.deliveryId),
     }),
   ),
-};
+} satisfies { readonly [K in MailboxCommandTag]: Handler<CommandOf<K>> };
 
 /** Receipt kinds that predate the command tags; stored receipts keep replaying under them. */
 const LEGACY_KINDS: Partial<Readonly<Record<MailboxCommandTag, string>>> = {
@@ -179,7 +198,7 @@ const LEGACY_KINDS: Partial<Readonly<Record<MailboxCommandTag, string>>> = {
 
 /** The receipt kind a command is recorded under. */
 export const kindFor = (c: MailboxCommand): string =>
-  c._tag === "SetAttention" ? `Attention:${c.flag}` : (LEGACY_KINDS[c._tag] ?? c._tag);
+  Predicate.isTagged(c, "SetAttention") ? `Attention:${c.flag}` : (LEGACY_KINDS[c._tag] ?? c._tag);
 
 /**
  * Apply one decoded wire command to the mailbox authority. This is the MailboxDO RPC entry; the
@@ -187,9 +206,10 @@ export const kindFor = (c: MailboxCommand): string =>
  * command runs exactly once per command ID, in one transaction with its receipt; reusing an ID
  * for a different command is a `conflict`.
  */
-export const applyMailboxCommand = (store: MailboxStore, c: MailboxCommand): unknown => {
+export const applyMailboxCommand = (store: MailboxStore, c: MailboxCommand): CommandResult => {
   // The map is keyed by tag, so this handler accepts exactly this command (TS can't correlate them).
   const h = HANDLERS[c._tag] as Handler<MailboxCommand>;
-  const result = store.ctx.cmd(c.commandId, kindFor(c), () => h.run(store, c), c);
+  const result = store.ctx.cmd(c.commandId, kindFor(c), () => h.run(store, c), c as JsonValue);
+
   return h.present ? h.present(result as never) : result;
 };

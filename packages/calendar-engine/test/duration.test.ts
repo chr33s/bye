@@ -12,6 +12,7 @@ const ny = (s: string) => {
   const [d, t] = s.split("T");
   const [year, month, day] = d!.split("-").map(Number);
   const [hour, minute, second] = t!.split(":").map(Number);
+
   return calTimed(
     { year: year!, month: month!, day: day!, hour: hour!, minute: minute!, second: second! },
     "America/New_York",
@@ -37,6 +38,7 @@ describe("nominal DURATION across DST", () => {
         "DTSTART;TZID=America/New_York:20261031T120000\r\nDURATION:P1D\r\nRRULE:FREQ=DAILY;COUNT=4",
       ),
     ).events;
+
     const occ = calExpandSeries(e!.series, [], window);
     expect(occ.map((o) => o.end)).toEqual([
       ny("2026-11-01T12:00:00"),
@@ -52,6 +54,7 @@ describe("nominal DURATION across DST", () => {
         "DTSTART;TZID=America/New_York:20261031T120000\r\nDTEND;TZID=America/New_York:20261101T120000\r\nRRULE:FREQ=DAILY;COUNT=3",
       ),
     ).events;
+
     expect(e!.series.duration).toBeUndefined();
     const occ = calExpandSeries(e!.series, [], window);
     expect(occ[1]!.end).toEqual(ny("2026-11-02T13:00:00"));
@@ -63,12 +66,14 @@ describe("nominal DURATION across DST", () => {
         "DTSTART;TZID=America/New_York:20261031T120000\r\nDURATION:P1D\r\nRRULE:FREQ=DAILY;COUNT=4",
       ),
     ).events;
+
     const split = calSplitSeries(
       e!.series,
       [],
       { key: "20261102T120000", start: ny("2026-11-02T12:00:00") },
       "dur2",
     );
+
     expect(split.tail.duration).toEqual({ kind: "nominal", days: 1, ms: 0 });
     expect(split.tail.dtend).toEqual(ny("2026-11-03T12:00:00"));
     const moved = calApplySeriesChanges(e!.series, { start: ny("2026-11-01T12:00:00") });

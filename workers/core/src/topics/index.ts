@@ -31,19 +31,31 @@ export const dispatchPropagate = async (
   attempt = 1,
 ): Promise<void> => {
   const decoded = decodePropagatePayload(message);
+
   if (!decoded.ok) {
     const known = Object.hasOwn(HANDLERS, decoded.topic);
     console.warn(
-      JSON.stringify({
-        level: "warn",
-        op: known ? "propagate.invalid-payload" : "propagate.unknown-topic",
-        topic: decoded.topic,
-        eventId: message.eventId,
-        ...(known ? { reason: decoded.reason } : {}),
-      }),
+      JSON.stringify(
+        known
+          ? {
+              level: "warn",
+              op: "propagate.invalid-payload",
+              topic: decoded.topic,
+              eventId: message.eventId,
+              reason: decoded.reason,
+            }
+          : {
+              level: "warn",
+              op: "propagate.unknown-topic",
+              topic: decoded.topic,
+              eventId: message.eventId,
+            },
+      ),
     );
+
     return;
   }
+
   const handler = HANDLERS[decoded.payload.topic] as TopicHandler;
   await handler({
     env,

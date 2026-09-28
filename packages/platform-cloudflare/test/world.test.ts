@@ -17,6 +17,7 @@ const setup = () => {
     title: "Alice <writes> & more",
     addresses: ["alice@bye.test"],
   });
+
   return { clock, world };
 };
 
@@ -48,6 +49,7 @@ describe("World publishing", () => {
   it("[P01] publish copies media into the public namespace, edits need republish, unpublish purges", () => {
     const { world } = setup();
     const plan = world.publishFromMail(op());
+
     if (!("copies" in plan)) throw new Error("expected publish plan");
     expect(plan.copies).toEqual([
       { from: "t/mbx_a/part/msg_1/2", to: "site/alice/media/hello-world-r1-photo.jpg" },
@@ -124,6 +126,7 @@ describe("World subscriptions", () => {
       title: "A",
       addresses: ["alice@bye.test"],
     });
+
     for (const a of ["old@example.test", "new@example.test", "gone@example.test"])
       await before.confirm((await before.subscribe(a)).confirmToken!);
     const oldToken = await before.unsubscribeToken("old@example.test");
@@ -147,10 +150,12 @@ describe("World subscriptions", () => {
     const gone = await world.subscribe("gone@example.test");
     await world.confirm(gone.confirmToken!);
     await world.unsubscribe("gone@example.test", await world.unsubscribeToken("gone@example.test"));
+
     const { invitations, skipped } = await world.importCsv(
       "usr_alice",
       "email,name\nnew@example.test,New\nNEW@example.test,Dup\nbad-address\ngone@example.test\n",
     );
+
     expect(invitations.map((i) => i.address)).toEqual(["new@example.test"]);
     expect(skipped).toEqual(["NEW@example.test", "bad-address", "gone@example.test"]);
     expect(world.subscriberStatus("new@example.test")).toBe("pending");
@@ -162,6 +167,7 @@ describe("World subscriptions", () => {
     const { world, clock } = setup();
     const first = await world.subscribe("victim@example.test");
     expect(first.confirmToken).toBeDefined();
+
     for (let i = 0; i < 5; i++)
       expect((await world.subscribe("victim@example.test")).confirmToken).toBeUndefined();
     // The first link is still the valid one.
@@ -192,7 +198,9 @@ describe("World subscriptions", () => {
     const { confirmToken } = await world.subscribe(a);
     expect(await world.confirm(confirmToken!)).toBe(true);
   };
+
   const cfg = { provider: "resend", account: "acct", configVersion: "v1#qual" };
+
   const approve = (world: WorldStore, postId: string) =>
     world.newsletter.approve({
       ...cfg,
@@ -206,6 +214,7 @@ describe("World subscriptions", () => {
 
   it("[P02] a publication snapshots the eligible audience once; later subscriptions never expand it", async () => {
     const { world } = setup();
+
     for (const a of ["a@example.test", "b@example.test", "c@example.test"])
       await subscribe(world, a);
     const plan = world.publishFromMail(op());
@@ -223,6 +232,7 @@ describe("World subscriptions", () => {
       ["a@example.test", true],
       ["c@example.test", true],
     ]);
+
     // The late subscriber is not part of this publication's freshness.
     for (const d of due)
       world.newsletter.settleSync(d.address, d.revision, {
@@ -381,6 +391,7 @@ describe("World subscriptions", () => {
 
   it("[P01] the author lists drafts and published posts; public media keys live under the site path", () => {
     const { world } = setup();
+
     const plan = world.publishFromMail({
       ...op(),
       media: [
@@ -391,15 +402,18 @@ describe("World subscriptions", () => {
         },
       ],
     });
+
     expect("copies" in plan && plan.copies[0]?.to).toMatch(
       /^site\/alice\/media\/[a-z0-9-]+-r1-cover-photo\.png$/,
     );
+
     const draft = world.createDraft("usr_alice", {
       title: "Later",
       html: "<p>x</p>",
       text: "x",
       media: [],
     });
+
     expect(world.listPosts("usr_alice").map((p) => [p.id, p.status])).toEqual([
       [draft.postId, "draft"],
       [plan.postId, "published"],
@@ -407,9 +421,10 @@ describe("World subscriptions", () => {
     expect(() => world.listPosts("usr_bob")).toThrow("author");
   });
 
-  const rejectionCode = (f: () => unknown) => {
+  const rejectionCode = (f: () => void) => {
     try {
       f();
+
       return "ok";
     } catch (e) {
       return e instanceof Rejection ? e.code : String(e);
@@ -507,10 +522,12 @@ describe("World subscriptions", () => {
     await subscribe(world, "a@example.test");
     const p = approve(world, world.publishFromMail(op()).postId);
     await subscribe(world, "late@example.test");
+
     const syncAll = () => {
       for (const d of L.dueSync(50))
         L.settleSync(d.address, d.revision, { _tag: "Accepted", providerRef: d.address });
     };
+
     // While the publication is open the late addition is held back, so there is no drift.
     syncAll();
     expect(L.audienceDrift(p.id)).toEqual([]);
@@ -528,6 +545,7 @@ describe("World subscriptions", () => {
     L.mapAudience(mapping);
     L.mapAudience({ ...mapping, configVersion: "v2", scopeId: "topic_1" }); // same audience: update
     expect(L.audience()).toEqual({ ...mapping, configVersion: "v2", scopeId: "topic_1" });
+
     for (const other of [
       { ...mapping, audienceId: "aud_2" },
       { ...mapping, account: "acct_2" },

@@ -138,6 +138,7 @@ export class SharedSpaceStore {
     this.sql.tx(() => {
       if (this.meta("space_id")) return;
       const now = this.clock.now();
+
       for (const [k, v] of Object.entries({
         space_id: input.spaceId,
         kind: input.kind,
@@ -146,6 +147,7 @@ export class SharedSpaceStore {
       })) {
         this.sql.run("INSERT INTO space_meta (key, value) VALUES (?, ?)", k, v);
       }
+
       this.sql.run(
         "INSERT INTO space_members (user_id, role, status, added_at, updated_at) VALUES (?, 'owner', 'active', ?, ?)",
         input.ownerId,
@@ -167,6 +169,7 @@ export class SharedSpaceStore {
   /** Change feed for members (§8): expired cursors report `expired` and clients refresh. */
   changes(actorId: string, cursor: number, limit = 500): ReturnType<Kernel["changesSince"]> {
     if (!this.isMember(actorId)) fail("forbidden", "not a space member");
+
     return this.kernel.changesSince(cursor, Math.min(Math.max(limit, 1), 500));
   }
 
@@ -184,12 +187,14 @@ export class SharedSpaceStore {
       "SELECT role FROM space_members WHERE user_id = ? AND status = 'active'",
       userId,
     );
+
     if (r?.role !== "owner") fail("forbidden", "space owner required");
   }
 
   private bumpMembership(): number {
     const next = this.membershipVersion() + 1;
     this.sql.run("UPDATE space_meta SET value = ? WHERE key = 'membership_version'", String(next));
+
     return next;
   }
 
@@ -197,21 +202,25 @@ export class SharedSpaceStore {
     return this.sql.tx(() => {
       this.requireOwner(actorId);
       const now = this.clock.now();
+
       // Removing OR demoting the last owner would leave nobody able to manage the space.
       const otherOwners =
         this.sql.one<{ n: number }>(
           "SELECT COUNT(*) AS n FROM space_members WHERE role = 'owner' AND status = 'active' AND user_id != ?",
           userId,
         )?.n ?? 0;
+
       const target = this.sql.one<{ role: string }>(
         "SELECT role FROM space_members WHERE user_id = ? AND status = 'active'",
         userId,
       );
+
       if (target?.role === "owner" && role !== "owner" && otherOwners === 0)
         fail(
           "conflict",
           role === null ? "cannot remove the last owner" : "cannot demote the last owner",
         );
+
       if (role === null) {
         this.sql.run(
           "UPDATE space_members SET status = 'removed', updated_at = ? WHERE user_id = ?",
@@ -242,6 +251,7 @@ export class SharedSpaceStore {
         );
         this.kernel.change("member", "added", { userId, role });
       }
+
       return this.bumpMembership();
     });
   }
@@ -253,26 +263,31 @@ export class SharedSpaceStore {
   eraseMember(userId: string): { readonly removed: boolean; readonly grantsRevoked: number } {
     return this.sql.tx(() => {
       const now = this.clock.now();
+
       const removed =
         this.sql.run(
           "UPDATE space_members SET status = 'removed', updated_at = ? WHERE user_id = ? AND status = 'active'",
           now,
           userId,
         ) > 0;
+
       const grantsRevoked = this.sql.run(
         "UPDATE grants SET revoked_at = ? WHERE grantee = ? AND revoked_at IS NULL",
         now,
         userId,
       );
+
       this.sql.run(
         "UPDATE public_links SET revoked_at = ? WHERE created_by = ? AND revoked_at IS NULL",
         now,
         userId,
       );
+
       if (removed || grantsRevoked > 0) {
         this.kernel.change("member", "erased", { userId });
         this.bumpMembership();
       }
+
       return { removed, grantsRevoked };
     });
   }
@@ -284,6 +299,7 @@ export class SharedSpaceStore {
     readonly addedAt: number;
   }> {
     if (!this.isMember(actorId)) fail("forbidden", "not a space member");
+
     return this.sql
       .all<{ user_id: string; role: "owner" | "member"; added_at: number }>(
         "SELECT user_id, role, added_at FROM space_members WHERE status = 'active' ORDER BY added_at, user_id",
@@ -339,8 +355,11 @@ export class SharedSpaceStore {
     readonly createdAt: number;
   }> {
     const owner = this.resourceOwner(kind, resourceId);
+
     if (owner === undefined) return fail("not_found", kind);
+
     if (owner !== actorId) this.requireOwner(actorId);
+
     return this.sql
       .all<{ id: string; grantee: string; created_by: string; created_at: number }>(
         "SELECT id, grantee, created_by, created_at FROM grants WHERE resource_kind = ? AND resource_id = ? AND revoked_at IS NULL ORDER BY created_at, id",
@@ -366,6 +385,7 @@ export class SharedSpaceStore {
     readonly expiresAt: number | null;
   }> {
     if (!this.canReadThread(actorId, threadId)) fail("forbidden", "no current grant");
+
     return this.sql
       .all<{ id: string; include_future: number; created_at: number; expires_at: number | null }>(
         "SELECT id, include_future, created_at, expires_at FROM public_links WHERE thread_id = ? AND revoked_at IS NULL ORDER BY created_at",
@@ -410,11 +430,13 @@ export class SharedSpaceStore {
       createdBy,
       this.clock.now(),
     );
+
     return id;
   }
 
   private hasGrant(kind: ResourceKind, id: string, userId: string): boolean {
     const member = this.isMember(userId);
+
     return (
       this.sql.one(
         "SELECT 1 AS g FROM grants WHERE resource_kind = ? AND resource_id = ? AND revoked_at IS NULL AND (grantee = ? OR (grantee = ? AND ?))",
@@ -439,11 +461,14 @@ export class SharedSpaceStore {
   ): string {
     return this.sql.tx(() => {
       const owns = this.resourceOwner(kind, resourceId);
+
       if (owns === undefined) fail("not_found", kind);
+
       if (owns !== actorId && !this.hasGrant(kind, resourceId, actorId))
         fail("forbidden", "cannot share what you cannot read");
       const id = this.insertGrant(kind, resourceId, grantee, actorId);
       this.kernel.change(kind, "granted", { resourceId, grantee });
+
       return id;
     });
   }
@@ -460,8 +485,10 @@ export class SharedSpaceStore {
         "SELECT resource_kind, resource_id, grantee, created_by FROM grants WHERE id = ? AND revoked_at IS NULL",
         grantId,
       );
+
       if (!g) return fail("not_found", "grant");
       const owner = this.resourceOwner(g.resource_kind, g.resource_id);
+
       if (actorId !== g.created_by && actorId !== owner) this.requireOwner(actorId);
       this.sql.run("UPDATE grants SET revoked_at = ? WHERE id = ?", this.clock.now(), grantId);
       this.kernel.change(g.resource_kind, "revoked", {
@@ -488,6 +515,7 @@ export class SharedSpaceStore {
         m.sentAt,
         this.clock.now(),
       ) > 0;
+
     // The space now references the source mailbox's stored message (original, body, parts): pin it,
     // in the same transaction via the outbox, so the owner's retention/trash can't garbage-collect
     // content space members and public links still read (§12).
@@ -500,6 +528,7 @@ export class SharedSpaceStore {
         holderId: spaceId,
       });
     }
+
     return inserted;
   }
 
@@ -518,12 +547,15 @@ export class SharedSpaceStore {
   }): string {
     return this.sql.tx(() => {
       if (!this.isMember(input.actorId)) fail("forbidden", "not a space member");
+
       const existing = this.sql.one<{ id: string }>(
         "SELECT id FROM shared_threads WHERE source_mailbox_id = ? AND source_thread_id = ?",
         input.sourceMailboxId,
         input.sourceThreadId,
       );
+
       const id = existing?.id ?? this.clock.id("sth");
+
       if (!existing) {
         this.sql.run(
           "INSERT INTO shared_threads (id, source_mailbox_id, source_thread_id, subject, created_by, created_at, include_future) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -537,7 +569,9 @@ export class SharedSpaceStore {
         );
         this.insertGrant("thread", id, input.actorId, input.actorId);
       }
+
       for (const m of input.messages) this.insertMessage(id, m);
+
       for (const g of input.grantees) {
         if (
           this.sql.one(
@@ -549,7 +583,9 @@ export class SharedSpaceStore {
           continue;
         this.insertGrant("thread", id, g, input.actorId);
       }
+
       this.kernel.change("thread", "shared", { threadId: id });
+
       return id;
     });
   }
@@ -574,18 +610,23 @@ export class SharedSpaceStore {
             sourceMailboxId,
             sourceThreadId,
           );
+
           if (!t || !bool(t.include_future)) return false;
+
           if (!this.insertMessage(t.id, message)) return false;
           this.kernel.change("thread", "reply", { threadId: t.id, messageRef: message.messageRef });
+
           for (const g of this.sql.all<{ grantee: string }>(
             "SELECT DISTINCT grantee FROM grants WHERE resource_kind = 'thread' AND resource_id = ? AND revoked_at IS NULL",
             t.id,
           )) {
             this.kernel.outbox("notify", g.grantee, { kind: "shared-reply", threadId: t.id });
           }
+
           return true;
         },
       );
+
       return { accepted: result, replayed };
     });
   }
@@ -595,8 +636,11 @@ export class SharedSpaceStore {
       "SELECT id, subject, include_future FROM shared_threads WHERE id = ?",
       threadId,
     );
+
     if (!t) return fail("not_found", "thread");
+
     if (!this.canReadThread(userId, threadId)) fail("forbidden", "no current grant");
+
     return {
       id: t.id,
       subject: t.subject,
@@ -673,6 +717,7 @@ export class SharedSpaceStore {
   addComment(userId: string, threadId: string, body: string): string {
     return this.sql.tx(() => {
       if (!this.canReadThread(userId, threadId)) fail("forbidden", "no current grant");
+
       if (body.trim().length === 0 || body.length > 20_000) fail("bad_request", "invalid comment");
       const id = this.clock.id("cmt");
       this.sql.run(
@@ -684,12 +729,14 @@ export class SharedSpaceStore {
         this.clock.now(),
       );
       this.kernel.change("comment", "added", { threadId, id });
+
       return id;
     });
   }
 
   comments(userId: string, threadId: string): ReadonlyArray<CommentView> {
     if (!this.canReadThread(userId, threadId)) fail("forbidden", "no current grant");
+
     return this.sql
       .all<{ id: string; author_id: string; body: string; created_at: number }>(
         "SELECT id, author_id, body, created_at FROM comments WHERE thread_id = ? AND deleted_at IS NULL ORDER BY created_at, id",
@@ -717,7 +764,9 @@ export class SharedSpaceStore {
         this.clock.now(),
       );
       this.insertGrant("collection", id, ownerId, ownerId);
+
       if (shareWithMembers) this.insertGrant("collection", id, ALL_MEMBERS, ownerId);
+
       return id;
     });
   }
@@ -726,6 +775,7 @@ export class SharedSpaceStore {
     this.sql.tx(() => {
       if (!this.hasGrant("collection", collectionId, userId))
         fail("forbidden", "no collection grant");
+
       if (!this.canReadThread(userId, threadId))
         fail("forbidden", "cannot add a thread you cannot read");
       this.sql.run(
@@ -749,12 +799,14 @@ export class SharedSpaceStore {
   ): ReadonlyArray<SharedMessageView & { readonly threadId: string }> {
     if (!this.hasGrant("collection", collectionId, userId))
       fail("forbidden", "no collection grant");
+
     const threads = this.sql
       .all<{ thread_id: string }>(
         "SELECT thread_id FROM collection_items WHERE collection_id = ?",
         collectionId,
       )
       .map((r) => r.thread_id);
+
     return threads
       .filter((t) => this.canReadThread(userId, t))
       .flatMap((t) => this.messages(t).map((m) => ({ ...m, threadId: t })))
@@ -794,6 +846,7 @@ export class SharedSpaceStore {
       "SELECT send_as FROM extension WHERE address = ?",
       address.toLowerCase(),
     );
+
     return e !== undefined && bool(e.send_as) && this.isMember(userId);
   }
 
@@ -821,12 +874,15 @@ export class SharedSpaceStore {
             "SELECT workflow_board, workflow_stage FROM extension WHERE address = ?",
             input.address.toLowerCase(),
           );
+
           if (!ext) return fail("not_found", "extension");
+
           let t = this.sql.one<{ id: string }>(
             "SELECT id FROM shared_threads WHERE source_mailbox_id = ? AND source_thread_id = ?",
             input.sourceMailboxId,
             input.sourceThreadId,
           );
+
           if (!t) {
             const id = this.clock.id("sth");
             this.sql.run(
@@ -841,8 +897,10 @@ export class SharedSpaceStore {
             this.insertGrant("thread", id, ALL_MEMBERS, `ext:${input.address}`);
             t = { id };
           }
+
           this.insertMessage(t.id, input.message);
           this.kernel.change("thread", "extension-mail", { threadId: t.id });
+
           return {
             threadId: t.id,
             enroll: ext.workflow_board
@@ -863,6 +921,7 @@ export class SharedSpaceStore {
   ): Promise<{ linkId: string; token: string }> {
     const token = randomToken();
     const hash = await sha256Hex(token);
+
     return this.sql.tx(() => {
       if (!this.canReadThread(actorId, threadId))
         fail("forbidden", "cannot publish a thread you cannot read");
@@ -878,6 +937,7 @@ export class SharedSpaceStore {
         options.expiresAt ?? null,
       );
       this.kernel.change("link", "created", { linkId: id, threadId });
+
       return { linkId: id, token };
     });
   }
@@ -885,6 +945,7 @@ export class SharedSpaceStore {
   /** Preview exactly what a public link would expose, before creating it. */
   previewPublicLink(actorId: string, threadId: string): PublicThreadView {
     const t = this.readThread(actorId, threadId);
+
     return { subject: t.subject, messages: t.messages.map(publicMessage) };
   }
 
@@ -896,6 +957,7 @@ export class SharedSpaceStore {
     token: string,
   ): Promise<PublicThreadView & { readonly createdBy: string }> {
     const hash = await sha256Hex(token);
+
     const link = this.sql.one<{
       thread_id: string;
       include_future: number;
@@ -907,24 +969,31 @@ export class SharedSpaceStore {
       "SELECT thread_id, include_future, created_by, created_at, expires_at, revoked_at FROM public_links WHERE token_hash = ?",
       hash,
     );
+
     if (!link) return fail("not_found", "link");
+
     if (
       link.revoked_at !== null ||
       (link.expires_at !== null && link.expires_at <= this.clock.now())
     )
       fail("gone", "link revoked or expired");
+
     // A bearer link is only as good as its creator's current access (covers grant revocation too).
     if (!this.canReadThread(link.created_by, link.thread_id))
       fail("gone", "link creator no longer has access");
+
     const t = this.sql.one<{ subject: string }>(
       "SELECT subject FROM shared_threads WHERE id = ?",
       link.thread_id,
     );
+
     if (!t) return fail("not_found", "thread");
+
     const msgs = this.messages(
       link.thread_id,
       bool(link.include_future) ? undefined : Number(link.created_at),
     );
+
     return { subject: t.subject, messages: msgs.map(publicMessage), createdBy: link.created_by };
   }
 
@@ -934,7 +1003,9 @@ export class SharedSpaceStore {
         "SELECT created_by FROM public_links WHERE id = ? AND revoked_at IS NULL",
         linkId,
       );
+
       if (!l) return fail("not_found", "link");
+
       if (l.created_by !== actorId) this.requireOwner(actorId);
       this.sql.run("UPDATE public_links SET revoked_at = ? WHERE id = ?", this.clock.now(), linkId);
       this.kernel.change("link", "revoked", { linkId });

@@ -1,4 +1,4 @@
-import type { Kernel, KernelClock } from "../durable/kernel.ts";
+import type { JsonValue, Kernel, KernelClock } from "../durable/kernel.ts";
 import { json, type Sql } from "../durable/sql.ts";
 
 /** Codec functions injected into the store; implemented by @bye/mail-codec in production. */
@@ -19,6 +19,7 @@ export const basicMailboxCodec: MailboxCodec = {
 // Mailbox refusals use the platform-wide `Rejection` (durable/rpc.ts). The old names remain as
 // aliases so callers migrate without churn.
 export { reject } from "../durable/rpc.ts";
+
 export type MailboxRejectionCode =
   | "not_found"
   | "conflict"
@@ -49,7 +50,7 @@ export class MailboxContext {
    * Idempotent command: the receipt, mutation, change events and outbox rows commit in one
    * local transaction. A replay returns the stored result (§6).
    */
-  cmd<T>(commandId: string, kind: string, fn: () => T, payload?: unknown): T {
+  cmd<T>(commandId: string, kind: string, fn: () => T, payload?: JsonValue): T {
     return this.sql.tx(() => this.kernel.receipt(commandId, kind, fn, payload)).result;
   }
 
@@ -61,7 +62,7 @@ export class MailboxContext {
     );
   }
 
-  putSetting(key: string, value: unknown): void {
+  putSetting(key: string, value: JsonValue): void {
     this.sql.run(
       "INSERT INTO mailbox_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
       key,
@@ -69,7 +70,7 @@ export class MailboxContext {
     );
   }
 
-  change(resource: string, kind: string, payload: unknown): number {
+  change(resource: string, kind: string, payload: JsonValue): number {
     return this.kernel.change(resource, kind, payload);
   }
 
@@ -109,7 +110,9 @@ export class MailboxContext {
     const buf = new Uint8Array(bytes);
     crypto.getRandomValues(buf);
     let out = "";
+
     for (const b of buf) out += b.toString(16).padStart(2, "0");
+
     return out;
   }
 }

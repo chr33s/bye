@@ -33,21 +33,27 @@ const matchPattern = (
 ): Record<string, string> | null => {
   const params: Record<string, string> = {};
   const segments = pattern.split("/");
+
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]!;
     const part = parts[i];
+
     if (seg.startsWith(":")) {
       const optional = seg.endsWith("?");
       const key = seg.slice(1, optional ? -1 : undefined);
+
       if (part === undefined) {
         if (optional) continue;
+
         return null;
       }
+
       params[key] = part;
     } else if (part !== seg) {
       return null;
     }
   }
+
   return params;
 };
 
@@ -61,14 +67,25 @@ export const matchHash = <const T extends RouteTable, const F extends T[number][
   const path = q < 0 ? raw : raw.slice(0, q);
   const query = new URLSearchParams(q < 0 ? "" : raw.slice(q + 1));
   const parts = path.split("/").filter(Boolean).map(dec);
+
   for (const [pattern, name] of table) {
     const params = matchPattern(pattern, parts);
+
     if (params) return { name, params, query, path };
   }
+
   return { name: fallback, params: {}, query, path };
 };
 
 // ---- native navigation ----
+
+interface ComposeRouteBuilder {
+  screen: "compose";
+  to?: string;
+  subject?: string;
+  text?: string;
+  threadId?: string;
+}
 
 export type NativeRoute =
   | { readonly screen: "mail"; readonly view: MailView }
@@ -103,6 +120,7 @@ export const NATIVE_ROUTES = [
 
 export const parseRoute = (hash: string): NativeRoute => {
   const { name, params, query } = matchHash(NATIVE_ROUTES, hash, "mail");
+
   switch (name) {
     case "mail":
       return isMailView(params.view) ? { screen: "mail", view: params.view } : DEFAULT_ROUTE;
@@ -113,24 +131,37 @@ export const parseRoute = (hash: string): NativeRoute => {
       const text = [query.get("text") ?? query.get("body"), query.get("url")]
         .filter(Boolean)
         .join("\n\n");
+
       const opt = (k: string) => query.get(k) ?? undefined;
-      return {
-        screen: "compose",
-        ...(opt("to") ? { to: opt("to") } : {}),
-        ...(opt("subject") ? { subject: opt("subject") } : {}),
-        ...(text ? { text } : {}),
-        ...(opt("thread") ? { threadId: opt("thread") } : {}),
-      };
+
+      const route: ComposeRouteBuilder = { screen: "compose" };
+
+      const to = opt("to");
+      const subject = opt("subject");
+      const thread = opt("thread");
+
+      if (to) route.to = to;
+
+      if (subject) route.subject = subject;
+
+      if (text) route.text = text;
+
+      if (thread) route.threadId = thread;
+
+      return route;
     }
+
     case "planning":
       return { screen: "planning" };
     case "event": {
       const date = query.get("date") ?? "";
+
       return {
         screen: "event",
         date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : ymd(toLocalDate(new Date())),
       };
     }
+
     case "calendar":
       return { screen: "calendar" };
     case "settings":

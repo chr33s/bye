@@ -1,6 +1,7 @@
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Predicate } from "effect";
 import { Log, LogLevel, Miniflare } from "miniflare";
 import { build } from "rolldown";
 import { ControlDirectory } from "@bye/platform-cloudflare";
@@ -21,12 +22,22 @@ import { COMPATIBILITY } from "../resources/workers.ts";
 // Usage: node --experimental-transform-types --no-warnings infra/drills/data-restore.ts
 
 const ROOT = join(import.meta.dirname, "../..");
+
 const APP = "https://app.bye.test";
+
 const OPS_TOKEN = "drill-ops-token-0123456789abcdef0123456789";
+
 const clock = {
   now: () => Date.now(),
   id: (p: string) => `${p}_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
 };
+
+/** Miniflare hands back an untyped RPC stub; name the methods the drill calls on it. */
+type DurableStub = ReturnType<
+  Awaited<ReturnType<Miniflare["getDurableObjectNamespace"]>>["getByName"]
+>;
+
+const stubOf = <T extends object>(stub: DurableStub): T => stub as T;
 
 type RpcResult<A> = { ok: true; value: A } | { ok: false; code: string; message: string };
 
@@ -46,6 +57,7 @@ const bundleCore = async (dir: string): Promise<string> => {
     output: { file, format: "esm" },
     logLevel: "silent",
   });
+
   return file;
 };
 
@@ -103,12 +115,15 @@ const start = async (
       },
     ],
   });
+
   await mf.ready;
+
   return mf;
 };
 
 const migrate = async (mf: Miniflare): Promise<void> => {
   const d1 = await mf.getD1Database("DIRECTORY", "core");
+
   for (const m of readdirSync(join(ROOT, "infra/migrations/d1"))
     .filter((f) => f.endsWith(".sql"))
     .sort()) {
@@ -116,6 +131,7 @@ const migrate = async (mf: Miniflare): Promise<void> => {
       /--[^\n]*\n/g,
       "\n",
     );
+
     await d1.batch(
       sql
         .split(";")
@@ -147,9 +163,11 @@ const summary = (subject: string, from: string, to: string) => ({
 
 // Checkpoint = the authoritative state (D1 + Durable Object SQLite). R2 is intentionally excluded.
 const AUTHORITY_DIRS = ["d1", "do"] as const;
+
 const checkpoint = (persist: string, to: string) => {
   for (const d of AUTHORITY_DIRS) cpSync(join(persist, d), join(to, d), { recursive: true });
 };
+
 const restore = (from: string, persist: string) => {
   for (const d of AUTHORITY_DIRS) {
     rmSync(join(persist, d), { recursive: true, force: true });
@@ -163,20 +181,24 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
   const persist = join(work, "state");
   const backup = join(work, "checkpoint");
   const checks: Array<DrillCheck> = [];
+
   try {
     const script = await bundleCore(code);
     let mf = await start(script, code, persist);
     await migrate(mf);
     const d1 = await mf.getD1Database("DIRECTORY", "core");
     const directory = new ControlDirectory(d1 as never, clock);
+
     const ana = await directory.provisionPersonalAccount({
       address: "ana@bye.test",
       displayName: "Ana",
     });
+
     const bo = await directory.provisionPersonalAccount({
       address: "bo@bye.test",
       displayName: "Bo",
     });
+
     const cy = await directory.provisionPersonalAccount({
       address: "cy@bye.test",
       displayName: "Cy",
@@ -188,16 +210,16 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
       spaces: await mf.getDurableObjectNamespace("SHARED_SPACES", "core"),
       originals: await mf.getR2Bucket("ORIGINALS", "core"),
     });
+
     const deliver = async (mailboxId: string, to: string, subject: string) => {
       const { mail, originals } = await ns();
       const ingestionId = clock.id("ing");
       const messageKey = `t/${mailboxId}/orig/${ingestionId}.eml`;
       await originals.put(messageKey, `Subject: ${subject}\r\n\r\nbody`);
-      const r = (await (
-        mail.getByName(mailboxId) as unknown as {
-          commitDelivery(i: unknown): Promise<RpcResult<unknown>>;
-        }
-      ).commitDelivery({
+
+      const r = (await stubOf<{
+        commitDelivery<I>(i: I): Promise<RpcResult<unknown>>;
+      }>(mail.getByName(mailboxId)).commitDelivery({
         ingestionId,
         recipient: to,
         messageKey,
@@ -206,12 +228,16 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
         safety: { _tag: "Clean" },
         receivedAt: Date.now(),
       })) as RpcResult<unknown>;
+
       if (!r.ok) throw new Error(`seed delivery failed: ${r.code}`);
+
       return messageKey;
     };
+
     const manifest = async (mailboxId: string): Promise<ReadonlyArray<string>> => {
       const { mail } = await ns();
-      const stub = mail.getByName(mailboxId) as unknown as {
+
+      const stub = stubOf<{
         exportManifestPage(
           c: string | null,
           l: number,
@@ -219,9 +245,11 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
           | { deliveries: ReadonlyArray<{ deliveryId: string }>; next: string | null }
           | { items?: ReadonlyArray<{ deliveryId: string }>; nextCursor?: string | null }
         >;
-      };
+      }>(mail.getByName(mailboxId));
+
       const ids: Array<string> = [];
       let cursor: string | null = null;
+
       for (let i = 0; i < 100; i++) {
         const page = (await stub.exportManifestPage(cursor, 50)) as {
           deliveries?: ReadonlyArray<{ deliveryId: string }>;
@@ -229,32 +257,37 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
           next?: string | null;
           nextCursor?: string | null;
         };
+
         ids.push(...(page.deliveries ?? page.items ?? []).map((d) => d.deliveryId));
         cursor = page.next ?? page.nextCursor ?? null;
+
         if (!cursor) break;
       }
+
       return ids.sort();
     };
+
     const calendarEvents = async (): Promise<number> => {
       const { cal } = await ns();
-      const r = (await (
-        cal.getByName(ana.calendarId) as unknown as {
-          read(actor: string, q: unknown): Promise<RpcResult<ReadonlyArray<unknown>>>;
-        }
-      ).read(ana.userId, {
+
+      const r = (await stubOf<{
+        read<Q>(actor: string, q: Q): Promise<RpcResult<ReadonlyArray<unknown>>>;
+      }>(cal.getByName(ana.calendarId)).read(ana.userId, {
         type: "Occurrences",
         from: Date.UTC(2026, 9, 1),
         to: Date.UTC(2026, 9, 8),
       })) as RpcResult<ReadonlyArray<unknown>>;
+
       return r.ok ? r.value.length : -1;
     };
+
     const spaceMember = async (userId: string): Promise<boolean> => {
       const { spaces } = await ns();
-      const r = (await (
-        spaces.getByName("space:spc_drill") as unknown as {
-          isMember(u: string): Promise<RpcResult<boolean>>;
-        }
-      ).isMember(userId)) as RpcResult<boolean>;
+
+      const r = (await stubOf<{
+        isMember(u: string): Promise<RpcResult<boolean>>;
+      }>(spaces.getByName("space:spc_drill")).isMember(userId)) as RpcResult<boolean>;
+
       return r.ok && r.value;
     };
 
@@ -264,29 +297,37 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
     const boKey = await deliver(bo.mailboxId, "bo@bye.test", "Private");
     {
       const { cal, spaces } = await ns();
-      const calStub = cal.getByName(ana.calendarId) as unknown as {
-        provision(c: unknown): Promise<void>;
-        execute(a: string, c: unknown): Promise<RpcResult<unknown>>;
-      };
+
+      const calStub = stubOf<{
+        provision<C>(c: C): Promise<void>;
+        execute<C>(a: string, c: C): Promise<RpcResult<unknown>>;
+      }>(cal.getByName(ana.calendarId));
+
       await calStub.provision({
         ownerId: ana.userId,
         selfAddresses: ["ana@bye.test"],
         defaultZone: "UTC",
       });
+
       const created = (await calStub.execute(ana.userId, {
         type: "CreateCalendar",
         commandId: clock.id("cmd"),
         name: "Work",
         color: "#123456",
       })) as RpcResult<string | { calendarId: string }>;
+
       if (!created.ok) throw new Error(`seed calendar failed: ${created.code}`);
-      const calendarId =
-        typeof created.value === "string" ? created.value : created.value.calendarId;
+
+      const calendarId = Predicate.isString(created.value)
+        ? created.value
+        : created.value.calendarId;
+
       const at = (h: number) => ({
         kind: "timed",
         tzid: "UTC",
         local: { year: 2026, month: 10, day: 2, hour: h, minute: 0, second: 0 },
       });
+
       const ev = (await calStub.execute(ana.userId, {
         type: "CreateEvent",
         commandId: clock.id("cmd"),
@@ -295,11 +336,14 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
         start: at(9),
         end: at(10),
       })) as RpcResult<unknown>;
+
       if (!ev.ok) throw new Error(`seed event failed: ${ev.code}`);
-      const space = spaces.getByName("space:spc_drill") as unknown as {
-        initSpace(i: unknown): Promise<RpcResult<unknown>>;
+
+      const space = stubOf<{
+        initSpace<I>(i: I): Promise<RpcResult<unknown>>;
         setMember(a: string, u: string, r: string | null): Promise<RpcResult<unknown>>;
-      };
+      }>(spaces.getByName("space:spc_drill"));
+
       await space.initSpace({
         spaceId: "spc_drill",
         kind: "team",
@@ -309,6 +353,7 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
       await space.setMember(ana.userId, bo.userId, "member");
       await space.setMember(ana.userId, cy.userId, "member");
     }
+
     const before = {
       anaManifest: await manifest(ana.mailboxId),
       events: await calendarEvents(),
@@ -324,23 +369,24 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
     // ---- damage + an erasure that happens AFTER the checkpoint ----
     {
       const { mail, spaces } = await ns();
-      await (mail.getByName(ana.mailboxId) as unknown as { eraseAll(): Promise<void> }).eraseAll();
-      await (
-        spaces.getByName("space:spc_drill") as unknown as {
-          setMember(a: string, u: string, r: null): Promise<unknown>;
-        }
-      ).setMember(ana.userId, cy.userId, null);
+      await stubOf<{ eraseAll(): Promise<void> }>(mail.getByName(ana.mailboxId)).eraseAll();
+      await stubOf<{
+        setMember(a: string, u: string, r: null): Promise<void>;
+      }>(spaces.getByName("space:spc_drill")).setMember(ana.userId, cy.userId, null);
+
       const erase = await mf.dispatchFetch(`${APP}/v1/ops/erasure`, {
         method: "POST",
         headers: { authorization: `Bearer ${OPS_TOKEN}`, "content-type": "application/json" },
         body: JSON.stringify({ userId: bo.userId, reason: "drill" }),
       });
+
       if (erase.status !== 202) throw new Error(`erasure request failed: ${erase.status}`);
       await mf.dispatchFetch(`${APP}/v1/ops/tombstones/replay`, {
         method: "POST",
         headers: { authorization: `Bearer ${OPS_TOKEN}` },
       });
     }
+
     const damaged = {
       anaManifest: await manifest(ana.mailboxId).catch(() => [] as ReadonlyArray<string>),
       boOriginal: (await (await ns()).originals.head(boKey)) !== null,
@@ -356,6 +402,7 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
       events: await calendarEvents(),
       cy: await spaceMember(cy.userId),
     };
+
     checks.push({
       drill: "mailbox",
       ok:
@@ -377,10 +424,12 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
     // The checkpoint predates Bo's erasure: D1 tombstone rows and Bo's DO rolled back. The R2
     // ledger survived, so replay must erase Bo again, including shared-space membership.
     const boBeforeReplay = await manifest(bo.mailboxId);
+
     const replay = await mf.dispatchFetch(`${APP}/v1/ops/tombstones/replay`, {
       method: "POST",
       headers: { authorization: `Bearer ${OPS_TOKEN}` },
     });
+
     const replayed = (await replay.json()) as { replayed?: number };
     const boAfterReplay = await manifest(bo.mailboxId);
     const boMemberAfterReplay = await spaceMember(bo.userId);
@@ -396,6 +445,7 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
       detail: `restored bo deliveries=${boBeforeReplay.length} after replay=${boAfterReplay.length} tombstones=${replayed.replayed ?? 0}`,
     });
     await mf.dispose();
+
     return checks;
   } finally {
     rmSync(work, { recursive: true, force: true });
@@ -404,6 +454,7 @@ export const runDataRestoreDrill = async (): Promise<ReadonlyArray<DrillCheck>> 
 
 if (import.meta.main) {
   const checks = await runDataRestoreDrill();
+
   for (const c of checks) console.log(`${c.ok ? "PASS" : "FAIL"} ${c.drill}: ${c.detail}`);
   process.exit(checks.every((c) => c.ok) ? 0 : 1);
 }

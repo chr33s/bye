@@ -1,3 +1,6 @@
+import { Predicate } from "effect";
+import type { JsonObject, JsonValue } from "../json.ts";
+
 // Token endpoint client (RFC 6749 §4.1.3, §6; RFC 7009). Distinguishes definitive OAuth errors,
 // which end the session, from transient network/server failures, which must preserve credentials.
 
@@ -67,8 +70,9 @@ export class TokenClient {
     private readonly now: () => number = Date.now,
   ) {}
 
-  private async post(url: string, values: Record<string, string>): Promise<unknown> {
+  private async post(url: string, values: Record<string, string>): Promise<JsonObject> {
     let response: { status: number; text(): Promise<string> };
+
     try {
       response = await this.fetchImpl(url, {
         method: "POST",
@@ -83,36 +87,45 @@ export class TokenClient {
     } catch (error) {
       throw new TransientAuthError(error instanceof Error ? error.name : "network");
     }
+
     const text = await response.text().catch(() => "");
+
     if (response.status >= 300 && response.status < 400) throw new OAuthError("invalid_request");
+
     if (response.status === 429 || response.status >= 500)
       throw new TransientAuthError(`HTTP ${response.status}`);
-    let data: Record<string, unknown> = {};
+    let data: JsonObject = {};
+
     try {
-      data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+      const parsed: JsonValue = text ? JSON.parse(text) : {};
+      data = Predicate.isObject(parsed) ? parsed : {};
     } catch {
       if (response.status >= 400) throw new OAuthError("invalid_request");
     }
+
     if (response.status >= 400)
-      throw new OAuthError(typeof data.error === "string" ? data.error : "invalid_request");
+      throw new OAuthError(Predicate.isString(data.error) ? data.error : "invalid_request");
+
     return data;
   }
 
-  private tokenSet(data: unknown): TokenSet {
-    const d = data as Record<string, unknown>;
+  private tokenSet(d: JsonObject): TokenSet {
     if (
-      typeof d.access_token !== "string" ||
-      typeof d.refresh_token !== "string" ||
-      String(d.token_type).toLowerCase() !== "bearer"
+      !Predicate.isString(d.access_token) ||
+      !Predicate.isString(d.refresh_token) ||
+      !Predicate.isString(d.token_type) ||
+      d.token_type.toLowerCase() !== "bearer"
     ) {
       throw new OAuthError("invalid_request");
     }
-    const expiresIn = typeof d.expires_in === "number" && d.expires_in > 0 ? d.expires_in : 900;
+
+    const expiresIn = Predicate.isNumber(d.expires_in) && d.expires_in > 0 ? d.expires_in : 900;
+
     return {
       accessToken: d.access_token,
       refreshToken: d.refresh_token,
       expiresAt: this.now() + expiresIn * 1000,
-      scope: typeof d.scope === "string" ? d.scope : "",
+      scope: Predicate.isString(d.scope) ? d.scope : "",
     };
   }
 

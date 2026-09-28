@@ -10,12 +10,13 @@ import { ByeApiError } from "@bye/native-shared";
  */
 export const degrade =
   <T>(fallback: T) =>
-  (error: unknown): T => {
+  (cause: unknown): T => {
     if (
-      (error instanceof ByeApiError && error.status === 401) ||
-      (error instanceof DOMException && error.name === "AbortError")
+      (cause instanceof ByeApiError && cause.status === 401) ||
+      (cause instanceof DOMException && cause.name === "AbortError")
     )
-      throw error;
+      throw cause;
+
     return fallback;
   };
 

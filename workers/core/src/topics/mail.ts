@@ -33,6 +33,7 @@ const redeliveryAuthorized = async (
     )
     .bind(targetMailboxId, sourceMailboxId)
     .first<{ ok: number }>()) !== null;
+
 export const mailTopics: TopicHandlers<"mailbox.redeliver" | "scan-message" | "scan" | "blob-gc"> =
   {
     "mailbox.redeliver": async ({ env, message: m, payload, mailboxId }) => {
@@ -45,18 +46,22 @@ export const mailTopics: TopicHandlers<"mailbox.redeliver" | "scan-message" | "s
             transferId: payload.transferId,
           }),
         );
+
         return;
       }
+
       // The summary was produced by the source mailbox from the same codec; it is carried opaquely.
       const summary = payload.summary as Parameters<
         ReturnType<CoreEnv["MAILBOXES"]["getByName"]>["receiveTransfer"]
       >[0]["summary"];
+
       // The target gets its own copy of the bytes, so the source's GC can never delete them.
       const copy = await copyMessageForTransfer(env, {
         sourceKey: payload.messageKey,
         targetMailboxId: m.target,
         transferId: payload.transferId,
       });
+
       await mailbox(env, m.target).receiveTransfer({
         transferId: payload.transferId,
         ingestionId: payload.transferId,
@@ -67,6 +72,7 @@ export const mailTopics: TopicHandlers<"mailbox.redeliver" | "scan-message" | "s
         safety: { _tag: "Clean" },
         receivedAt: Date.now(),
       });
+
       return;
     },
     "scan-message": async ({ env, payload, mailboxId, attempt }) => {
@@ -76,34 +82,40 @@ export const mailTopics: TopicHandlers<"mailbox.redeliver" | "scan-message" | "s
         bucket: "ORIGINALS",
         preFilter: false,
       });
+
       await mailbox(env, mailboxId).recordDeliveryScan(
         payload.deliveryId,
         result.outcome,
         result.signature,
       );
+
       return;
     },
     scan: async ({ env, payload, mailboxId, attempt }) => {
       // Uploads enter scanning before sending (§10): pre-filter, then the isolated ClamAV container.
       const result = await scanStoredObject(env, payload.key, attempt);
       await mailbox(env, mailboxId).setScanResult(payload.uploadId, result.outcome);
+
       return;
     },
     "blob-gc": async ({ env, payload, mailboxId }) => {
       // Reference-aware, delayed GC (§12): record an intent only; the daily sweep deletes after the
       // delay and a fresh reference check.
       const { key } = payload;
-      const shape = classifyKey(key);
+      const parsed = classifyKey(key);
+
       const reason =
-        shape.kind === "upload" && !String(payload.reason).startsWith("upload-")
+        parsed.kind === "upload" && !String(payload.reason).startsWith("upload-")
           ? `upload-${String(payload.reason)}`
           : (payload.reason ?? "unspecified");
+
       const bucket =
-        shape.kind === "upload" || shape.kind === "body" || shape.kind === "part"
+        parsed.kind === "upload" || parsed.kind === "body" || parsed.kind === "part"
           ? "PARTS"
-          : shape.kind === "export"
+          : parsed.kind === "export"
             ? "EXPORTS"
             : "ORIGINALS";
+
       await recordGcIntent(env, { bucket, key, ownerKind: "mailbox", ownerId: mailboxId, reason });
     },
   };

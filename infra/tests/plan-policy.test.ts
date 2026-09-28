@@ -50,6 +50,7 @@ describe("plan policy", () => {
     const entries = baseline("prod").map((e) =>
       e.logicalId === "Originals" ? { ...e, action: "replace" as const } : e,
     );
+
     const result = check({ stack: "MailboxPlatform", stage: "prod", entries });
     expect(result.ok).toBe(false);
     expect(result.violations).toContainEqual({
@@ -73,6 +74,7 @@ describe("plan policy", () => {
         stage: "prod",
         entries: [{ logicalId, type, action: "delete", stage: "prod" }],
       });
+
       expect(result.violations.map((v) => v._tag)).toContain("UnapprovedDestruction");
     }
   });
@@ -81,6 +83,7 @@ describe("plan policy", () => {
     const entries = baseline("prod").map((e) =>
       e.logicalId === "Originals" ? { ...e, action: "delete" as const } : e,
     );
+
     const record: DecommissionRecord = {
       stage: "prod",
       logicalId: "Originals",
@@ -88,6 +91,7 @@ describe("plan policy", () => {
       approvedBy: "ops-lead",
       ticket: "OPS-1",
     };
+
     expect(check({ stack: "MailboxPlatform", stage: "prod", entries }, [record]).ok).toBe(true);
     expect(
       check({ stack: "MailboxPlatform", stage: "prod", entries }, [
@@ -122,9 +126,11 @@ describe("plan policy", () => {
       },
       { logicalId: "Originals", type: "Cloudflare.R2.Bucket", action: "delete", stage: "prod" },
     ];
+
     const tags = check({ stack: "MailboxPlatform", stage: "preview-42", entries }).violations.map(
       (v) => v._tag,
     );
+
     expect(tags).toContain("CrossStageReference");
     expect(tags).toContain("CrossStageMutation");
   });
@@ -146,6 +152,7 @@ describe("plan policy", () => {
         bindings: ["PUBLISHED", "ORIGINALS", "SESSION_KEY"],
       },
     ];
+
     const violations = check({ stack: "MailboxPlatform", stage: "staging", entries }).violations;
     expect(violations).toContainEqual({
       _tag: "PrivateBindingOnPublic",
@@ -168,6 +175,7 @@ describe("plan policy", () => {
     expect(
       check({ stack: "MailboxPlatform", stage: "feature/x", entries: [] }).violations[0]?._tag,
     ).toBe("InvalidStage");
+
     const result = check({
       stack: "MailboxPlatform",
       stage: "prod",
@@ -180,6 +188,7 @@ describe("plan policy", () => {
         },
       ],
     });
+
     expect(result.violations.map((v) => v._tag)).toContain("UnexpectedResourceType");
   });
 });

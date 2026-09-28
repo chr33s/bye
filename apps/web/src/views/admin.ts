@@ -1,3 +1,4 @@
+import type { JsonObject } from "@bye/native-shared/json";
 import { api, list, query } from "../api.ts";
 import { degrade } from "../core/degrade.ts";
 import { act, field, formatDate, formatSize, h, section, show, table, text } from "../core/dom.ts";
@@ -17,17 +18,15 @@ const orgOf = (params: URLSearchParams): string =>
 
 export const renderAdmin = async (params: URLSearchParams, signal: AbortSignal): Promise<void> => {
   const orgId = orgOf(params);
+
   if (orgId) remember.set("org", orgId);
   const reload = () => void renderAdmin(params, signal);
+
   const [org, members, seats, audit, domains, billing, mail] = await Promise.all([
     orgId
-      ? api<Record<string, unknown>>("GET", `/v1/orgs/${orgId}`, undefined, signal).catch(
-          degrade(null),
-        )
+      ? api<JsonObject>("GET", `/v1/orgs/${orgId}`, undefined, signal).catch(degrade(null))
       : null,
-    orgId
-      ? list<Record<string, unknown>>(`/v1/orgs/${orgId}/members`, signal).catch(degrade([]))
-      : [],
+    orgId ? list<JsonObject>(`/v1/orgs/${orgId}/members`, signal).catch(degrade([])) : [],
     orgId
       ? api<{ limit?: number; used?: number; entitled?: number | null }>(
           "GET",
@@ -37,19 +36,17 @@ export const renderAdmin = async (params: URLSearchParams, signal: AbortSignal):
         ).catch(degrade(null))
       : null,
     orgId
-      ? list<Record<string, unknown>>(
-          `/v1/orgs/${orgId}/audit${query({ limit: 50 })}`,
-          signal,
-        ).catch(degrade([]))
+      ? list<JsonObject>(`/v1/orgs/${orgId}/audit${query({ limit: 50 })}`, signal).catch(
+          degrade([]),
+        )
       : [],
-    orgId
-      ? list<Record<string, unknown>>(`/v1/orgs/${orgId}/domains`, signal).catch(degrade([]))
-      : [],
-    api<Record<string, unknown>>("GET", `/v1/billing${query({ orgId })}`, undefined, signal).catch(
+    orgId ? list<JsonObject>(`/v1/orgs/${orgId}/domains`, signal).catch(degrade([])) : [],
+    api<JsonObject>("GET", `/v1/billing${query({ orgId })}`, undefined, signal).catch(
       degrade(null),
     ),
     installationMail(signal),
   ]);
+
   const orgPicker = h(
     "select",
     {
@@ -65,27 +62,34 @@ export const renderAdmin = async (params: URLSearchParams, signal: AbortSignal):
       ),
     ),
   );
+
   const inviteAddress = h("input", { type: "email", "aria-label": "Invite address" });
+
   const inviteRole = h(
     "select",
     { "aria-label": "Role" },
     h("option", { value: "member" }, "Member"),
     h("option", { value: "admin" }, "Admin"),
   );
+
   const seatLimit = h("input", {
     type: "number",
     min: "1",
     value: String(seats?.limit ?? 1),
     "aria-label": "Seat limit",
   });
+
   const newOrgName = h("input", { "aria-label": "New organization name" });
+
   const newOrgKind = h(
     "select",
     { "aria-label": "Kind" },
     h("option", { value: "domain" }, "Team (custom domain)"),
     h("option", { value: "family" }, "Family"),
   );
+
   const domainName = h("input", { placeholder: "example.com", "aria-label": "Domain name" });
+
   const plan = h(
     "select",
     { "aria-label": "Plan" },
@@ -93,13 +97,16 @@ export const renderAdmin = async (params: URLSearchParams, signal: AbortSignal):
       h("option", { value: p, selected: billing?.plan === p }, p),
     ),
   );
+
   const interval = h(
     "select",
     { "aria-label": "Billing interval" },
     h("option", { value: "year" }, "Yearly"),
     h("option", { value: "month" }, "Monthly"),
   );
+
   const inviteToken = h("input", { "aria-label": "Invitation code" });
+
   const isAdmin = members.some(
     (m) => m.userId === state.me?.userId && (m.role === "owner" || m.role === "admin"),
   );
@@ -143,6 +150,7 @@ export const renderAdmin = async (params: URLSearchParams, signal: AbortSignal):
                         interval: interval.value,
                       }),
                     );
+
                     window.location.assign(r.url);
                   }),
                 },
@@ -426,39 +434,38 @@ export const renderAdmin = async (params: URLSearchParams, signal: AbortSignal):
 };
 
 interface DnsView extends MailDnsView {
-  readonly plan?: ReadonlyArray<Record<string, unknown>>;
-  readonly operations?: ReadonlyArray<Record<string, unknown>>;
+  readonly plan?: ReadonlyArray<JsonObject>;
+  readonly operations?: ReadonlyArray<JsonObject>;
   readonly diagnostics?: unknown;
 }
 
 /** Domain onboarding (O01): state, diagnostics, DNS preview, settings, aliases, removal. */
 export const renderDomain = async (domainId: string, signal: AbortSignal): Promise<void> => {
   const reload = () => void renderDomain(domainId, signal);
+
   const [domain, dns, aliases, mail] = await Promise.all([
-    api<Record<string, unknown>>(
-      "GET",
-      `/v1/domains/${encodeURIComponent(domainId)}`,
-      undefined,
-      signal,
-    ),
+    api<JsonObject>("GET", `/v1/domains/${encodeURIComponent(domainId)}`, undefined, signal),
     api<DnsView>("GET", `/v1/domains/${encodeURIComponent(domainId)}/dns`, undefined, signal).catch(
       (): DnsView => ({}),
     ),
-    list<Record<string, unknown>>(
-      `/v1/domains/${encodeURIComponent(domainId)}/aliases`,
-      signal,
-    ).catch(degrade([])),
+    list<JsonObject>(`/v1/domains/${encodeURIComponent(domainId)}/aliases`, signal).catch(
+      degrade([]),
+    ),
     installationMail(signal),
   ]);
+
   const localPart = h("input", { "aria-label": "Alias local part", placeholder: "sales" });
+
   const mailboxId = h("input", {
     "aria-label": "Deliver to mailbox ID",
     value: state.mailboxId ?? "",
   });
+
   const plus = h("input", {
     type: "checkbox",
     checked: Boolean(domain.plusAddressing ?? domain.plus_addressing),
   });
+
   const operations = dns.operations ?? dns.plan ?? [];
   show(
     section(
@@ -481,15 +488,12 @@ export const renderDomain = async (domainId: string, signal: AbortSignal): Promi
       h("h2", {}, "DNS changes (preview — nothing changes until you authorize)"),
       table(
         "DNS plan",
-        operations as Array<Record<string, unknown>>,
+        operations as Array<JsonObject>,
         [
           ["Action", (o) => text(o.action ?? o.op)],
-          ["Type", (o) => text((o.record as Record<string, unknown> | undefined)?.type ?? o.type)],
-          ["Name", (o) => text((o.record as Record<string, unknown> | undefined)?.name ?? o.name)],
-          [
-            "Value",
-            (o) => text((o.record as Record<string, unknown> | undefined)?.content ?? o.content),
-          ],
+          ["Type", (o) => text((o.record as JsonObject | undefined)?.type ?? o.type)],
+          ["Name", (o) => text((o.record as JsonObject | undefined)?.name ?? o.name)],
+          ["Value", (o) => text((o.record as JsonObject | undefined)?.content ?? o.content)],
         ],
         "No DNS changes needed.",
       ),
@@ -605,6 +609,7 @@ export const renderExports = async (
   signal: AbortSignal,
 ): Promise<void> => {
   const exportId = params.get("id") ?? remember.get("exportId");
+
   const status = exportId
     ? await api<{
         status?: string;
@@ -613,6 +618,7 @@ export const renderExports = async (
         degrade(null),
       )
     : null;
+
   show(
     section(
       "exports-title",
@@ -670,21 +676,21 @@ export const renderExports = async (
 
 /** Account closure (A04): terms from the entitlement, explicit address confirmation, optional forwarding. */
 export const renderClose = async (signal: AbortSignal): Promise<void> => {
-  const terms = await api<Record<string, unknown>>(
-    "GET",
-    "/v1/account/closure-terms",
-    undefined,
-    signal,
-  ).catch(degrade({} as Record<string, unknown>));
+  const terms = await api<JsonObject>("GET", "/v1/account/closure-terms", undefined, signal).catch(
+    degrade<JsonObject>({}),
+  );
+
   const confirm = h("input", {
     type: "email",
     required: true,
     "aria-label": "Type your address to confirm",
   });
+
   const forwardTo = h("input", {
     type: "email",
     "aria-label": "Forward future mail to (optional)",
   });
+
   show(
     section(
       "close-title",
@@ -704,7 +710,7 @@ export const renderClose = async (signal: AbortSignal): Promise<void> => {
               withStepUp(() =>
                 api("POST", "/v1/account/close", {
                   confirmAddress: confirm.value,
-                  ...(forwardTo.value ? { forwardTo: forwardTo.value } : {}),
+                  forwardTo: forwardTo.value || undefined,
                 }),
               ),
             () => (location.hash = "#/"),
@@ -719,9 +725,10 @@ export const renderClose = async (signal: AbortSignal): Promise<void> => {
 };
 
 export const renderReferral = async (signal: AbortSignal): Promise<void> => {
-  const r = await api<Record<string, unknown>>("GET", "/v1/referral", undefined, signal).catch(
-    degrade({} as Record<string, unknown>),
+  const r = await api<JsonObject>("GET", "/v1/referral", undefined, signal).catch(
+    degrade<JsonObject>({}),
   );
+
   show(
     section(
       "referral-title",

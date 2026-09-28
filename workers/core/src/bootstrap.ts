@@ -36,10 +36,13 @@ export const claimBootstrap = async (
   now: number,
 ): Promise<boolean> => {
   if (!bootstrapEnabled(env) || !timingSafeEqual(token, env.BOOTSTRAP_TOKEN!)) return false;
+
   const users = await env.DIRECTORY.prepare("SELECT COUNT(*) AS n FROM users").first<{
     n: number;
   }>();
+
   if (Number(users?.n ?? 0) > 0) return false;
+
   const claimed = await env.DIRECTORY.prepare(
     `INSERT INTO instance_bootstrap (id, claimed_at, user_id) VALUES (1, ?, NULL)
      ON CONFLICT(id) DO UPDATE SET claimed_at = excluded.claimed_at
@@ -47,6 +50,7 @@ export const claimBootstrap = async (
   )
     .bind(now, now - BOOTSTRAP_CLAIM_LEASE_MS)
     .run();
+
   return claimed.meta.changes === 1;
 };
 
@@ -71,9 +75,11 @@ let cachedOperator: string | null = null;
 /** The operator created by bootstrap, if any (in addition to OPERATOR_USER_IDS). */
 export const bootstrapOperatorIds = async (env: BootstrapEnv): Promise<ReadonlyArray<string>> => {
   if (!bootstrapEnabled(env)) return [];
+
   if (cachedOperator !== null) return [cachedOperator];
   // Never rejects: callers (policyLayers) create this promise before they need it.
   let row: { user_id: string } | null = null;
+
   try {
     row = await env.DIRECTORY.prepare(
       "SELECT user_id FROM instance_bootstrap WHERE id = 1 AND user_id IS NOT NULL",
@@ -81,7 +87,9 @@ export const bootstrapOperatorIds = async (env: BootstrapEnv): Promise<ReadonlyA
   } catch {
     row = null;
   }
+
   if (row?.user_id) cachedOperator = row.user_id;
+
   return row?.user_id ? [row.user_id] : [];
 };
 

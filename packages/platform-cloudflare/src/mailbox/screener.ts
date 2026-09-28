@@ -17,6 +17,13 @@ export interface ScreenDecision {
   readonly notify?: boolean;
 }
 
+type ClearScreenerResult = { readonly cleared: number };
+
+type ScreenResult = {
+  readonly moved: number;
+  readonly draftIds: ReadonlyArray<string>;
+};
+
 export class MailboxScreener {
   constructor(
     private readonly ctx: MailboxContext,
@@ -47,6 +54,7 @@ export class MailboxScreener {
     const code = `hey-${this.ctx.secret(4)}`;
     this.ctx.putSetting("speakeasy", code);
     this.ctx.change("settings", "speakeasy", {});
+
     return code;
   }
 
@@ -56,6 +64,7 @@ export class MailboxScreener {
 
   speakeasyMatches(subject: string): boolean {
     const code = this.ctx.setting<string | null>("speakeasy", null);
+
     return code !== null && subject.toLowerCase().includes(code.toLowerCase());
   }
 
@@ -77,14 +86,13 @@ export class MailboxScreener {
    * Approve moves pending (and previously screened-out) threads for the sender; `asSeen` approves
    * without surfacing them as new; `reply` returns a reply draft in the same command.
    */
-  screen(decisions: ReadonlyArray<ScreenDecision>): {
-    readonly moved: number;
-    readonly draftIds: ReadonlyArray<string>;
-  } {
+  screen(decisions: ReadonlyArray<ScreenDecision>): ScreenResult {
     let moved = 0;
     const draftIds: Array<string> = [];
+
     for (const d of decisions) {
       const sender = normalizeAddress(d.sender);
+
       if (d.decision === "allow") {
         const destination = d.destination ?? "imbox";
         this.ledger.writePolicy("address", sender, {
@@ -94,10 +102,12 @@ export class MailboxScreener {
           bundle: d.bundle ?? false,
           notify: d.notify ?? false,
         });
+
         const threads = this.sql.all<{ thread_id: string }>(
           "SELECT thread_id FROM threads WHERE sender = ? AND disposition IN ('screening','screened-out') AND merged_into IS NULL",
           sender,
         );
+
         for (const t of threads) {
           this.ledger.move(
             t.thread_id,
@@ -110,6 +120,7 @@ export class MailboxScreener {
             },
             null,
           );
+
           // Invitations held in the Screener only reach the calendar after approval (§9).
           for (const dl of this.views.deliveriesOf(t.thread_id)) {
             if (dl.routing.hasCalendar) {
@@ -119,9 +130,12 @@ export class MailboxScreener {
               });
             }
           }
+
           moved++;
         }
+
         const first = threads[0];
+
         if (d.reply && first)
           draftIds.push(
             this.drafts.createReplyDraft(
@@ -138,6 +152,7 @@ export class MailboxScreener {
           bundle: false,
           notify: false,
         });
+
         for (const b of this.sql.all<{ thread_id: string }>(
           "SELECT thread_id FROM threads WHERE sender = ? AND disposition = 'screening'",
           sender,
@@ -146,8 +161,10 @@ export class MailboxScreener {
           moved++;
         }
       }
+
       this.ctx.change("screener", d.decision, { sender });
     }
+
     return { moved, draftIds };
   }
 
@@ -155,14 +172,16 @@ export class MailboxScreener {
    * Clear the pending list up to a snapshot boundary. Senders stay "unknown": their next message
    * is screened again. Clearing never approves (E01).
    */
-  clearScreener(boundary: number): { readonly cleared: number } {
+  clearScreener(boundary: number): ClearScreenerResult {
     const affected = this.sql.all<{ thread_id: string }>(
       "SELECT thread_id FROM threads WHERE disposition = 'screening' AND activity_seq <= ?",
       boundary,
     );
+
     for (const a of affected)
       this.ledger.move(a.thread_id, "screened-out", { newForYou: false }, null);
     this.ctx.change("screener", "cleared", { boundary });
+
     return { cleared: affected.length };
   }
 }

@@ -1,3 +1,4 @@
+import type { JsonObject } from "@bye/native-shared/json";
 import { api } from "../api.ts";
 import { degrade } from "../core/degrade.ts";
 import { act, h, text } from "../core/dom.ts";
@@ -31,6 +32,7 @@ const reviewSetup = act("Mail setup", async () => {
   const r = await withStepUp(() =>
     api<{ domainId: string }>("POST", "/v1/domains/from-installation", {}),
   );
+
   location.hash = `#/domains/${encodeURIComponent(r.domainId)}`;
 });
 
@@ -43,6 +45,7 @@ export const incomingMailCard = (
   options: { readonly dismissible: boolean; readonly onDismiss?: () => void },
 ): HTMLElement | null => {
   if (!info?.zone) return null;
+
   if (info.incomingMail === "active")
     return h(
       "section",
@@ -52,6 +55,7 @@ export const incomingMailCard = (
     );
   const zone = text(info.zone);
   const continuing = info.domain !== null;
+
   return h(
     "section",
     { class: "card", "aria-label": "Set up incoming email" },
@@ -100,9 +104,11 @@ export const incomingMailCard = (
 export const showIncomingMailBanner = async (): Promise<void> => {
   if (remember.get(LATER) === "1" || document.getElementById("incoming-mail")) return;
   const info = await installationMail();
+
   if (!info?.zone || !info.canSetup || info.incomingMail === "active") return;
   const holder = h("div", { id: "incoming-mail" });
   const card = incomingMailCard(info, { dismissible: true, onDismiss: () => holder.remove() });
+
   if (!card) return;
   holder.append(card);
   document.querySelector("header")?.after(holder);
@@ -112,7 +118,7 @@ interface Classification {
   readonly kind: "new" | "existing-provider" | "conflicted";
   readonly provider: string | null;
   readonly currentMx: ReadonlyArray<{ readonly content: string; readonly priority?: number }>;
-  readonly conflicts: ReadonlyArray<Record<string, unknown>>;
+  readonly conflicts: ReadonlyArray<JsonObject>;
   readonly requiresCutover: boolean;
 }
 
@@ -145,7 +151,7 @@ export interface MailSnapshotView {
 }
 
 export interface MailDnsView {
-  readonly plan?: ReadonlyArray<Record<string, unknown>>;
+  readonly plan?: ReadonlyArray<JsonObject>;
   readonly classification?: Classification;
   readonly cutoverPending?: boolean;
   readonly link?: {
@@ -160,6 +166,7 @@ export interface MailDnsView {
 
 /** Where to create the token, and exactly what to grant (infra/onboarding/spec.md §13). */
 export const ZONE_TOKEN_URL = "https://dash.cloudflare.com/profile/api-tokens";
+
 export const zoneTokenPermissions = (zone: string): ReadonlyArray<string> => [
   "Zone → DNS → Edit",
   "Zone → Email Routing Rules → Edit",
@@ -177,6 +184,7 @@ const automationChooser = (
   reload: () => void,
 ): HTMLElement | null => {
   if (!info?.zone || info.zone !== name) return null;
+
   if (info.automation === "zone-api")
     return h(
       "div",
@@ -198,6 +206,7 @@ const automationChooser = (
           )
         : null,
     );
+
   const token = h("input", {
     type: "password",
     name: "zoneToken",
@@ -205,6 +214,7 @@ const automationChooser = (
     spellcheck: "false",
     "aria-label": "Cloudflare API token",
   });
+
   const form = h(
     "form",
     {
@@ -242,6 +252,7 @@ const automationChooser = (
     ),
     h("button", { type: "submit" }, "Connect token"),
   );
+
   return h(
     "div",
     { class: "card", "aria-label": "How changes are made" },
@@ -290,10 +301,12 @@ const restoreList = (snap: MailSnapshotView): ReadonlyArray<string> => [
 ];
 
 /** Records the customer publishes themselves when Bye has no zone access (manual records). */
-const recordsToPublish = (plan: ReadonlyArray<Record<string, unknown>>): ReadonlyArray<string> =>
+const recordsToPublish = (plan: ReadonlyArray<JsonObject>): ReadonlyArray<string> =>
   plan.flatMap((op) => {
     const r = (op.record ?? op.to ?? op.desired) as SnapshotRecord | undefined;
+
     if (!r || op.op === "keep") return [];
+
     return [
       `${r.type} ${r.name}${r.priority !== undefined ? ` ${r.priority}` : ""} ${r.type === "TXT" ? `"${r.content}"` : r.content}`,
     ];
@@ -305,6 +318,7 @@ const PROGRESS: ReadonlyArray<readonly [string, string]> = [
   ["inbound-tested", "Cloudflare Email Routing enabled and incoming delivery verified"],
   ["outbound-tested", "Sender authentication verified"],
 ];
+
 const ORDER = [
   "requested",
   "ownership-proven",
@@ -315,9 +329,10 @@ const ORDER = [
   "active",
 ];
 
-const proposal = (plan: ReadonlyArray<Record<string, unknown>>): ReadonlyArray<string> => {
+const proposal = (plan: ReadonlyArray<JsonObject>): ReadonlyArray<string> => {
   const has = (purpose: string, ...ops: Array<string>) =>
-    plan.some((o) => String(o.purpose).startsWith(purpose) && ops.includes(String(o.op)));
+    plan.some((o) => text(o.purpose).startsWith(purpose) && ops.includes(text(o.op)));
+
   return [
     "Enable Cloudflare Email Routing",
     "Route incoming mail to Bye",
@@ -333,7 +348,7 @@ const proposal = (plan: ReadonlyArray<Record<string, unknown>>): ReadonlyArray<s
  * verify, with retry and "Restore previous mail setup" when verification fails.
  */
 export const incomingMailSection = (
-  domain: Record<string, unknown>,
+  domain: JsonObject,
   dns: MailDnsView,
   info: InstallationMail | null,
   reload: () => void,
@@ -345,6 +360,7 @@ export const incomingMailSection = (
   const workflow = (domain.workflow as { status?: string } | null)?.status;
   const c = dns.classification;
   const method = info?.automation === "zone-api" ? "delegated-token" : "manual-records";
+
   const authorize = (confirmCutover: boolean, label: string) =>
     act(
       label,
@@ -352,11 +368,12 @@ export const incomingMailSection = (
         withStepUp(() =>
           api("POST", `/v1/domains/${id}/authorize-zone`, {
             method,
-            ...(confirmCutover ? { confirmCutover: true } : {}),
+            confirmCutover: confirmCutover || undefined,
           }),
         ),
       reload,
     );
+
   const restore = h(
     "button",
     {
@@ -370,6 +387,7 @@ export const incomingMailSection = (
     },
     "Restore previous mail setup",
   );
+
   const restartButton = (label: string) =>
     h(
       "button",
@@ -383,8 +401,10 @@ export const incomingMailSection = (
       },
       label,
     );
+
   const retry = restartButton("Retry checks");
   const live = workflow !== undefined && LIVE.has(workflow);
+
   const switchDialog = (provider: string | null) => {
     const dialog = h(
       "div",
@@ -408,11 +428,13 @@ export const incomingMailSection = (
         ),
       ),
     );
+
     return dialog;
   };
 
   // After a manual-records rollback the recorded setup stays here until the owner confirms it.
   const pending = dns.link?.restorePending ?? null;
+
   const restoreCard = pending
     ? h(
         "section",
@@ -442,6 +464,7 @@ export const incomingMailSection = (
         ),
       )
     : null;
+
   const withRestore = (section: HTMLElement): HTMLElement =>
     restoreCard ? h("div", {}, restoreCard, section) : section;
 
@@ -457,6 +480,7 @@ export const incomingMailSection = (
     const failed = !live;
     const probe = dns.link?.inboundProbe ?? null;
     const confirm = dns.cutoverPending ? switchDialog(c?.provider ?? null) : null;
+
     return h(
       "section",
       { class: "card", "aria-live": "polite" },
@@ -482,6 +506,7 @@ export const incomingMailSection = (
         PROGRESS.map(([s, label]) => {
           const done = at >= ORDER.indexOf(s);
           const next = !done && at === ORDER.indexOf(s) - 1;
+
           return h("li", {}, done ? `✓ ${label}` : next ? `• ${label}…` : `  ${label}`);
         }),
       ),
@@ -540,6 +565,7 @@ export const incomingMailSection = (
 
   // ownership-proven: a restart is always available when no live setup is running.
   const restart = live ? null : restartButton("Restart setup");
+
   if (!c)
     return withRestore(
       h(
@@ -577,7 +603,7 @@ export const incomingMailSection = (
             h(
               "li",
               {},
-              `${text(x.purpose)}: ${text((x.existing as Record<string, unknown> | undefined)?.content)}`,
+              `${text(x.purpose)}: ${text((x.existing as JsonObject | undefined)?.content)}`,
             ),
           ),
         ),
@@ -615,6 +641,7 @@ export const incomingMailSection = (
 
   // Existing provider: review first, then a separate explicit cutover confirmation.
   const confirm = switchDialog(c.provider);
+
   return withRestore(
     h(
       "section",

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { EXIT, type FetchLike, makeCliApi, runCli } from "@bye/cli";
+import { EXIT, type FetchLike, cliApiLayer, runCli } from "@bye/cli";
 
 const harness = () => {
   const calls: Array<{ url: string; method: string; auth: string | undefined; body: unknown }> = [];
+
   const fetchImpl: FetchLike = async (url, init) => {
     calls.push({
       url,
@@ -10,21 +11,25 @@ const harness = () => {
       auth: init.headers.authorization,
       body: init.body === undefined ? undefined : JSON.parse(init.body as string),
     });
+
     const body = url.includes("/replay")
       ? { _tag: "Replayed" }
       : { deadLetters: [{ id: "dl_1", queue: "bye-ingest-dlq", state: "held" }] };
+
     return {
       status: 200,
       headers: { get: () => "application/json" },
       text: async () => JSON.stringify(body),
     };
   };
+
   const out: Array<string> = [];
   const err: Array<string> = [];
+
   const run = (argv: Array<string>) =>
     runCli(
       argv,
-      makeCliApi(
+      cliApiLayer(
         {
           apiUrl: "https://api.test",
           token: "ops-token",
@@ -39,6 +44,7 @@ const harness = () => {
         newCommandId: () => "cmd_1",
       },
     );
+
   return { calls, out, err, run };
 };
 

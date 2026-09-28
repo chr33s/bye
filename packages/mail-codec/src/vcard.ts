@@ -30,8 +30,10 @@ export interface VCard {
 const splitUnescaped = (value: string, separator: string): Array<string> => {
   const out: Array<string> = [];
   let current = "";
+
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]!;
+
     if (ch === "\\" && i + 1 < value.length) {
       current += ch + value[i + 1];
       i++;
@@ -40,7 +42,9 @@ const splitUnescaped = (value: string, separator: string): Array<string> => {
       current = "";
     } else current += ch;
   }
+
   out.push(current);
+
   return out;
 };
 
@@ -52,34 +56,42 @@ const escapeValue = (value: string): string =>
 
 const findValueColon = (line: string): number => {
   let quoted = false;
+
   for (let i = 0; i < line.length; i++) {
     if (line[i] === '"') quoted = !quoted;
     else if (line[i] === ":" && !quoted) return i;
   }
+
   return -1;
 };
 
 const parseTypes = (params: ReadonlyArray<string>): Array<string> => {
   const types: Array<string> = [];
+
   for (const param of params) {
     const eq = param.indexOf("=");
+
     if (eq < 0) {
       if (param) types.push(param.toLowerCase());
       continue;
     }
+
     if (param.slice(0, eq).toLowerCase() !== "type") continue;
+
     for (const t of param
       .slice(eq + 1)
       .replace(/"/g, "")
       .split(","))
       if (t) types.push(t.toLowerCase());
   }
+
   return types;
 };
 
 export const parseVCards = (text: string): Array<VCard> => {
   const unfolded = text.replace(/\r?\n[ \t]/g, "");
   const cards: Array<VCard> = [];
+
   let card:
     | {
         version: string;
@@ -93,13 +105,16 @@ export const parseVCards = (text: string): Array<VCard> => {
         categories: Array<string>;
       }
     | undefined;
+
   for (const line of unfolded.split(/\r?\n/)) {
     if (!line.trim()) continue;
     const colon = findValueColon(line);
+
     if (colon < 0) continue;
     const [rawName = "", ...params] = splitUnescaped(line.slice(0, colon), ";");
     const name = (rawName.split(".").pop() ?? "").toUpperCase();
     const value = line.slice(colon + 1);
+
     if (name === "BEGIN" && value.toUpperCase() === "VCARD") {
       card = {
         version: "3.0",
@@ -114,13 +129,16 @@ export const parseVCards = (text: string): Array<VCard> => {
       };
       continue;
     }
+
     if (!card) continue;
+
     switch (name) {
       case "END":
         if (!card.fn && card.n)
           card.fn = [card.n.prefix, card.n.given, card.n.additional, card.n.family, card.n.suffix]
             .filter(Boolean)
             .join(" ");
+
         if (!card.fn && card.emails[0]) card.fn = card.emails[0].value;
         cards.push(card);
         card = undefined;
@@ -139,9 +157,11 @@ export const parseVCards = (text: string): Array<VCard> => {
           value,
           ";",
         ).map(unescapeValue);
+
         card.n = { family, given, additional, prefix, suffix };
         break;
       }
+
       case "EMAIL":
         card.emails.push({
           value: unescapeValue(value)
@@ -172,6 +192,7 @@ export const parseVCards = (text: string): Array<VCard> => {
         break;
     }
   }
+
   return cards;
 };
 
@@ -180,18 +201,23 @@ export const foldContentLine = (line: string): string => {
   const out: Array<string> = [];
   let current = "";
   let bytes = 0;
+
   for (const cp of line) {
     const size = utf8Encode(cp).length;
     const limit = out.length === 0 ? 75 : 74;
+
     if (bytes + size > limit) {
       out.push(current);
       current = "";
       bytes = 0;
     }
+
     current += cp;
     bytes += size;
   }
+
   out.push(current);
+
   return out.join("\r\n ");
 };
 
@@ -200,19 +226,26 @@ const typeParam = (types: ReadonlyArray<string>): string =>
 
 export const serializeVCard = (card: VCard, version: "3.0" | "4.0" = "4.0"): string => {
   const lines = ["BEGIN:VCARD", `VERSION:${version}`];
+
   if (card.uid) lines.push(`UID:${escapeValue(card.uid)}`);
   lines.push(`FN:${escapeValue(card.fn)}`);
   const n = card.n ?? { family: "", given: "", additional: "", prefix: "", suffix: "" };
   lines.push(
     `N:${[n.family, n.given, n.additional, n.prefix, n.suffix].map(escapeValue).join(";")}`,
   );
+
   for (const e of card.emails) lines.push(`EMAIL${typeParam(e.types)}:${escapeValue(e.value)}`);
+
   for (const t of card.tels) lines.push(`TEL${typeParam(t.types)}:${escapeValue(t.value)}`);
+
   if (card.org) lines.push(`ORG:${escapeValue(card.org)}`);
+
   if (card.note) lines.push(`NOTE:${escapeValue(card.note)}`);
+
   if (card.categories.length)
     lines.push(`CATEGORIES:${card.categories.map(escapeValue).join(",")}`);
   lines.push("END:VCARD");
+
   return `${lines.map(foldContentLine).join("\r\n")}\r\n`;
 };
 

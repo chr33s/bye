@@ -27,6 +27,7 @@ describe("signature mirror job planning", () => {
       remote,
       { succeeded: true },
     );
+
     expect(plan.upload).toEqual(["daily-102.cdiff", "daily.cvd", "freshclam.dat"]);
     expect(plan.unchanged).toBe(2);
     expect(plan.prune).toEqual(["daily-100.cdiff", "daily-100.cdiff.sign"]);

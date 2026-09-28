@@ -1,3 +1,4 @@
+import { Option } from "effect";
 import { Argument, Flag } from "effect/unstable/cli";
 import { action, get, group, opt, optInt, post } from "./args.ts";
 
@@ -5,6 +6,7 @@ import { action, get, group, opt, optInt, post } from "./args.ts";
 // which accept only the environment's OPS_TOKEN — run them with BYE_TOKEN set to that token.
 
 const DLQ_STATES = ["held", "replayed", "discarded", "obsolete"] as const;
+
 const id = Argument.String("id");
 
 export const OPS_COMMANDS = [
@@ -14,8 +16,7 @@ export const OPS_COMMANDS = [
         "list",
         { summary: "List dead-lettered queue messages (operator token)" },
         { state: Flag.Literals("state", DLQ_STATES).pipe(Flag.optional), limit: optInt("limit") },
-        ({ state, limit }) =>
-          get("/v1/ops/dlq", { state: state._tag === "Some" ? state.value : undefined, limit }),
+        ({ state, limit }) => get("/v1/ops/dlq", { state: Option.getOrUndefined(state), limit }),
       ),
       action(
         "replay",

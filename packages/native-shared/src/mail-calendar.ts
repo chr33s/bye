@@ -1,3 +1,5 @@
+import { Predicate } from "effect";
+import type { JsonValue } from "./json.ts";
 import type {
   CreateEventFromMessageRequest,
   MessageInvitationWire,
@@ -41,24 +43,27 @@ export const invitationEvents = (
 ): ReadonlyArray<{ readonly eventId: string; readonly snippet: string }> => {
   const seen = new Set<string>();
   const out: Array<{ eventId: string; snippet: string }> = [];
+
   for (const hit of hits) {
     if (hit.kind !== "event" || !hit.docId?.startsWith("event:")) continue;
     const eventId = hit.docId.slice("event:".length);
+
     if (!eventId || seen.has(eventId)) continue;
     seen.add(eventId);
     out.push({ eventId, snippet: hit.snippet });
   }
+
   return out;
 };
 
 /** How each client names the owner's current answer. */
-export const PARTSTAT_LABEL: Readonly<Record<string, string>> = {
-  ACCEPTED: "Accepted",
-  TENTATIVE: "Maybe",
-  DECLINED: "Declined",
-  "NEEDS-ACTION": "Not answered",
-  DELEGATED: "Delegated",
-};
+export const PARTSTAT_LABEL = Object.fromEntries([
+  ["ACCEPTED", "Accepted"],
+  ["TENTATIVE", "Maybe"],
+  ["DECLINED", "Declined"],
+  ["NEEDS-ACTION", "Not answered"],
+  ["DELEGATED", "Delegated"],
+]);
 
 /** One invitation a thread can answer. */
 export interface ThreadInvitation {
@@ -115,11 +120,14 @@ export const findThreadInvitations = async (
 ): Promise<ReadonlyArray<ThreadInvitation>> => {
   try {
     const { invitations } = await client.messageInvitations(calendarId, mailboxId, deliveryId);
+
     if (invitations.length > 0) return threadInvitations(invitations);
   } catch (error) {
     if ((error as { status?: number }).status !== 404) throw error;
   }
+
   const { items } = await client.calendarSearch(calendarId, invitationTitle(subject), 5);
+
   return invitationEvents(items).map((e) => ({
     eventId: e.eventId,
     occurrenceKey: null,
@@ -171,16 +179,21 @@ export const fromMessagePayload = (
     attendees: "",
     reminders: "",
   });
+
   if (!built.ok) return { ok: false, errors: built.errors.map((e) => `${e.field}: ${e.message}`) };
+
+  const message: MessageRef = {
+    mailboxId: form.mailboxId,
+    threadId: form.threadId,
+  };
+
+  if (form.deliveryId) message.deliveryId = form.deliveryId;
+
   return {
     ok: true,
     body: {
       calendarId: form.calendarId,
-      message: {
-        mailboxId: form.mailboxId,
-        threadId: form.threadId,
-        ...(form.deliveryId ? { deliveryId: form.deliveryId } : {}),
-      },
+      message,
       title: built.command.data.summary,
       start: built.command.start,
       end: built.command.end,
@@ -193,6 +206,7 @@ export const firstCalendarId = (
   calendars: ReadonlyArray<{ readonly id?: string; readonly calendarId?: string }>,
 ): string | null => {
   const first = calendars[0];
+
   return first?.calendarId ?? first?.id ?? null;
 };
 
@@ -216,6 +230,7 @@ export const coverTimeText = (
   if (o.allDay) return "All day";
   const start = new Date(o.startMs);
   const time = start.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+
   return start.toDateString() === new Date(now).toDateString()
     ? time
     : `${start.toLocaleDateString(locale, { weekday: "short", month: "short", day: "numeric" })} ${time}`;
@@ -234,14 +249,16 @@ export const COVER_LOOKAHEAD_DAYS = 7;
 const startOfDay = (now: number): number => {
   const d = new Date(now);
   d.setHours(0, 0, 0, 0);
+
   return d.getTime();
 };
 
 /** The window the cover panel loads: local midnight today through the lookahead. */
-export const coverWindow = (now: number): { readonly from: number; readonly to: number } => {
+export const coverWindow = (now: number): CoverWindow => {
   const from = startOfDay(now);
   const end = new Date(from);
   end.setDate(end.getDate() + COVER_LOOKAHEAD_DAYS + 1);
+
   return { from, to: end.getTime() };
 };
 
@@ -255,12 +272,15 @@ export const coverAgenda = <O extends CoverOccurrence>(
   tomorrow.setDate(tomorrow.getDate() + 1);
   const to = tomorrow.getTime();
   const unique = [...new Map(occurrences.map((o) => [`${o.eventId}:${o.key}`, o])).values()];
+
   const today = unique
     .filter((o) => o.startMs < to && Math.max(o.endMs, o.startMs + 1) > from)
     .sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.startMs - b.startMs);
+
   const next =
     unique.filter((o) => !o.allDay && o.startMs >= now).sort((a, b) => a.startMs - b.startMs)[0] ??
     null;
+
   return { today, next };
 };
 
@@ -268,12 +288,21 @@ export const coverAgenda = <O extends CoverOccurrence>(
  * Whether the mail view shows the cover panel: the `calendarPanel` mailbox preference, read from
  * `GET /v1/mailboxes/:id/preferences` (`{ preferences: {...} }`). Off unless the user turned it on.
  */
-export const calendarPanelEnabled = (response: unknown): boolean => {
-  if (!response || typeof response !== "object") return false;
-  const r = response as { preferences?: unknown; calendarPanel?: unknown };
-  const prefs =
-    r.preferences && typeof r.preferences === "object"
-      ? (r.preferences as { calendarPanel?: unknown })
-      : r;
+export const calendarPanelEnabled = (response: JsonValue): boolean => {
+  if (!Predicate.isObject(response)) return false;
+  const preferences = response.preferences;
+  const prefs = Predicate.isObject(preferences) ? preferences : response;
+
   return prefs.calendarPanel === true;
 };
+
+interface MessageRef {
+  mailboxId: string;
+  threadId: string;
+  deliveryId?: string;
+}
+
+interface CoverWindow {
+  readonly from: number;
+  readonly to: number;
+}

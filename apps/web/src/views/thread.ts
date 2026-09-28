@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import {
   firstCalendarId,
   fromMessagePayload,
@@ -48,26 +49,30 @@ interface ThreadDetail {
   }>;
 }
 
-const SCAN_NOTICE: Readonly<Record<string, string>> = {
-  pending: "Scanning attachments…",
-  infected: "Attachments blocked: a threat was detected.",
-  failed: "Attachments blocked: they couldn't be scanned.",
-};
+const SCAN_NOTICE = new Map([
+  ["pending", "Scanning attachments…"],
+  ["infected", "Attachments blocked: a threat was detected."],
+  ["failed", "Attachments blocked: they couldn't be scanned."],
+]);
 
 const fromText = (from: Delivery["from"]) => from.name || from.address;
+
 const reload = () => window.dispatchEvent(new HashChangeEvent("hashchange"));
 
 const attachmentList = (d: Delivery): HTMLElement | null => {
   if (d.attachments.length === 0) return null;
-  const notice = SCAN_NOTICE[d.scan.status];
+  const notice = SCAN_NOTICE.get(d.scan.status);
   const base = `/v1/mailboxes/${mb()}/deliveries/${encodeURIComponent(d.deliveryId)}/attachments`;
+
   const list = h(
     "ul",
     { class: "attachments", "aria-label": "Attachments" },
     d.attachments.map((a) => {
       const label = `${a.filename} (${formatSize(a.size)})`;
+
       if (notice) return h("li", {}, h("span", { "aria-disabled": "true" }, label));
       const previewable = /^(image\/(png|jpeg|gif|webp)|text\/plain)/.test(a.contentType ?? "");
+
       return h(
         "li",
         {},
@@ -86,6 +91,7 @@ const attachmentList = (d: Delivery): HTMLElement | null => {
       );
     }),
   );
+
   const zip =
     !notice && d.attachments.length > 1
       ? h(
@@ -105,6 +111,7 @@ const attachmentList = (d: Delivery): HTMLElement | null => {
           "Download all",
         )
       : null;
+
   return h(
     "div",
     {},
@@ -121,12 +128,14 @@ const invitationPanel = (subject: string, deliveryId: string): HTMLElement => {
     { class: "invitation", role: "group", "aria-label": "Invitation" },
     h("p", {}, "This message contains a calendar invitation."),
   );
+
   const status = h("p", { role: "status" }, "Looking for the event in your calendar…");
   out.append(status);
   void (async () => {
     try {
       const events = await findThreadInvitations(client, cal(), mb(), deliveryId, subject);
       status.textContent = events.length ? "" : "The event hasn't reached your calendar yet.";
+
       for (const e of events) {
         const answer = h("span", { class: "muted" }, e.answer ? ` · ${e.answer}` : "");
         out.append(
@@ -162,6 +171,7 @@ const invitationPanel = (subject: string, deliveryId: string): HTMLElement => {
       status.textContent = "Calendar unavailable.";
     }
   })();
+
   return out;
 };
 
@@ -169,6 +179,7 @@ const createEventForm = (threadId: string, subject: string, d: Delivery): HTMLEl
   const title = h("input", { value: subject, required: true });
   const start = h("input", { type: "datetime-local", required: true });
   const end = h("input", { type: "datetime-local", required: true });
+
   return h(
     "details",
     {},
@@ -180,7 +191,9 @@ const createEventForm = (threadId: string, subject: string, d: Delivery): HTMLEl
         onsubmit: act("Event created", async () => {
           const { items } = await client.calendars(cal());
           const calendarId = firstCalendarId(items);
+
           if (!calendarId) throw new Error("Create a calendar first");
+
           const built = fromMessagePayload({
             calendarId,
             mailboxId: mb(),
@@ -191,6 +204,7 @@ const createEventForm = (threadId: string, subject: string, d: Delivery): HTMLEl
             end: end.value,
             timeZone: zone(),
           });
+
           if (!built.ok) throw new Error(built.errors.join("; "));
           await client.createEventFromMessage(cal(), built.body);
         }),
@@ -205,6 +219,7 @@ const createEventForm = (threadId: string, subject: string, d: Delivery): HTMLEl
 
 const organizePanel = async (detail: ThreadDetail, signal: AbortSignal): Promise<HTMLElement> => {
   const threadId = detail.thread.threadId;
+
   const [labels, boards, notes] = await Promise.all([
     list<{ labelId: string; name: string }>(`/v1/mailboxes/${mb()}/labels`, signal).catch(
       degrade([]),
@@ -217,41 +232,54 @@ const organizePanel = async (detail: ThreadDetail, signal: AbortSignal): Promise
       signal,
     ).catch(degrade([])),
   ]);
+
   const current = new Set(detail.thread.labels ?? []);
+
   const labelSelect = h(
     "select",
     { "aria-label": "Label" },
     labels.map((l) => h("option", { value: l.name }, l.name)),
   );
+
   const newLabel = h("input", { placeholder: "or new label", "aria-label": "New label" });
+
   const boardSelect = h(
     "select",
     { "aria-label": "Workflow board" },
     boards.map((b) => h("option", { value: b.boardId }, b.name)),
   );
+
   const noteBody = h("textarea", { rows: 3, "aria-label": "Private note" });
+
   const clipText = h("textarea", {
     rows: 2,
     "aria-label": "Clip text (paste the passage to keep)",
   });
+
   const rename = h("input", { value: detail.thread.subject, "aria-label": "Subject" });
+
   const mergeWith = h("input", {
     placeholder: "thread ID to merge in",
     "aria-label": "Thread to merge into this one",
   });
+
   const others = (state.me?.mailboxIds ?? []).filter((m) => m !== mb());
+
   const target = h(
     "select",
     { "aria-label": "Account" },
     others.map((m) => h("option", { value: m }, m)),
   );
+
   const mode = h(
     "select",
     { "aria-label": "Redelivery mode" },
     h("option", { value: "copy" }, "Copy"),
     h("option", { value: "move" }, "Move"),
   );
+
   const latest = detail.deliveries.at(-1);
+
   return h(
     "aside",
     { class: "organize", "aria-label": "Organize this conversation" },
@@ -465,8 +493,10 @@ export const renderThread = async (threadId: string, signal: AbortSignal): Promi
     undefined,
     signal,
   );
+
   const t = detail.thread;
   const unfollowed = t.attention?.unfollowed ?? false;
+
   const replyDraft = (modeName: "reply" | "reply-all" | "forward") =>
     act("Opening draft", async () => {
       const draft = await mailCommand<{ draftId: string } | string>({
@@ -474,9 +504,11 @@ export const renderThread = async (threadId: string, signal: AbortSignal): Promi
         threadId,
         mode: modeName,
       });
-      const id = typeof draft === "string" ? draft : draft.draftId;
+
+      const id = Predicate.isString(draft) ? draft : draft.draftId;
       location.hash = `#/compose?draft=${encodeURIComponent(id)}&thread=${encodeURIComponent(threadId)}`;
     });
+
   const article = h(
     "article",
     { "aria-labelledby": "thread-title" },
@@ -528,6 +560,7 @@ export const renderThread = async (threadId: string, signal: AbortSignal): Promi
       h("button", { type: "button", onclick: () => window.print() }, "Print"),
     ),
   );
+
   for (const d of detail.deliveries) {
     article.append(
       h(
@@ -557,6 +590,7 @@ export const renderThread = async (threadId: string, signal: AbortSignal): Promi
       ),
     );
   }
+
   article.append(await organizePanel(detail, signal));
   show(article);
   void mailCommand({ _tag: "MarkSeen", threadId, observedRevision: t.revision }).catch(bestEffort);

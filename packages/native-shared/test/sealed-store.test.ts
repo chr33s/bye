@@ -6,6 +6,7 @@ import { hmacSha256, open, seal, sealedStore, secureStoreKey } from "../src/seal
 
 const memory = (): KeyValueStore & { data: Map<string, string> } => {
   const data = new Map<string, string>();
+
   return {
     data,
     getItem: async (k) => data.get(k) ?? null,
@@ -16,11 +17,14 @@ const memory = (): KeyValueStore & { data: Map<string, string> } => {
 
 const secure = (): SecureSessionStore & { data: Map<string, string> } => {
   const data = new Map<string, string>();
+
   return {
     data,
     read: async (k) => {
       const v = data.get(k);
+
       if (v === undefined) throw new SecureStoreError("MissingCredential");
+
       return v;
     },
     write: async (k, v) => void data.set(k, v),
@@ -29,12 +33,16 @@ const secure = (): SecureSessionStore & { data: Map<string, string> } => {
 };
 
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+
 const key = new Uint8Array(32).fill(7);
+
 // Written by the s1 construction (HMAC-SHA256 keystream, encrypt-then-MAC) with `key`, storage
 // key "bye:drafts" and an all-0x01 nonce.
 const S1_PLAINTEXT = '["l1","l2"] — café';
+
 const S1_RECORD =
   "s1.AQEBAQEBAQEBAQEBAQEBAVsQv-Q9R5wZKHePAaJ0GiIOUqWZUU0ZUw23dk4K6fB6Qi3uIGmxerwbXqoQaRgvQ95NrYR7";
+
 const flip = (sealed: string, at: number) =>
   sealed.slice(0, at) + (sealed[at] === "A" ? "B" : "A") + sealed.slice(at + 1);
 
@@ -44,6 +52,7 @@ describe("sealed draft storage", () => {
       new TextEncoder().encode("Jefe"),
       new TextEncoder().encode("what do ya want for nothing?"),
     );
+
     expect(hex(mac)).toBe("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
   });
 
@@ -55,6 +64,7 @@ describe("sealed draft storage", () => {
     expect(open(key, "bye:drafts:a", sealed)).toBe(text);
     expect(open(key, "bye:drafts:b", sealed)).toBeNull();
     expect(open(new Uint8Array(32).fill(8), "bye:drafts:a", sealed)).toBeNull();
+
     // Nonce, ciphertext and tag bytes are all authenticated.
     for (const at of [5, 40, sealed.length - 3])
       expect(open(key, "bye:drafts:a", flip(sealed, at))).toBeNull();
@@ -127,11 +137,13 @@ describe("sealed draft storage", () => {
     const store = sealedStore(kv, secureStoreKey(secure()));
     expect(await store.getItem("bye:drafts")).toBe('["l1"]');
     expect(kv.data.get("bye:drafts")).toMatch(/^s2\./);
+
     const broken: SecureSessionStore = {
       read: () => Promise.reject(new SecureStoreError("StorageUnavailable")),
       write: () => Promise.reject(new SecureStoreError("StorageUnavailable")),
       remove: async () => undefined,
     };
+
     const denied = sealedStore(memory(), secureStoreKey(broken));
     await expect(denied.setItem("k", "v")).rejects.toBeInstanceOf(SecureStoreError);
   });

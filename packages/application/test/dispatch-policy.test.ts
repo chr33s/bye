@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Predicate } from "effect";
 import {
   decideDispatch,
   type DispatchJobFacts,
@@ -81,19 +81,23 @@ describe("[§10] dispatch policy", () => {
     const budget = await decide(job(), {
       verdict: { allowed: false, reason: "budget", scope: "daily", suppressed: [] },
     });
+
     expect(budget).toMatchObject({
       _tag: "Refuse",
       blockedBy: "budget",
       failure: { kind: "RetryableBeforeAcceptance" },
     });
+
     const suspended = await decide(job(), {
       verdict: { allowed: false, reason: "suspended", suppressed: [] },
     });
+
     expect(suspended).toMatchObject({
       _tag: "Refuse",
       blockedBy: "suspended",
       failure: { kind: "Rejected" },
     });
+
     const suppressed = await decide(job(), {
       verdict: {
         allowed: false,
@@ -101,6 +105,7 @@ describe("[§10] dispatch policy", () => {
         suppressed: ["bob@x.test", "carol@x.test"],
       },
     });
+
     expect(suppressed).toMatchObject({
       _tag: "Refuse",
       blockedBy: "all-suppressed",
@@ -112,7 +117,10 @@ describe("[§10] dispatch policy", () => {
     const decision = await decide(job(), {
       verdict: { allowed: true, suppressed: ["Bob@X.test"], remaining: 5 },
     });
+
     expect(decision._tag).toBe("Proceed");
-    if (decision._tag === "Proceed") expect([...decision.suppressed]).toEqual(["bob@x.test"]);
+
+    if (Predicate.isTagged(decision, "Proceed"))
+      expect([...decision.suppressed]).toEqual(["bob@x.test"]);
   });
 });

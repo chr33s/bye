@@ -1,12 +1,15 @@
 // Orthogonal mailbox state (§4.2). None of these collapse into a single folder field.
 
 export type SenderDecision = "unknown" | "allowed" | "blocked";
+
 export const SENDER_DECISIONS: ReadonlyArray<SenderDecision> = ["unknown", "allowed", "blocked"];
 
 export type Destination = "imbox" | "feed" | "paper-trail";
+
 export const DESTINATIONS: ReadonlyArray<Destination> = ["imbox", "feed", "paper-trail"];
 
 export type Disposition = "active" | "screening" | "screened-out" | "spam" | "trash";
+
 export const DISPOSITIONS: ReadonlyArray<Disposition> = [
   "active",
   "screening",

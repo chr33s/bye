@@ -8,10 +8,13 @@ import { build } from "rolldown";
 // exactly pinned dependency.
 
 const root = new URL(".", import.meta.url).pathname;
+
 const out = `${root}dist/bye.js`;
+
 const node = new Set([...builtinModules, ...builtinModules.map((m) => `node:${m}`)]);
 
 await rm(`${root}dist`, { recursive: true, force: true });
+
 await build({
   input: `${root}src/main.ts`,
   platform: "node",
@@ -19,8 +22,12 @@ await build({
   output: { file: out, format: "esm", minify: false, sourcemap: false },
   logLevel: "warn",
 });
+
 // One portable shebang (the source's `-S node --experimental-strip-types` is for running .ts).
 const code = (await readFile(out, "utf8")).replace(/^(#!.*\n)+/, "");
+
 await writeFile(out, `#!/usr/bin/env node\n${code}`);
+
 await chmod(out, 0o755);
+
 console.log("built apps/cli/dist/bye.js");

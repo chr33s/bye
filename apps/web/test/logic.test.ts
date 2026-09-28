@@ -49,6 +49,7 @@ const form = (overrides: Partial<EventForm> = {}): EventForm => ({
 describe("web router", () => {
   const route = (hash: string) => {
     const m = matchRoute(hash);
+
     return { name: m.name, ...m.params };
   };
 
@@ -87,6 +88,7 @@ describe("web router", () => {
     expect(route("#/account/other")).toEqual({ name: "admin" });
     expect(route("#/mail")).toEqual({ name: "view" });
     expect(matchRoute("#/mail/imbox?x=1").path).toBe("/mail/imbox");
+
     // Every row resolves to itself: no row is shadowed by an earlier, less specific one.
     for (const [pattern, name] of WEB_ROUTES) {
       const sample = pattern.replace(/:(\w+)\??/g, "x");
@@ -134,7 +136,9 @@ describe("calendar editor", () => {
         location: " Room 1 ",
       }),
     );
+
     expect(built.ok).toBe(true);
+
     if (!built.ok) return;
     expect(built.command).toMatchObject({
       type: "CreateEvent",
@@ -154,7 +158,9 @@ describe("calendar editor", () => {
     const built = eventPayload(
       form({ title: " ", end: "2026-10-01T08:00", reminders: "soon", attendees: "not-an-address" }),
     );
+
     expect(built.ok).toBe(false);
+
     if (built.ok) return;
     expect(built.errors.map((e) => e.field).sort()).toEqual([
       "attendees",
@@ -180,6 +186,7 @@ describe("calendar editor", () => {
       occurrenceKey: "20261001T090000",
     });
     expect(edit.ok && "rrule" in (edit.command.changes as object)).toBe(false);
+
     const series = updatePayload(
       "evt_1",
       3,
@@ -187,6 +194,7 @@ describe("calendar editor", () => {
       "20261001T090000",
       form({ frequency: "DAILY" }),
     );
+
     expect(series.ok && series.command).toMatchObject({
       scope: "series",
       changes: { rrule: "FREQ=DAILY" },
@@ -220,6 +228,7 @@ describe("composer helpers", () => {
     const body = composeBody(
       '<p>Hello <b>there</b><script>alert(1)</script><img src="https://t.example/p.gif"></p>',
     );
+
     expect(body.html).not.toContain("<script");
     expect(body.html).not.toContain("t.example");
     expect(body.text).toContain("Hello there");
@@ -229,6 +238,7 @@ describe("composer helpers", () => {
     const saved = composeBody(
       '<p>Logo <img src="cid:up_logo" alt="logo"> and <img src="cid:up_gone" alt="gone"></p>',
     ).html;
+
     expect(saved).toContain('src="cid:up_logo"');
     const doc = new JSDOM(`<body>${saved}</body>`).window.document;
     restoreInlineImages(doc, { up_logo: new Blob(["png"]) }, () => "blob:local/1");
@@ -246,6 +256,7 @@ describe("composer helpers", () => {
         Team: [{ address: "carol@bye.test" }, { address: "bob@bye.test" }],
       },
     );
+
     expect(r.recipients).toEqual([
       { name: "Ana", address: "ana@bye.test" },
       { address: "bob@bye.test" },
@@ -338,12 +349,16 @@ describe("named degradations", () => {
 describe("calendar navigation", () => {
   const d = (value: string) => {
     const [year, month, day] = value.split("-").map(Number);
+
     return { year: year!, month: month!, day: day! };
   };
+
   const walk = (view: Parameters<typeof step>[0], from: string, dir: 1 | -1, times: number) => {
     const out: Array<string> = [];
     let at = d(from);
+
     for (let i = 0; i < times; i++) out.push(ymd((at = step(view, at, dir))));
+
     return out;
   };
 
@@ -374,6 +389,7 @@ describe("calendar navigation", () => {
     // 2026-10-01 is a Thursday: Monday-first weeks open on 09-28, Sunday-first on 09-27.
     expect(range("week", d("2026-10-01"), 1)).toEqual({ from: d("2026-09-28"), days: 7 });
     expect(range("week", d("2026-10-01"), 0)).toEqual({ from: d("2026-09-27"), days: 7 });
+
     for (const [year, month] of [
       [2026, 2],
       [2026, 3],

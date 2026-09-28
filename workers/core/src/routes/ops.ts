@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Match, Predicate, type Types } from "effect";
 import { requireMailbox, requireScope, requireStepUp } from "@bye/application";
 import {
   ApiError,
@@ -35,6 +35,7 @@ const MAX_DEVICES_PER_USER = 20;
 export const isOpsRequest = (request: Request, env: CoreEnv): boolean => {
   const configured = env.OPS_TOKEN ?? "";
   const h = request.headers.get("authorization") ?? "";
+
   return (
     configured.length >= 32 &&
     h.startsWith("Bearer ") &&
@@ -55,13 +56,13 @@ const ops =
       return errorResponse("unauthenticated", "operator token required");
     const response = await handler(request, params, env);
     console.log(
-      JSON.stringify({
-        level: "info",
-        op: `ops.${op}`,
-        status: response.status,
-        ...(params.id ? { id: params.id } : {}),
-      }),
+      JSON.stringify(
+        params.id
+          ? { level: "info", op: `ops.${op}`, status: response.status, id: params.id }
+          : { level: "info", op: `ops.${op}`, status: response.status },
+      ),
     );
+
     return response;
   };
 
@@ -71,6 +72,7 @@ const opsBody = async <S extends Parameters<typeof decodeAs>[0]>(
   schema: S,
 ): Promise<S["Type"] | null> => {
   const raw = await readJson(request).catch(() => null);
+
   return decodeAs(schema, raw ?? {});
 };
 
@@ -87,6 +89,7 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(({ env }) =>
       Effect.gen(function* () {
         const principal = yield* requireScope("read");
+
         const rows = yield* Effect.promise(() =>
           env.DIRECTORY.prepare(
             "SELECT id, kind, label, enabled, created_at, last_success_at, disabled_at FROM push_devices WHERE user_id = ? ORDER BY created_at DESC",
@@ -102,6 +105,7 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
               disabled_at: number | null;
             }>(),
         );
+
         return {
           items: rows.results.map((r) => ({
             id: r.id,
@@ -128,23 +132,31 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
           const principal = yield* requireUser();
           const p256dh = b.p256dh ?? b.keys?.p256dh;
           const auth = b.auth ?? b.keys?.auth;
-          const registration: PushRegistration = {
+
+          const registration: Types.Mutable<PushRegistration> = {
             kind: b.kind,
             endpoint: b.endpoint,
-            ...(p256dh !== undefined ? { p256dh } : {}),
-            ...(auth !== undefined ? { auth } : {}),
             label: (b.label ?? "").slice(0, 80),
           };
+
+          if (p256dh !== undefined) registration.p256dh = p256dh;
+
+          if (auth !== undefined) registration.auth = auth;
+
           const invalid = validateRegistration(registration);
+
           if (invalid) return yield* badRequest(invalid);
           const id = `pd_${crypto.randomUUID()}`;
+
           const result = yield* Effect.promise(async () => {
             const count = await env.DIRECTORY.prepare(
               "SELECT COUNT(*) AS n FROM push_devices WHERE user_id = ? AND enabled = 1 AND endpoint <> ?",
             )
               .bind(principal.userId, registration.endpoint)
               .first<{ n: number }>();
+
             if ((count?.n ?? 0) >= MAX_DEVICES_PER_USER) return null;
+
             return env.DIRECTORY.prepare(
               `INSERT INTO push_devices (id, user_id, kind, endpoint, p256dh, auth, label, enabled, created_at, failures) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
            ON CONFLICT (user_id, endpoint) DO UPDATE SET kind = excluded.kind, p256dh = excluded.p256dh, auth = excluded.auth, label = excluded.label, enabled = 1, failures = 0, disabled_at = NULL
@@ -162,11 +174,13 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
               )
               .first<{ id: string }>();
           });
+
           if (result === null)
             return yield* new ApiError({
               code: "conflict",
               message: `at most ${MAX_DEVICES_PER_USER} devices`,
             });
+
           return { id: result?.id ?? id };
         }),
       { status: 201 },
@@ -178,13 +192,16 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(({ env, params }) =>
       Effect.gen(function* () {
         const principal = yield* requireUser();
+
         const r = yield* Effect.promise(() =>
           env.DIRECTORY.prepare("DELETE FROM push_devices WHERE id = ? AND user_id = ?")
             .bind(params.id, principal.userId)
             .run(),
         );
+
         if (r.meta.changes !== 1)
           return yield* new ApiError({ code: "not_found", message: "device not found" });
+
         return { ok: true };
       }),
     ),
@@ -199,18 +216,23 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
         yield* requireMailbox(params.mailboxId!, "send");
         yield* requireStepUp("credentials");
         const address = params.address!.toLowerCase();
+
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))
           return yield* badRequest("invalid address");
         const { provider } = b;
         const credential: ExternalCredential = b;
+
         for (const url of [credential.endpoint, credential.tokenEndpoint]) {
           if (url !== undefined && (!url.startsWith("https://") || isForbiddenProxyTarget(url)))
             return yield* badRequest("endpoints must be public https URLs");
         }
+
         if (provider === "http" && (!credential.endpoint || !credential.apiKey))
           return yield* badRequest("relay needs endpoint and apiKey");
+
         if (provider !== "http" && !credential.accessToken && !credential.refreshToken)
           return yield* badRequest("accessToken or refreshToken required");
+
         if (!env.EXTERNAL_IDENTITY_SEAL_KEY)
           return yield* new ApiError({
             code: "conflict",
@@ -219,6 +241,7 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
         yield* Effect.promise(() =>
           storeExternalCredential(env, params.mailboxId!, address, credential),
         );
+
         return { ok: true };
       }),
     ),
@@ -237,6 +260,7 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
             .bind(Date.now(), params.mailboxId, params.address!.toLowerCase())
             .run(),
         );
+
         return { ok: true };
       }),
     ),
@@ -249,10 +273,12 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
     ops("dlq.list", async (request, _p, env) => {
       const url = new URL(request.url);
       const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 50) || 50, 1), 500);
+
       const deadLetters = await listDeadLetters(env, {
         state: url.searchParams.get("state") ?? "held",
         limit,
       });
+
       return json({ deadLetters });
     }),
   ),
@@ -261,9 +287,10 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
     "/v1/ops/dlq/:id/replay",
     ops("dlq.replay", async (_r, params, env) => {
       const outcome = await replayDeadLetter(env, params.id!);
-      return outcome._tag === "NotFound"
+
+      return Predicate.isTagged(outcome, "NotFound")
         ? errorResponse("not_found", "no held dead letter")
-        : json(outcome, outcome._tag === "Unroutable" ? 409 : 200);
+        : json(outcome, Predicate.isTagged(outcome, "Unroutable") ? 409 : 200);
     }),
   ),
   route(
@@ -271,8 +298,10 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
     "/v1/ops/dlq/:id/discard",
     ops("dlq.discard", async (request, params, env) => {
       const b = await opsBody(request, OpsDiscardRequest);
+
       if (!b) return errorResponse("bad_request", "invalid body");
       const note = b.note ?? "discarded by operator";
+
       return (await discardDeadLetter(env, params.id!, note))
         ? json({ ok: true })
         : errorResponse("not_found", "no held dead letter");
@@ -283,12 +312,15 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
     "/v1/ops/reindex",
     ops("reindex", async (request, _p, env) => {
       const b = await opsBody(request, OpsReindexRequest);
+
       if (!b) return errorResponse("bad_request", "mailboxId required");
       const { mailboxId } = b;
+
       const instance = await env.REINDEX.create({
         id: `reindex-${mailboxId}-${Date.now()}`,
         params: { v: 1, mailboxId },
       });
+
       return json({ instanceId: instance.id }, 202);
     }),
   ),
@@ -297,8 +329,10 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
     "/v1/ops/erasure",
     ops("erasure", async (request, _p, env) => {
       const b = await opsBody(request, OpsErasureRequest);
+
       if (!b) return errorResponse("bad_request", "userId required");
       const { instanceId, plan } = await startErasure(env, b.userId, b.reason ?? "operator");
+
       return json(
         {
           instanceId,
@@ -317,20 +351,25 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
     "/v1/ops/restore",
     ops("restore", async (request, _p, env) => {
       const b = await opsBody(request, OpsRestoreRequest);
+
       if (!b) return errorResponse("bad_request", "kind, id, confirm and at are required");
       const { kind, id, at } = b;
+
       const patterns = {
         mailbox: /^mbx_[A-Za-z0-9_-]{1,80}$/,
         calendar: /^cal_[A-Za-z0-9_-]{1,80}$/,
         space: /^spc_[A-Za-z0-9_-]{1,80}$/,
       };
+
       if (!patterns[kind].test(id))
         return errorResponse(
           "bad_request",
           "kind must be mailbox|calendar|space with a matching id",
         );
+
       if (b.confirm !== id)
         return errorResponse("bad_request", "confirm must repeat the target id");
+
       try {
         validateRestorePoint(at, Date.now());
       } catch (e) {
@@ -339,13 +378,15 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
           e instanceof Error ? e.message : "invalid restore point",
         );
       }
-      const stub =
-        kind === "mailbox"
-          ? mailbox(env, id)
-          : kind === "calendar"
-            ? calendar(env, id)
-            : space(env, id);
+
+      const stub = Match.value(kind).pipe(
+        Match.when("mailbox", () => mailbox(env, id)),
+        Match.when("calendar", () => calendar(env, id)),
+        Match.orElse(() => space(env, id)),
+      );
+
       let restored: { bookmark: string; at: number };
+
       try {
         const before = await stub.sessionEpoch();
         restored = await stub.restoreTo(at);
@@ -354,7 +395,9 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
       } catch (e) {
         return errorResponse("unavailable", e instanceof Error ? e.message : "restore failed");
       }
+
       const replay = await replayTombstonesFor(env, kind, id);
+
       return json(
         {
           kind,

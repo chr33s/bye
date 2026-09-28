@@ -18,11 +18,14 @@ export interface SigMirrorEnv extends MirrorEnv {
 export class SigMirrorJob extends DurableObject<SigMirrorEnv> {
   async run(): Promise<{ readonly started: boolean }> {
     const container = this.ctx.container;
+
     if (!container) throw new Error("mirror job container binding missing");
+
     if (container.running) return { started: false };
     // Everything that can fail runs before the container starts, and the alarm is armed first, so
     // a failed run never leaves an unbounded container behind.
-    const self = (this.ctx.exports as unknown as { default?: Fetcher }).default;
+    const self = (this.ctx.exports as { default?: Fetcher }).default;
+
     if (!self)
       throw new Error(
         "ctx.exports loopback unavailable; enable the enable_ctx_exports compatibility flag",
@@ -33,12 +36,14 @@ export class SigMirrorJob extends DurableObject<SigMirrorEnv> {
       enableInternet: true,
       env: { MIRROR_URL: `http://${MIRROR_HOST}`, WRITE_TOKEN: this.env.WRITE_TOKEN },
     });
+
     try {
       await container.interceptOutboundHttp(MIRROR_HOST, self);
     } catch (e) {
       await container.destroy(e instanceof Error ? e : new Error(String(e)));
       throw e;
     }
+
     return { started: true };
   }
 

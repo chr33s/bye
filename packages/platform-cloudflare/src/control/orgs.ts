@@ -25,7 +25,9 @@ export interface OrgActor {
   readonly userId: string;
   readonly role: "owner" | "admin";
 }
+
 export type OrgKind = "personal" | "domain" | "family";
+
 export type ReassignmentPolicy = "retain" | "reassign-to-admin" | "forward-then-close";
 
 export interface OrgMemberView {
@@ -86,8 +88,10 @@ export class ControlOrganizations {
    */
   async verifiedActor(orgId: string, userId: string): Promise<OrgActor> {
     const m = await this.membership(orgId, userId);
+
     if (!m || m.status !== "active" || m.role === "member")
       return reject("forbidden", "administrator role required");
+
     return { userId, role: m.role };
   }
 
@@ -139,11 +143,13 @@ export class ControlOrganizations {
         detail: { kind: input.kind },
       }),
     ]);
+
     return id;
   }
 
   async seats(orgId: string): Promise<SeatUsage> {
     const db = primary(this.db);
+
     const [org, used, ent] = await Promise.all([
       q(db, "SELECT seat_limit FROM organizations WHERE id = ?", orgId).first<{
         seat_limit: number;
@@ -155,19 +161,25 @@ export class ControlOrganizations {
       ).first<{ n: number }>(),
       q(db, "SELECT seats FROM entitlements WHERE org_id = ?", orgId).first<{ seats: number }>(),
     ]);
+
     if (!org) return reject("not_found", "organization");
+
     return { limit: org.seat_limit, used: used?.n ?? 0, entitled: ent?.seats ?? null };
   }
 
   /** Seat limit set by an administrator, bounded by the entitlement and never below current use. */
   async setSeatLimit(orgId: string, actor: OrgActor, limit: number): Promise<SeatUsage> {
     const actorId = actor.userId;
+
     if (!Number.isInteger(limit) || limit < 1 || limit > 10_000)
       reject("bad_request", "invalid seat limit");
     const seats = await this.seats(orgId);
+
     if (limit < seats.used) reject("conflict", "seat limit below seats in use");
+
     if (seats.entitled !== null && limit > seats.entitled)
       reject("conflict", "seat limit exceeds purchased seats");
+
     // Re-checked in SQL: a member joining (or a seat downgrade) between the read and the write
     // must not leave the limit below use or above the purchased seats.
     const results = await this.db.batch([
@@ -192,7 +204,9 @@ export class ControlOrganizations {
         detail: { from: seats.limit, to: limit },
       }),
     ]);
+
     if (changesOf(results[0]) === 0) reject("conflict", "seat limit conflicts with seats in use");
+
     return this.seats(orgId);
   }
 
@@ -208,7 +222,9 @@ export class ControlOrganizations {
     role: OrgRole;
   }> {
     const m = await this.membership(orgId, actorId);
+
     if (!m || m.status !== "active") return reject("forbidden", "not a member");
+
     const o = await q(
       primary(this.db),
       "SELECT id, name, kind, seat_limit, reassignment_policy FROM organizations WHERE id = ?",
@@ -220,7 +236,9 @@ export class ControlOrganizations {
       seat_limit: number;
       reassignment_policy: ReassignmentPolicy;
     }>();
+
     if (!o) return reject("not_found", "organization");
+
     return {
       id: o.id,
       name: o.name,
@@ -238,9 +256,11 @@ export class ControlOrganizations {
     role: Exclude<OrgRole, "owner">,
   ): Promise<{ invitationId: string; token: string }> {
     const actorId = actor.userId;
+
     if (seatsFull(await this.seats(orgId))) reject("conflict", "no seats available");
     const normalized = normalizeAddress(address);
     const now = this.clock.now();
+
     // Every invitation mails a third party from the service domain: one outstanding invitation
     // per (org, address), and a bounded number outstanding per org, so the route cannot be used
     // to send repeated or bulk unsolicited mail.
@@ -251,11 +271,14 @@ export class ControlOrganizations {
       orgId,
       now,
     ).first<{ n: number; same: number }>();
+
     if ((pending?.same ?? 0) > 0) reject("conflict", "an invitation to this address is pending");
+
     if ((pending?.n ?? 0) >= MAX_PENDING_INVITATIONS)
       reject("conflict", "too many pending invitations");
     const token = randomToken();
     const id = this.clock.id("inv");
+
     // Guarded insert: two racing invites cannot both pass the checks above.
     const [inserted] = await this.db.batch([
       q(
@@ -286,7 +309,9 @@ export class ControlOrganizations {
         detail: { role },
       }),
     ]);
+
     if (changesOf(inserted) === 0) reject("conflict", "an invitation to this address is pending");
+
     return { invitationId: id, token };
   }
 
@@ -306,6 +331,7 @@ export class ControlOrganizations {
         revoked_at: number | null;
       }>(),
     );
+
     if (
       !inv ||
       inv.accepted_at !== null ||
@@ -313,18 +339,24 @@ export class ControlOrganizations {
       inv.expires_at < this.clock.now()
     )
       return reject("not_found", "invitation");
+
     const user = await q(this.db, "SELECT primary_address FROM users WHERE id = ?", userId).first<{
       primary_address: string;
     }>();
+
     if (!user || user.primary_address !== inv.address)
       reject("forbidden", "invitation addressed to another account");
     const existing = await this.membership(inv.org_id, userId);
+
     // An invitation never reactivates a suspended member (that is `reactivate`, by an admin) and
     // never changes an existing member's role.
     if (existing?.status === "suspended") reject("forbidden", "membership suspended");
+
     if (existing?.status === "active") reject("conflict", "already a member");
+
     if (seatsFull(await this.seats(inv.org_id))) reject("conflict", "no seats available");
     const now = this.clock.now();
+
     // The join is conditional in SQL on the invitation still being open, a seat being free, and
     // any existing membership being `removed`; the invitation is consumed only if the join landed.
     const results = await this.db.batch([
@@ -362,7 +394,9 @@ export class ControlOrganizations {
         detail: { role: inv.role },
       }),
     ]);
+
     if (changesOf(results[0]) === 0) reject("conflict", "invitation could not be accepted");
+
     return { orgId: inv.org_id, role: inv.role };
   }
 
@@ -380,26 +414,34 @@ export class ControlOrganizations {
 
   private async target(orgId: string, actor: OrgActor, userId: string) {
     const target = await this.membership(orgId, userId);
+
     if (!target || target.status === "removed") return reject("not_found", "member");
+
     if (target.role === "owner" && actor.role !== "owner")
       reject("forbidden", "only owners manage owners");
+
     if (
       target.role === "owner" &&
       target.status === "active" &&
       (await this.activeOwners(orgId)) <= 1
     )
       reject("conflict", "cannot remove or suspend the last owner");
+
     return target;
   }
 
   async setRole(orgId: string, actor: OrgActor, userId: string, role: OrgRole): Promise<void> {
     const { userId: actorId, role: actorRole } = actor;
     const target = await this.membership(orgId, userId);
+
     if (!target || target.status === "removed") return reject("not_found", "member");
+
     if ((role === "owner" || target.role === "owner") && actorRole !== "owner")
       reject("forbidden", "only owners manage owners");
+
     if (target.role === "owner" && role !== "owner" && (await this.activeOwners(orgId)) <= 1)
       reject("conflict", "cannot demote the last owner");
+
     // The last-owner rule is re-checked inside the write: two concurrent demotions of the only
     // two owners cannot both land.
     const results = await this.db.batch([
@@ -422,6 +464,7 @@ export class ControlOrganizations {
         detail: { from: target.role, to: role },
       }),
     ]);
+
     if (changesOf(results[0]) === 0) reject("conflict", "cannot demote the last owner");
   }
 
@@ -434,6 +477,7 @@ export class ControlOrganizations {
     await this.target(orgId, actor, userId);
     const actorId = actor.userId;
     const now = this.clock.now();
+
     const results = await this.db.batch([
       q(
         this.db,
@@ -451,12 +495,15 @@ export class ControlOrganizations {
         target: userId,
       }),
     ]);
+
     if (changesOf(results[0]) === 0) reject("conflict", "cannot remove or suspend the last owner");
   }
 
   async reactivate(orgId: string, actor: OrgActor, userId: string): Promise<void> {
     const target = await this.membership(orgId, userId);
+
     if (!target || target.status !== "suspended") return reject("not_found", "suspended member");
+
     if (target.role === "owner" && actor.role !== "owner")
       reject("forbidden", "only owners manage owners");
     const actorId = actor.userId;
@@ -480,12 +527,15 @@ export class ControlOrganizations {
   ): Promise<{ policy: ReassignmentPolicy; mailboxes: ReadonlyArray<string> }> {
     await this.target(orgId, actor, userId);
     const actorId = actor.userId;
+
     const org = await q(
       primary(this.db),
       "SELECT reassignment_policy FROM organizations WHERE id = ?",
       orgId,
     ).first<{ reassignment_policy: ReassignmentPolicy }>();
+
     const policy = org?.reassignment_policy ?? "retain";
+
     const owned = (
       await q(
         this.db,
@@ -494,12 +544,16 @@ export class ControlOrganizations {
         userId,
       ).all<{ id: string }>()
     ).results.map((r) => r.id);
+
     const now = this.clock.now();
+
     // The removal is conditional on the last-owner rule inside the write; every follow-on change
     // is keyed to that removal having landed in this batch (the member row now `removed` at `now`).
     const removed =
       "EXISTS (SELECT 1 FROM memberships WHERE org_id = ? AND user_id = ? AND status = 'removed' AND updated_at = ?)";
+
     const removedArgs = [orgId, userId, now];
+
     const statements: Array<D1StatementLike> = [
       q(
         this.db,
@@ -518,6 +572,7 @@ export class ControlOrganizations {
         ...removedArgs,
       ),
     ];
+
     for (const mailboxId of owned) {
       statements.push(
         q(
@@ -528,6 +583,7 @@ export class ControlOrganizations {
           ...removedArgs,
         ),
       );
+
       if (policy === "reassign-to-admin") {
         statements.push(
           q(
@@ -558,6 +614,7 @@ export class ControlOrganizations {
         );
       }
     }
+
     statements.push(
       q(
         this.db,
@@ -572,13 +629,17 @@ export class ControlOrganizations {
       ),
     );
     const results = await this.db.batch(statements);
+
     if (changesOf(results[0]) === 0) reject("conflict", "cannot remove or suspend the last owner");
+
     return { policy, mailboxes: owned };
   }
 
   async members(orgId: string, actorId: string): Promise<ReadonlyArray<OrgMemberView>> {
     const m = await this.membership(orgId, actorId);
+
     if (!m || m.status !== "active") return reject("forbidden", "not a member");
+
     return (
       await q(
         this.db,
@@ -646,6 +707,7 @@ export class ControlOrganizations {
         detail: { members: memberIds.length },
       }),
     ]);
+
     return id;
   }
 }

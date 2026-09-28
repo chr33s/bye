@@ -1,3 +1,4 @@
+import { Predicate, type Schema } from "effect";
 import type { CoreEnv } from "./env.ts";
 
 // Large queue payloads by reference (§6, §7: queue messages ≤128 KB). The outbox relay stores an
@@ -6,26 +7,29 @@ import type { CoreEnv } from "./env.ts";
 
 export const QUEUE_REF_PREFIX = "_queue/";
 
-export interface QueueRef {
+/** A queue message body: JSON by construction (`contentType: "json"`), decoded per consumer. */
+export type QueueBody = Schema.Json;
+
+export type QueueRef = {
   readonly schemaVersion: 1;
   readonly type: "ref";
   readonly key: string;
-}
+};
 
-export const isQueueRef = (body: unknown): body is QueueRef =>
-  typeof body === "object" &&
-  body !== null &&
-  (body as { type?: unknown }).type === "ref" &&
-  typeof (body as { key?: unknown }).key === "string" &&
-  (body as QueueRef).key.startsWith(QUEUE_REF_PREFIX);
+export const isQueueRef = (body: QueueBody): body is QueueRef =>
+  Predicate.isReadonlyObject(body) &&
+  body.type === "ref" &&
+  Predicate.isString(body.key) &&
+  body.key.startsWith(QUEUE_REF_PREFIX);
 
 export const offloadToR2 =
   (env: CoreEnv) =>
-  async (eventId: string, _queue: string, body: unknown): Promise<QueueRef> => {
+  async <B>(eventId: string, _queue: string, body: B): Promise<QueueRef> => {
     const key = `${QUEUE_REF_PREFIX}${eventId}.json`;
     await env.PARTS.put(key, JSON.stringify(body), {
       httpMetadata: { contentType: "application/json" },
     });
+
     return { schemaVersion: 1, type: "ref", key };
   };
 
@@ -37,9 +41,14 @@ export const offloadToR2 =
  */
 export const QUEUE_REF_GONE: unique symbol = Symbol("queue-ref-gone");
 
-export const resolveQueueRef = async (env: CoreEnv, ref: QueueRef): Promise<unknown> => {
+export const resolveQueueRef = async (
+  env: CoreEnv,
+  ref: QueueRef,
+): Promise<QueueBody | typeof QUEUE_REF_GONE> => {
   const object = await env.PARTS.get(ref.key);
+
   if (!object) return QUEUE_REF_GONE;
+
   return JSON.parse(await object.text());
 };
 

@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ControlAuth, ControlDirectory, SendingPolicy } from "@bye/platform-cloudflare";
+import {
+  type D1Value,
+  ControlAuth,
+  ControlDirectory,
+  SendingPolicy,
+} from "@bye/platform-cloudflare";
 import { FakeCloudflare } from "@bye/testing";
 import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import { authConfig } from "../src/services.ts";
 import { onboardingDepsFor } from "../src/workflows/domain.ts";
 import { zoneApiToken } from "../src/zone-token.ts";
-import { type Harness, makeHarness } from "./harness.ts";
+import { type Harness, makeHarness, executionContext } from "./harness.ts";
 
 // Administration routes (admin.ts): platform operator tooling, account closure, team member
 // administration, billing checkout/plan/cancel and customer-domain aliases — authorization first.
@@ -17,10 +22,7 @@ import { type Harness, makeHarness } from "./harness.ts";
   }
 };
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 interface Account {
   readonly userId: string;
@@ -37,11 +39,13 @@ const signup = async (h: Harness, address: string, steppedUp = true): Promise<Ac
   const account = await new ControlDirectory(h.env.DIRECTORY, kernelClock).provisionPersonalAccount(
     { address, displayName: address.split("@")[0]! },
   );
+
   const session = await new ControlAuth(
     h.env.DIRECTORY,
     kernelClock,
     await authConfig(h.env),
   ).issueSession(account.userId, "test", steppedUp);
+
   return { ...account, address, cookie: `__Host-session=${session.token}` };
 };
 
@@ -52,6 +56,7 @@ const plainSession = async (h: Harness, a: Account): Promise<Account> => {
     kernelClock,
     await authConfig(h.env),
   ).issueSession(a.userId, "plain", false);
+
   return { ...a, cookie: `__Host-session=${session.token}` };
 };
 
@@ -62,26 +67,43 @@ const readOnlyToken = async (h: Harness, a: Account): Promise<Caller> => {
     kernelClock,
     await authConfig(h.env),
   ).createApiToken(a.userId, { kind: "agent", label: "ro", scopes: ["read"] });
+
   return { headers: { authorization: `Bearer ${token.token}` } };
 };
 
-const call = async (h: Harness, a: Caller | null, method: string, path: string, json?: unknown) => {
+const call = async <JsonValue>(
+  h: Harness,
+  a: Caller | null,
+  method: string,
+  path: string,
+  json?: JsonValue,
+) => {
+  const requestHeaders = new Headers();
+
+  if (a && "cookie" in a) requestHeaders.set("cookie", a.cookie);
+
+  if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+  if (json !== undefined) requestHeaders.set("content-type", "application/json");
+
+  if (a && "headers" in a) {
+    for (const [k, v] of Object.entries(a.headers)) requestHeaders.set(k, v);
+  }
+
   const response = await handleFetch(
-    new Request(`${h.env.APP_ORIGIN}${path}`, {
-      method,
-      headers: {
-        ...(a && "cookie" in a ? { cookie: a.cookie } : {}),
-        ...(a && "headers" in a ? a.headers : {}),
-        ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-        ...(json !== undefined ? { "content-type": "application/json" } : {}),
-      },
-      ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
-    }),
+    new Request(
+      `${h.env.APP_ORIGIN}${path}`,
+      json !== undefined
+        ? { method, headers: requestHeaders, body: JSON.stringify(json) }
+        : { method, headers: requestHeaders },
+    ),
     h.env,
     ctx,
   );
+
   const text = await response.text();
   const type = response.headers.get("content-type") ?? "";
+
   return {
     status: response.status,
     text,
@@ -96,7 +118,7 @@ const refusal = (r: { status: number; body: any }) => [
   r.body?.error?.details?.stepUp === true,
 ];
 
-const count = async (h: Harness, sql: string, ...binds: Array<unknown>) =>
+const count = async (h: Harness, sql: string, ...binds: Array<D1Value>) =>
   (await h.d1
     .prepare(sql)
     .bind(...binds)
@@ -114,6 +136,7 @@ describe("admin routes", () => {
   const operator = async () => {
     const op = await signup(h, "op@bye.test");
     (h.env as { OPERATOR_USER_IDS?: string }).OPERATOR_USER_IDS = op.userId;
+
     return op;
   };
 
@@ -130,6 +153,7 @@ describe("admin routes", () => {
       await operator();
       const ana = await signup(h, "ana@bye.test");
       await signal("sig_1", "user", ana.userId);
+
       for (const [method, path, json] of [
         ["GET", "/v1/operator/signals", undefined],
         ["POST", "/v1/operator/signals/sig_1/review", { resolution: "false-positive" }],
@@ -143,6 +167,7 @@ describe("admin routes", () => {
         const r = await call(h, ana, method, path, json);
         expect([method, path, ...refusal(r)]).toEqual([method, path, 403, "forbidden", false]);
       }
+
       // The signal was not reviewed by the refused call.
       expect(
         await count(h, "SELECT COUNT(*) AS n FROM sending_signals WHERE reviewed_at IS NULL"),
@@ -173,6 +198,7 @@ describe("admin routes", () => {
         )
         .bind(Date.now())
         .run();
+
       for (const [method, path, json] of [
         ["POST", "/v1/operator/signals/sig_1/review", { resolution: "false-positive" }],
         ["POST", "/v1/operator/suspensions", { scope: "user", key: ana.userId, reason: "abuse" }],
@@ -185,6 +211,7 @@ describe("admin routes", () => {
         const r = await call(h, plain, method, path, json);
         expect([path, ...refusal(r)]).toEqual([path, 403, "forbidden", true]);
       }
+
       // Nothing was loosened or tightened: both suspensions and the suppression survive.
       expect(
         await count(h, "SELECT COUNT(*) AS n FROM sending_suspensions WHERE lifted_at IS NULL"),
@@ -213,13 +240,16 @@ describe("admin routes", () => {
         key: ana.userId,
         reason: "abuse review",
       });
+
       expect([suspended.status, suspended.body]).toEqual([201, { suspended: true }]);
+
       const active = () =>
         count(
           h,
           "SELECT COUNT(*) AS n FROM sending_suspensions WHERE scope = 'user' AND key = ? AND lifted_at IS NULL",
           ana.userId,
         );
+
       expect(await active()).toBe(1);
       expect(
         (
@@ -230,10 +260,12 @@ describe("admin routes", () => {
       ).toBe(200);
       expect(await active()).toBe(0);
       expect((await call(h, op, "GET", "/v1/operator/signals")).body.items).toEqual([]);
+
       // A reviewed (or unknown) signal cannot be reviewed again.
       const again = await call(h, op, "POST", "/v1/operator/signals/sig_1/review", {
         resolution: "confirmed-abuse",
       });
+
       expect([again.status, again.body.error.code]).toEqual([404, "not_found"]);
 
       // Lift: true once, then false; an unknown scope is a 400.
@@ -280,10 +312,12 @@ describe("admin routes", () => {
         )
         .bind(ana.organizationId)
         .run();
+
       const credit = await call(h, op, "POST", "/v1/operator/credits", {
         orgId: ana.organizationId,
         cents: 750,
       });
+
       expect([credit.status, credit.body]).toEqual([201, { credited: true }]);
       expect(
         await count(
@@ -292,20 +326,24 @@ describe("admin routes", () => {
           ana.organizationId,
         ),
       ).toBe(750);
+
       const zero = await call(h, op, "POST", "/v1/operator/credits", {
         orgId: ana.organizationId,
         cents: 0,
       });
+
       expect([zero.status, zero.body.error.code]).toEqual([400, "bad_request"]);
     });
 
     it("[§10] support sessions open only under the user's active grant", async () => {
       const op = await operator();
       const ana = await signup(h, "ana@bye.test");
+
       const grant = await call(h, ana, "POST", "/v1/support-access", {
         reason: "cannot see my mail",
         hours: 2,
       });
+
       expect(grant.status).toBe(201);
       const grantId = grant.body.id ?? grant.body.grantId;
       const opened = await call(h, op, "POST", "/v1/operator/support-sessions", { grantId });
@@ -317,6 +355,7 @@ describe("admin routes", () => {
       const unknown = await call(h, op, "POST", "/v1/operator/support-sessions", {
         grantId: "sgr_nope",
       });
+
       expect(refusal(unknown)).toEqual([403, "forbidden", false]);
       // A revoked grant cannot be used either.
       expect((await call(h, ana, "DELETE", `/v1/support-access/${grantId}`)).status).toBe(200);
@@ -342,9 +381,11 @@ describe("admin routes", () => {
         "forbidden",
         true,
       ]);
+
       const mismatch = await call(h, ana, "POST", "/v1/account/close", {
         confirmAddress: "someone@bye.test",
       });
+
       expect([mismatch.status, mismatch.body.error.code]).toEqual([409, "conflict"]);
       expect(
         await count(
@@ -386,6 +427,7 @@ describe("admin routes", () => {
       const closed = await call(h, ana, "POST", "/v1/account/close", {
         confirmAddress: "ana@bye.test",
       });
+
       expect(closed.status).toBe(200);
       expect(h.queues.PROPAGATE.messages).toHaveLength(1);
       expect(h.queues.PROPAGATE.messages[0]).toMatchObject({
@@ -417,20 +459,25 @@ describe("admin routes", () => {
       const org = await call(h, owner, "POST", "/v1/orgs", { kind: "domain", name: "Acme" });
       expect(org.status).toBe(201);
       const orgId = org.body.id as string;
+
       const join = async (address: string) => {
         const invite = await call(h, owner, "POST", `/v1/orgs/${orgId}/invitations`, {
           address,
           role: "member",
         });
+
         const member = await signup(h, address);
         expect(
           (await call(h, member, "POST", "/v1/invitations/accept", { token: invite.body.token }))
             .status,
         ).toBe(200);
+
         return member;
       };
+
       return { owner, orgId, bob: await join("bob@bye.test"), carol: await join("carol@bye.test") };
     };
+
     const memberOf = async (orgId: string, owner: Account, userId: string) =>
       ((await call(h, owner, "GET", `/v1/orgs/${orgId}/members`)).body.items as Array<any>).find(
         (m) => m.userId === userId,
@@ -440,12 +487,14 @@ describe("admin routes", () => {
       const { owner, orgId, bob, carol } = await team();
       const eve = await signup(h, "eve@bye.test");
       const plainOwner = await plainSession(h, owner);
+
       const mutations = [
         ["PATCH", `/v1/orgs/${orgId}/members/${carol.userId}`, { role: "admin" }],
         ["POST", `/v1/orgs/${orgId}/members/${carol.userId}/suspend`, {}],
         ["POST", `/v1/orgs/${orgId}/members/${carol.userId}/reactivate`, {}],
         ["DELETE", `/v1/orgs/${orgId}/members/${carol.userId}`, undefined],
       ] as const;
+
       for (const [method, path, json] of mutations) {
         for (const [who, caller] of [
           ["member", bob],
@@ -461,9 +510,11 @@ describe("admin routes", () => {
             false,
           ]);
         }
+
         const r = await call(h, plainOwner, method, path, json);
         expect([method, path, ...refusal(r)]).toEqual([method, path, 403, "forbidden", true]);
       }
+
       expect(await memberOf(orgId, owner, carol.userId)).toMatchObject({
         role: "member",
         status: "active",
@@ -472,9 +523,11 @@ describe("admin routes", () => {
 
     it("[O02] an admin changes a role, suspends, reactivates and removes a member", async () => {
       const { owner, orgId, bob } = await team();
+
       const role = await call(h, owner, "PATCH", `/v1/orgs/${orgId}/members/${bob.userId}`, {
         role: "admin",
       });
+
       expect([role.status, role.body]).toEqual([200, { userId: bob.userId, role: "admin" }]);
       expect(await memberOf(orgId, owner, bob.userId)).toMatchObject({ role: "admin" });
 
@@ -493,6 +546,7 @@ describe("admin routes", () => {
         `/v1/orgs/${orgId}/members/${bob.userId}/reactivate`,
         {},
       );
+
       expect([back.status, back.body]).toEqual([200, { userId: bob.userId, status: "active" }]);
       expect(await memberOf(orgId, owner, bob.userId)).toMatchObject({ status: "active" });
 
@@ -505,7 +559,7 @@ describe("admin routes", () => {
   });
 
   describe("billing", () => {
-    const provider: Array<{ action: string; [k: string]: unknown }> = [];
+    const provider: Array<{ action: string; successUrl?: string }> = [];
     let realFetch: typeof fetch;
     beforeEach(() => {
       provider.length = 0;
@@ -516,8 +570,9 @@ describe("admin routes", () => {
       realFetch = globalThis.fetch;
       globalThis.fetch = (async (url: string, init: RequestInit) => {
         if (String(url) !== "https://billing.example/api") return realFetch(url, init);
-        const body = JSON.parse(init.body as string) as { action: string };
+        const body = JSON.parse(init.body as string) as { action: string; successUrl?: string };
         provider.push(body);
+
         return Response.json(
           body.action === "checkout.create" ? { id: "prov_1", url: "https://pay.example/1" } : {},
         );
@@ -529,25 +584,30 @@ describe("admin routes", () => {
 
     it("[A02] checkout creates a session whose signed return URL reads its status", async () => {
       const ana = await signup(h, "ana@bye.test");
+
       const created = await call(h, ana, "POST", "/v1/billing/checkout", {
         plan: "personal",
         interval: "monthly",
       });
+
       expect(created.status).toBe(201);
       expect(created.body).toEqual({ sessionId: expect.any(String), url: "https://pay.example/1" });
       const request = provider.find((p) => p.action === "checkout.create")!;
       expect(request).toMatchObject({ orgId: ana.organizationId, plan: "personal", seats: 1 });
-      const sig = new URL(String(request.successUrl)).searchParams.get("sig")!;
+      const sig = new URL(request.successUrl!).searchParams.get("sig")!;
+
       const status = await call(
         h,
         ana,
         "GET",
         `/v1/billing/checkout/${created.body.sessionId}?sig=${sig}`,
       );
+
       expect([status.status, status.body]).toEqual([
         200,
         { status: "open", purpose: "subscription" },
       ]);
+
       // A forged signature (or another session's) proves nothing.
       const forged = await call(
         h,
@@ -555,6 +615,7 @@ describe("admin routes", () => {
         "GET",
         `/v1/billing/checkout/${created.body.sessionId}?sig=${"0".repeat(64)}`,
       );
+
       expect(refusal(forged)).toEqual([403, "forbidden", false]);
       // Expired sessions report as expired.
       vi.setSystemTime(Date.now() + 7 * 86400_000);
@@ -575,6 +636,7 @@ describe("admin routes", () => {
         .run();
       const change = { orgId: ana.organizationId, plan: "personal", interval: "annual" };
       const cancel = { orgId: ana.organizationId, atPeriodEnd: true };
+
       // Another customer cannot touch Ana's subscription.
       for (const [path, json] of [
         ["/v1/billing/plan", change],
@@ -588,6 +650,7 @@ describe("admin routes", () => {
           false,
         ]);
       }
+
       const plain = await plainSession(h, ana);
       expect(refusal(await call(h, plain, "POST", "/v1/billing/plan", change))).toEqual([
         403,
@@ -624,9 +687,11 @@ describe("admin routes", () => {
           ana.organizationId,
         ),
       ).toBe(1);
+
       const ledger = (await call(h, ana, "GET", "/v1/billing")).body.ledger as Array<{
         kind: string;
       }>;
+
       expect(ledger.map((l) => l.kind).sort()).toEqual([
         "cancel-requested",
         "plan-change-requested",
@@ -644,11 +709,13 @@ describe("admin routes", () => {
         )
         .bind(ana.organizationId)
         .run();
+
       return { ana, bob };
     };
 
     it("[O01] another organization cannot list, alias or delete a domain", async () => {
       const { ana, bob } = await withDomain();
+
       for (const [method, path, json] of [
         ["GET", `/v1/orgs/${ana.organizationId}/domains`, undefined],
         ["GET", "/v1/domains/dom_ana/aliases", undefined],
@@ -659,6 +726,7 @@ describe("admin routes", () => {
         const r = await call(h, bob, method, path, json);
         expect([method, path, ...refusal(r)]).toEqual([method, path, 403, "forbidden", false]);
       }
+
       expect(
         await count(
           h,
@@ -672,20 +740,26 @@ describe("admin routes", () => {
 
     it("[O01] aliases: add to an org mailbox only, list, remove; domain delete needs step-up and disables routes", async () => {
       const { ana, bob } = await withDomain();
+
       const foreign = await call(h, ana, "POST", "/v1/domains/dom_ana/aliases", {
         localPart: "hi",
         mailboxId: bob.mailboxId,
       });
+
       expect(refusal(foreign)).toEqual([403, "forbidden", false]);
+
       const added = await call(h, ana, "POST", "/v1/domains/dom_ana/aliases", {
         localPart: "Hello",
         mailboxId: ana.mailboxId,
       });
+
       expect([added.status, added.body]).toEqual([201, { address: "hello@ana-co.test" }]);
+
       const dup = await call(h, ana, "POST", "/v1/domains/dom_ana/aliases", {
         localPart: "hello",
         mailboxId: ana.mailboxId,
       });
+
       expect([dup.status, dup.body.error.code]).toEqual([409, "conflict"]);
       await call(h, ana, "POST", "/v1/domains/dom_ana/aliases", {
         localPart: "sales",
@@ -707,6 +781,7 @@ describe("admin routes", () => {
       expect(JSON.stringify(orgDomains.body)).toContain("ana-co.test");
 
       const plain = await plainSession(h, ana);
+
       // Alias routing changes and onboarding retries need the same fresh step-up as the domain.
       for (const [method, path, json] of [
         ["POST", "/v1/domains/dom_ana/aliases", { localPart: "ops", mailboxId: ana.mailboxId }],
@@ -761,6 +836,7 @@ describe("admin routes", () => {
       // The bootstrap owner's address already lives on the zone (Part A).
       const owner = await signup(h, "chris@example.test");
       (h.env as { OPERATOR_USER_IDS?: string }).OPERATOR_USER_IDS = owner.userId;
+
       return { owner, zoneId };
     };
 
@@ -773,15 +849,19 @@ describe("admin routes", () => {
         domain: null,
         incomingMail: "not-set-up",
       });
+
       const bound = await call(h, owner, "POST", "/v1/domains/from-installation", {
         orgId: owner.organizationId,
       });
+
       expect(bound.status).toBe(202);
       expect(bound.body).toMatchObject({ name: "example.test", state: "ownership-proven" });
+
       // Re-entrant: the same domain comes back.
       const again = await call(h, owner, "POST", "/v1/domains/from-installation", {
         orgId: owner.organizationId,
       });
+
       expect(again.body.domainId).toBe(bound.body.domainId);
       expect(h.workflows.PROVISION_DOMAIN?.length).toBe(1);
       // The owner's existing address on the zone keeps routing.
@@ -817,31 +897,38 @@ describe("admin routes", () => {
           }),
         ),
       ).toEqual([403, "forbidden", true]);
+
       const mismatch = await call(h, owner, "POST", "/v1/domains/from-installation", {
         orgId: owner.organizationId,
         name: "other.test",
       });
+
       expect(mismatch.status).toBe(400);
       (h.env as { INSTALL_ZONE_ID?: string }).INSTALL_ZONE_ID = "";
+
       const unset = await call(h, owner, "POST", "/v1/domains/from-installation", {
         orgId: owner.organizationId,
       });
+
       expect(refusal(unset)).toEqual([409, "conflict", false]);
     });
 
     describe("installation zone token (spec §13 fallback)", () => {
       const GOOD = "zone-scoped-token-AAAAAAAAAAAAAAAAAAAAAAAA";
+
       const withKey = () =>
         Object.assign(h.env, { ZONE_TOKEN_SEAL_KEY: Buffer.alloc(32, 7).toString("base64url") });
+
       const stored = () =>
         h.d1
           .prepare("SELECT * FROM installation_zone_token WHERE id = 'default'")
-          .first<Record<string, unknown>>();
+          .first<Record<string, string | number | null>>();
 
       it("validates the token against Cloudflare before storing it, and never echoes it", async () => {
         const { owner, zoneId } = await install();
         withKey();
         const otherZone = cf.addZone("other.test");
+
         const cases: Array<[string, ReadonlyArray<string> | "all" | null, RegExp]> = [
           ["unknown-token-BBBBBBBBBBBBBBBBBBBBBBBBBBB", null, /cannot read the zone/],
           ["other-zone-token-CCCCCCCCCCCCCCCCCCCCCCCC", [otherZone], /cannot read the zone/],
@@ -849,6 +936,7 @@ describe("admin routes", () => {
           ["two-zones-token-EEEEEEEEEEEEEEEEEEEEEEEEE", [zoneId, otherZone], /limited to/],
           ["x", null, /does not look like/],
         ];
+
         for (const [token, scope, message] of cases) {
           if (scope !== null) cf.tokens.set(token, scope);
           const r = await call(h, owner, "POST", "/v1/installation/mail/token", { token });
@@ -857,6 +945,7 @@ describe("admin routes", () => {
           expect(JSON.stringify(r.body)).not.toContain(token);
           expect(await stored()).toBeNull();
         }
+
         // A token limited to the installation zone is accepted, sealed at rest, never returned.
         cf.tokens.set(GOOD, [zoneId]);
         const ok = await call(h, owner, "POST", "/v1/installation/mail/token", { token: GOOD });
@@ -909,9 +998,11 @@ describe("admin routes", () => {
           (await onboardingDepsFor(h.env, "example.test", "delegated-token")).api,
         ).not.toBeNull();
         expect((await onboardingDepsFor(h.env, "example.test", "manual-records")).api).toBeNull();
+
         const authorized = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
           method: "delegated-token",
         });
+
         expect(authorized.status).toBe(202);
         // While the workflow is writing through the token, removal is refused.
         await h.d1
@@ -921,11 +1012,13 @@ describe("admin routes", () => {
         const busy = await call(h, owner, "DELETE", "/v1/installation/mail/token");
         expect(busy.status).toBe(409);
         expect(await stored()).not.toBeNull();
+
         // Once nothing is writing, removal returns to manual records.
         const wf = (await h.d1
           .prepare("SELECT workflow_instance FROM domains WHERE id = ?")
           .bind(id)
           .first<{ workflow_instance: string }>())!.workflow_instance;
+
         h.workflowStatus.PROVISION_DOMAIN!.get(wf)!.status = "complete";
         const removed = await call(h, owner, "DELETE", "/v1/installation/mail/token");
         expect([removed.status, removed.body]).toEqual([
@@ -943,6 +1036,7 @@ describe("admin routes", () => {
         cf.tokens.set(GOOD, [zoneId]);
         const other = await signup(h, "ana@bye.test");
         const plain = await plainSession(h, owner);
+
         for (const [method, json] of [
           ["POST", { token: GOOD }],
           ["DELETE", undefined],
@@ -954,6 +1048,7 @@ describe("admin routes", () => {
             refusal(await call(h, plain, method, "/v1/installation/mail/token", json)),
           ).toEqual([403, "forbidden", true]);
         }
+
         expect(await stored()).toBeNull();
       });
     });
@@ -968,9 +1063,11 @@ describe("admin routes", () => {
         content: "aspmx.l.google.com",
         priority: 1,
       });
+
       const bound = await call(h, owner, "POST", "/v1/domains/from-installation", {
         orgId: owner.organizationId,
       });
+
       const id = bound.body.domainId as string;
       const preview = await call(h, owner, "GET", `/v1/domains/${id}/dns`);
       expect(preview.body.classification).toMatchObject({
@@ -978,25 +1075,31 @@ describe("admin routes", () => {
         provider: "Google Workspace",
         requiresCutover: true,
       });
+
       const refused = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
         method: "manual-records",
       });
+
       expect(refused.status).toBe(409);
       expect(refused.body.error.details).toMatchObject({
         cutoverRequired: true,
         provider: "Google Workspace",
       });
       expect(h.workflowEvents.PROVISION_DOMAIN ?? []).toEqual([]);
+
       const confirmed = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
         method: "manual-records",
         confirmCutover: true,
       });
+
       expect(confirmed.status).toBe(202);
       expect(h.workflowEvents.PROVISION_DOMAIN).toHaveLength(1);
+
       const row = await h.d1
         .prepare("SELECT cutover_confirmed_at, cutover_snapshot FROM domains WHERE id = ?")
         .bind(id)
         .first<{ cutover_confirmed_at: number | null; cutover_snapshot: string }>();
+
       expect(row!.cutover_confirmed_at).not.toBeNull();
       expect(JSON.parse(row!.cutover_snapshot).mx[0].content).toBe("aspmx.l.google.com");
       // The foreign MX is still in place: authorization alone writes nothing.
@@ -1011,8 +1114,10 @@ describe("admin routes", () => {
       // No orgId: the owner's personal organization is the default.
       const bound = await call(h, owner, "POST", "/v1/domains/from-installation", {});
       expect(bound.status).toBe(202);
+
       return bound.body.domainId as string;
     };
+
     const row = (id: string) =>
       h.d1
         .prepare(
@@ -1028,6 +1133,7 @@ describe("admin routes", () => {
           cutover_snapshot: string | null;
           cutover_confirmed_at: number | null;
         }>();
+
     const statusOf = (id: string) => h.workflowStatus.PROVISION_DOMAIN!.get(id)?.status;
 
     it("binds to the personal org by default and replaces a finished workflow instead of failing", async () => {
@@ -1053,10 +1159,12 @@ describe("admin routes", () => {
         priority: 1,
       });
       const id = await bind(owner);
+
       const authorize = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
         method: "manual-records",
         confirmCutover: true,
       });
+
       expect(authorize.status).toBe(202);
       const wf = (await row(id))!.workflow_instance!;
       expect((await row(id))!.zone_auth_method).toBe("manual-records");
@@ -1080,10 +1188,12 @@ describe("admin routes", () => {
       expect(dns.body.link.restorePending.mx[0].content).toBe("aspmx.l.google.com");
       // Setup starts again: a fresh instance (no event needed; it reads the recorded method).
       const events = (h.workflowEvents.PROVISION_DOMAIN ?? []).length;
+
       const again = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
         method: "manual-records",
         confirmCutover: true,
       });
+
       expect(again.status).toBe(202);
       const fresh = (await row(id))!.workflow_instance!;
       expect(fresh).not.toBe(wf);
@@ -1159,15 +1269,19 @@ describe("admin routes", () => {
       });
       const dns = await call(h, owner, "GET", `/v1/domains/${id}/dns`);
       expect(dns.body.cutoverPending).toBe(true);
+
       const refused = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
         method: "manual-records",
       });
+
       expect(refused.body.error.details).toMatchObject({ cutoverRequired: true });
       const before = (await row(id))!.workflow_instance!;
+
       const ok = await call(h, owner, "POST", `/v1/domains/${id}/authorize-zone`, {
         method: "manual-records",
         confirmCutover: true,
       });
+
       expect(ok.status).toBe(202);
       expect((await row(id))!.cutover_confirmed_at).not.toBeNull();
       expect((await row(id))!.state).toBe("zone-authorized");

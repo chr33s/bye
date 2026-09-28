@@ -19,7 +19,9 @@ export const CATALOG_SHARDS = 64;
 /** Stable shard for an authority ID so Cron partitions are deterministic. */
 export const catalogShard = (id: string, shards = CATALOG_SHARDS): number => {
   let h = 2166136261;
+
   for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+
   return (h >>> 0) % shards;
 };
 
@@ -68,7 +70,9 @@ export const validLocalPart = (local: string): boolean =>
 export const assertAssignableServiceAddress = (address: string): void => {
   const at = address.lastIndexOf("@");
   const local = at > 0 ? address.slice(0, at) : "";
+
   if (!validLocalPart(local)) reject("bad_request", "invalid address");
+
   if (RESERVED_LOCAL_PARTS.has(local)) reject("forbidden", "address reserved");
 };
 
@@ -107,6 +111,7 @@ export class ControlDirectory {
   }): Promise<ProvisionedAccount> {
     const address = normalizeAddress(input.address);
     assertAssignableServiceAddress(address);
+
     // Any reservation row blocks reassignment, expired or not: `reserved_until` ends the holder's
     // entitlement, but the spec forbids silently recycling addresses (A04/§11), so an expired hold
     // never frees the address for someone else.
@@ -117,20 +122,25 @@ export class ControlDirectory {
         address,
       ).first(),
     );
+
     if (reserved) reject("conflict", "address unavailable");
+
     // Personal signup never claims an address on a customer (tenant) domain; those addresses are
     // provisioned by that organization's administrators (O01/O02).
     const tenantDomain = await guardD1("tenant-domain", () =>
       q(primary(this.db), "SELECT 1 AS t FROM domains WHERE name = ?", domainOf(address)).first(),
     );
+
     if (tenantDomain) reject("forbidden", "address belongs to a customer domain");
     const now = this.clock.now();
+
     const ids = {
       userId: this.clock.id("usr"),
       organizationId: this.clock.id("org"),
       mailboxId: this.clock.id("mbx"),
       calendarId: this.clock.id("cal"),
     };
+
     try {
       await this.db.batch([
         q(
@@ -199,8 +209,10 @@ export class ControlDirectory {
       ]);
     } catch (e) {
       if (String(e).includes("UNIQUE")) return reject("conflict", "address unavailable");
+
       return reject("unavailable", "provisioning failed");
     }
+
     return { ...ids, address };
   }
 
@@ -220,6 +232,7 @@ export class ControlDirectory {
       AND NOT EXISTS (SELECT 1 FROM device_sessions d WHERE d.user_id = u.id)
       AND NOT EXISTS (SELECT 1 FROM instance_bootstrap b WHERE b.user_id = u.id)
       AND NOT EXISTS (SELECT 1 FROM memberships m JOIN entitlements e ON e.org_id = m.org_id WHERE m.user_id = u.id AND e.short_address = 1)`;
+
     const candidates = (
       await q(
         primary(this.db),
@@ -228,13 +241,17 @@ export class ControlDirectory {
         limit,
       ).all<{ id: string }>()
     ).results;
+
     let released = 0;
+
     for (const { id } of candidates) {
       const now = this.clock.now();
+
       // Conditions re-checked inside the write (a passkey may land between read and write);
       // every follow-on change is keyed to this closure having happened in this batch.
       const closed =
         "EXISTS (SELECT 1 FROM users WHERE id = ? AND status = 'closed' AND closed_at = ?)";
+
       const results = await this.db.batch([
         q(
           this.db,
@@ -268,8 +285,10 @@ export class ControlDirectory {
           now,
         ),
       ]);
+
       if (changesOf(results[0]) > 0) released++;
     }
+
     return released;
   }
 
@@ -282,6 +301,7 @@ export class ControlDirectory {
       return await this.resolveUnsafe(recipient);
     } catch (e) {
       if (e instanceof Rejection && e.code !== "unavailable") throw e;
+
       return { _tag: "TransientFailure", detail: "directory unavailable" };
     }
   }
@@ -289,30 +309,37 @@ export class ControlDirectory {
   private async resolveUnsafe(recipient: string): Promise<RecipientResolution> {
     const db = primary(this.db);
     const address = normalizeAddress(recipient);
+
     const route = (a: string) =>
       q(
         db,
         "SELECT r.mailbox_id, m.status FROM address_routes r JOIN mailboxes m ON m.id = r.mailbox_id WHERE r.address = ? AND r.disabled_at IS NULL",
         a,
       ).first<{ mailbox_id: string; status: string }>();
+
     const deliverable = (r: { mailbox_id: string; status: string } | null) =>
       r !== null && r.status !== "closed";
 
     const exact = await route(address);
+
     if (deliverable(exact))
       return { _tag: "Deliver", mailboxId: exact!.mailbox_id, via: "exact", plusTag: undefined };
 
     const domainName = domainOf(address);
+
     const domain = await q(
       db,
       "SELECT state, plus_addressing, catch_all_mailbox_id FROM domains WHERE name = ?",
       domainName,
     ).first<{ state: string; plus_addressing: number; catch_all_mailbox_id: string | null }>();
+
     // Service-owned domains (no domains row) always allow plus-addressing.
     const plusAllowed = domain === null || domain.plus_addressing === 1;
     const { base, tag } = splitPlusAddress(address);
+
     if (tag !== undefined && plusAllowed) {
       const baseRoute = await route(base);
+
       if (deliverable(baseRoute))
         return { _tag: "Deliver", mailboxId: baseRoute!.mailbox_id, via: "plus", plusTag: tag };
     }
@@ -326,8 +353,10 @@ export class ControlDirectory {
       forwarding_verified_at: number | null;
       forwarding_until: number | null;
     }>();
+
     if (reservation) {
       const now = this.clock.now();
+
       if (
         reservation.forwarding_to &&
         reservation.forwarding_verified_at !== null &&
@@ -335,17 +364,20 @@ export class ControlDirectory {
       ) {
         return { _tag: "Forward", to: reservation.forwarding_to, reason: "closure-forwarding" };
       }
+
       return { _tag: "Rejected", reason: "closed" };
     }
 
     if (domain !== null) {
       if (domain.state !== "active") return { _tag: "Rejected", reason: "domain-inactive" };
+
       if (domain.catch_all_mailbox_id) {
         const m = await q(
           db,
           "SELECT status FROM mailboxes WHERE id = ?",
           domain.catch_all_mailbox_id,
         ).first<{ status: string }>();
+
         if (m && m.status !== "closed")
           return {
             _tag: "Deliver",
@@ -355,6 +387,7 @@ export class ControlDirectory {
           };
       }
     }
+
     return { _tag: "Rejected", reason: "unknown-recipient" };
   }
 
@@ -364,6 +397,7 @@ export class ControlDirectory {
    */
   async canSendAs(userId: string, mailboxId: string, from: string): Promise<boolean> {
     const db = primary(this.db);
+
     const row = await guardD1("canSendAs", () =>
       q(
         db,
@@ -378,6 +412,7 @@ export class ControlDirectory {
         mailboxId,
       ).first<{ ok: number }>(),
     );
+
     return row !== null;
   }
 
@@ -400,6 +435,7 @@ export class ControlDirectory {
         mailboxId,
       ).first<{ ok: number }>(),
     );
+
     return row !== null;
   }
 
@@ -417,26 +453,33 @@ export class ControlDirectory {
         mailboxId,
       ).first<{ ok: number }>(),
     );
+
     return row !== null;
   }
 
   async addAlias(mailboxId: string, address: string): Promise<void> {
     const normalized = normalizeAddress(address);
     const domain = domainOf(normalized);
+
     const d = await guardD1("alias", () =>
       q(primary(this.db), "SELECT state FROM domains WHERE name = ?", domain).first<{
         state: string;
       }>(),
     );
+
     if (d !== null && d.state !== "active") reject("conflict", "domain not active");
+
     // Service-domain aliases obey the same rules as signup; tenant domains are the org's own.
     if (d === null) assertAssignableServiceAddress(normalized);
+
     const reserved = await q(
       this.db,
       "SELECT 1 AS r FROM address_reservations WHERE address = ?",
       normalized,
     ).first();
+
     if (reserved) reject("conflict", "address reserved");
+
     try {
       await q(
         this.db,
@@ -467,6 +510,7 @@ export class ControlDirectory {
         limit,
       ).all<{ id: string; next_wake_hint: number | null }>(),
     );
+
     return rows.results.map((r) => ({ id: r.id, nextWakeHint: r.next_wake_hint }));
   }
 

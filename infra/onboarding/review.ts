@@ -4,6 +4,7 @@
 // catch-all changes; the only custom domain is MailCore's chosen Bye hostname), decides whether a
 // plan is a standard first install that the "Create Bye" intent may approve by policy, and whether
 // an earlier approval still covers a freshly computed plan.
+import { Predicate } from "effect";
 import { createHash } from "node:crypto";
 import { PRIVATE_BINDINGS } from "../resources/bindings.ts";
 import { classifyStage } from "../resources/stage.ts";
@@ -75,34 +76,41 @@ export const domainProblems = (
   installation: Pick<Installation, "appHostname">,
 ): ReadonlyArray<string> => {
   const problems: Array<string> = [];
+
   for (const r of exported.rows) {
     if (!r.domains || r.domains.length === 0 || r.action === "noop") continue;
+
     const ok =
       !!installation.appHostname &&
       MAILCORE.test(r.logicalId) &&
       r.domains.every((d) => d === installation.appHostname);
+
     if (!ok)
       problems.push(
         `${r.logicalId} would attach ${r.domains.join(", ")}; onboarding attaches only ${installation.appHostname ?? "no hostname"} to MailCore`,
       );
   }
+
   return problems;
 };
 
 /** Stages an onboarding installation may bind: production-like `prod`/`staging`, or a `dev-*` trial. */
 export const allowedStage = (stage: string): string | null => {
   const c = classifyStage(stage);
-  if (c._tag === "Invalid") return c.reason;
+
+  if (Predicate.isTagged(c, "Invalid")) return c.reason;
+
   if (c.stage.class === "preview") return "preview stages belong to CI pull-request previews";
+
   return null;
 };
 
 const sha256 = (v: string) => createHash("sha256").update(v).digest("hex");
 
-export const canonical = (value: unknown): string =>
-  JSON.stringify(value, (_k, v: unknown) =>
-    v && typeof v === "object" && !Array.isArray(v)
-      ? Object.fromEntries(Object.entries(v as object).sort(([a], [b]) => a.localeCompare(b)))
+export const canonical = <T>(value: T): string =>
+  JSON.stringify(value, (_k, v) =>
+    Predicate.isObject(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)))
       : v,
   );
 
@@ -133,6 +141,7 @@ export const configHash = (
 
 export const plannedActions = (exported: ExportedPlan): ReadonlyArray<PlannedAction> => {
   const plan = normalizePlan(exported);
+
   return plan.entries
     .map((e, i) => ({ ...e, fqn: exported.rows[i]!.fqn }))
     .filter((e) => e.action !== "noop")
@@ -173,13 +182,15 @@ export const buildReview = (input: ReviewInput): ReviewOutcome => {
   const warnings: Array<string> = [];
   const stage = installation.stage!;
   const classified = classifyStage(stage);
-  const persistent = classified._tag === "Valid" && classified.stage.persistent;
+  const persistent = Predicate.isTagged(classified, "Valid") && classified.stage.persistent;
 
   if (exported.operation !== "deploy") blockers.push("only deploy plans can be approved");
+
   if (exported.stage !== stage)
     blockers.push(`plan is for stage ${exported.stage}, installation is bound to ${stage}`);
 
   const plan = normalizePlan(exported);
+
   // Onboarding has no decommission records: approval never overrides retention policy.
   for (const v of evaluatePlan({ plan, decommissions: [], privateBindings: PRIVATE_BINDINGS })
     .violations)
@@ -187,6 +198,7 @@ export const buildReview = (input: ReviewInput): ReviewOutcome => {
 
   const actions = plannedActions(exported);
   blockers.push(...domainProblems(exported, installation));
+
   for (const a of actions)
     if (isProhibited(a.type) && !isPermittedCustomDomain(a, installation))
       blockers.push(
@@ -197,6 +209,7 @@ export const buildReview = (input: ReviewInput): ReviewOutcome => {
   // already owns it; onboarding does not adopt it.
   if (installation.firstWriteAt === null) {
     const existing = exported.rows.filter((r) => r.action !== "create");
+
     if (existing.length > 0)
       blockers.push(
         `Alchemy state already holds ${existing.length} resources for stage ${stage}; onboarding will not adopt another deployment (use the existing upgrade procedure)`,
@@ -208,6 +221,7 @@ export const buildReview = (input: ReviewInput): ReviewOutcome => {
     input.grantedScopes,
     input.scopeMatrix ?? ONBOARDING_SCOPES,
   );
+
   if (gaps.length > 0) {
     if (persistent)
       blockers.push(
@@ -217,12 +231,14 @@ export const buildReview = (input: ReviewInput): ReviewOutcome => {
   }
 
   const destructive = actions.filter((a) => a.action === "replace" || a.action === "delete");
+
   for (const d of destructive)
     warnings.push(`${d.action} of ${d.type} ${d.logicalId} needs explicit acknowledgement`);
 
   const pending = input.releaseMigrations.filter(
     (m) => !installation.appliedMigrations.includes(m),
   );
+
   if (pending.length > 0)
     warnings.push(
       `${pending.length} forward-only migrations will apply; code rollback does not roll back data`,
@@ -237,6 +253,7 @@ export const buildReview = (input: ReviewInput): ReviewOutcome => {
     actions,
     migrations: pending,
   };
+
   return { subject, digest: subjectDigest(subject), blockers, warnings, destructive };
 };
 
@@ -250,21 +267,31 @@ export const approvalCovers = (
   fresh: ApprovalSubject,
 ): ReadonlyArray<string> => {
   const reasons: Array<string> = [];
+
   if (approved.installationId !== fresh.installationId) reasons.push("installation changed");
+
   if (approved.accountId !== fresh.accountId) reasons.push("account changed");
+
   if (approved.stage !== fresh.stage) reasons.push("stage changed");
+
   if (canonical(approved.release) !== canonical(fresh.release)) reasons.push("release changed");
+
   if (approved.configHash !== fresh.configHash) reasons.push("configuration changed");
   const newMigrations = fresh.migrations.filter((m) => !approved.migrations.includes(m));
+
   if (newMigrations.length > 0) reasons.push(`unapproved migrations: ${newMigrations.join(", ")}`);
+
   for (const a of fresh.actions) {
     const was = approved.actions.find((x) => x.fqn === a.fqn);
+
     const ok =
       was !== undefined &&
       was.type === a.type &&
       (was.action === a.action || (was.action === "create" && a.action === "update"));
+
     if (!ok) reasons.push(`unapproved ${a.action} of ${a.type} ${a.logicalId}`);
   }
+
   return reasons;
 };
 
@@ -308,10 +335,14 @@ export interface AutoApprovalInput {
 export const autoApprovalBlockers = (input: AutoApprovalInput): ReadonlyArray<string> => {
   const { installation: inst, intent, review } = input;
   const reasons: Array<string> = [];
+
   if (inst.firstWriteAt !== null) reasons.push("not a first deployment");
+
   if (review.blockers.length > 0) reasons.push(`${review.blockers.length} review blockers`);
+
   if (inst.stage !== "prod" || review.subject.stage !== intent.stage)
     reasons.push("not the standard prod installation");
+
   if (
     inst.accountId !== intent.accountId ||
     review.subject.accountId !== intent.accountId ||
@@ -320,21 +351,29 @@ export const autoApprovalBlockers = (input: AutoApprovalInput): ReadonlyArray<st
     (inst.appHostname ?? null) !== intent.appHostname
   )
     reasons.push("account, zone or hostname differs from the install intent");
+
   if (canonical(input.release) !== canonical(intent.release))
     reasons.push("the pinned release differs from the install intent");
+
   if (canonical(review.subject.release) !== canonical(intent.release))
     reasons.push("the plan's release differs from the install intent");
+
   if (review.subject.actions.length === 0) reasons.push("the plan has no changes");
+
   for (const a of review.subject.actions) {
     if (a.action !== "create") reasons.push(`${a.action} of ${a.type} ${a.logicalId}`);
+
     if (!STANDARD_FIRST_INSTALL_TYPES.has(a.type))
       reasons.push(`${a.type} ${a.logicalId} is not in the standard first-install graph`);
     else if (isProhibited(a.type) && !isPermittedCustomDomain(a, inst))
       reasons.push(`${a.type} ${a.logicalId} is not the chosen Bye hostname`);
   }
+
   const expected = [...input.releaseMigrations].sort();
   const planned = [...review.subject.migrations].sort();
+
   if (canonical(expected) !== canonical(planned))
     reasons.push("migrations differ from the pinned first-install release");
+
   return reasons;
 };

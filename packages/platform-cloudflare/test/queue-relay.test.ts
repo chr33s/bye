@@ -15,17 +15,20 @@ import { MemoryDurableStorage, TestClock } from "@bye/testing";
 const setup = () => {
   const sql = new Sql(new MemoryDurableStorage());
   migrate(sql, "kernel", KERNEL_MIGRATIONS);
+
   return new Kernel(sql, new TestClock());
 };
 
 const fakeQueue = (fail: (bodies: ReadonlyArray<unknown>) => boolean = () => false) => {
   const sent: Array<Array<unknown>> = [];
+
   return {
     sent,
     binding: {
       send: async () => undefined,
       sendBatch: async (batch: Iterable<{ body: unknown }>) => {
         const bodies = [...batch].map((b) => b.body);
+
         if (fail(bodies)) throw new Error("refused");
         sent.push(bodies);
       },
@@ -39,11 +42,13 @@ describe("outbox relay poison isolation (§6)", () => {
     const big = kernel.outbox("propagate-x", "mbx_a", { blob: "x".repeat(200 * 1024) });
     const small = kernel.outbox("propagate-x", "mbx_a", { ok: true });
     const q = fakeQueue();
+
     const result = await Effect.runPromise(
       relayOutbox(kernel, "mailbox:mbx_a").pipe(
         Effect.provide(QueuePublisherLive({ propagate: q.binding })),
       ),
     );
+
     expect(result).toMatchObject({ published: 1, dead: 1 });
     expect(kernel.pendingOutbox(10)).toHaveLength(0);
     expect(kernel.deadOutbox(10).map((d) => d.eventId)).toEqual([big]);
@@ -74,6 +79,7 @@ describe("outbox relay poison isolation (§6)", () => {
     const kernel = setup();
     kernel.outbox("propagate-x", "mbx_a", { n: 1 });
     const q = fakeQueue(() => true);
+
     for (let i = 0; i < OUTBOX_MAX_ATTEMPTS; i++)
       await Effect.runPromise(
         relayOutbox(kernel, "mailbox:mbx_a").pipe(
@@ -100,11 +106,13 @@ describe("outbox relay poison isolation (§6)", () => {
     const badIndex = kernel.outbox("index", "mbx_a", { kind: "delivery" });
     const good = kernel.outbox("dispatch", "mbx_a", { sendJobId: "snd_1" });
     const q = fakeQueue();
+
     const result = await Effect.runPromise(
       relayOutbox(kernel, "mailbox:mbx_a").pipe(
         Effect.provide(QueuePublisherLive({ dispatch: q.binding, index: q.binding })),
       ),
     );
+
     expect(result).toMatchObject({ published: 1, dead: 2 });
     expect(
       kernel

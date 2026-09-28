@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ALL_ROUTES, handleFetch } from "../src/api.ts";
-import { makeHarness } from "./harness.ts";
+import { executionContext, makeHarness } from "./harness.ts";
 
 // P0.6a (spec.md §13.3): every /v1 route refuses a caller without credentials before it
 // reads a body or touches an authority. Routes that are deliberately public are listed here, so
@@ -15,11 +15,7 @@ const PUBLIC_V1 = new Set<string>([
   "GET /v1/push/vapid-key",
 ]);
 
-const ctx = {
-  waitUntil() {},
-  passThroughOnCallback() {},
-  props: {},
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 /** A concrete path for a route pattern: each `:param` becomes a plausible, well-formed ID. */
 const samplePath = (pattern: RegExp): string =>
@@ -35,29 +31,36 @@ describe("[A03] route authorization", () => {
   it("every non-public /v1 route answers 401 without credentials", async () => {
     const h = makeHarness();
     const open: Array<string> = [];
+
     for (const r of v1) {
       const path = samplePath(r.pattern);
       const key = `${r.method} ${path}`;
+
+      const requestHeaders = new Headers({ "content-type": "application/json" });
+
+      if (r.method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
       const response = await handleFetch(
-        new Request(`${h.env.APP_ORIGIN}${path}`, {
-          method: r.method,
-          headers: {
-            ...(r.method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-            "content-type": "application/json",
-          },
-          ...(r.method === "GET" || r.method === "HEAD" ? {} : { body: "{}" }),
-        }),
+        new Request(
+          `${h.env.APP_ORIGIN}${path}`,
+          r.method === "GET" || r.method === "HEAD"
+            ? { method: r.method, headers: requestHeaders }
+            : { method: r.method, headers: requestHeaders, body: "{}" },
+        ),
         h.env,
         ctx,
       );
+
       if (PUBLIC_V1.has(key)) {
         // Capability routes still refuse a request without a valid token.
         if (key !== "GET /v1/push/vapid-key")
           expect([401, 403, 404], key).toContain(response.status);
         continue;
       }
+
       if (response.status !== 401) open.push(`${key} → ${response.status}`);
     }
+
     expect(open).toEqual([]);
   });
 });

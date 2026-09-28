@@ -34,6 +34,7 @@ export class IdentityDirectory {
       "SELECT * FROM identities WHERE identity_id = ?",
       identityId,
     );
+
     return r ? toIdentity(r) : undefined;
   }
 
@@ -48,6 +49,7 @@ export class IdentityDirectory {
       "SELECT * FROM identities WHERE address = ?",
       normalizeAddress(address),
     );
+
     return r ? toIdentity(r) : undefined;
   }
 
@@ -65,9 +67,12 @@ export class IdentityDirectory {
     const r = this.sql.one<IdentityRow>(
       "SELECT * FROM identities ORDER BY is_default DESC, address LIMIT 1",
     );
+
     return r ? toIdentity(r) : undefined;
   }
 }
+
+type VerifyIdentityResult = { readonly verified: boolean };
 
 export class MailboxIdentities extends IdentityDirectory {
   constructor(
@@ -84,10 +89,12 @@ export class MailboxIdentities extends IdentityDirectory {
     readonly signature?: string;
   }): string {
     const address = normalizeAddress(input.address);
+
     const existing = this.sql.one<{ identity_id: string }>(
       "SELECT identity_id FROM identities WHERE address = ?",
       address,
     );
+
     if (existing) return existing.identity_id;
     const id = this.ctx.id("idn");
     const first = !this.sql.one("SELECT 1 AS x FROM identities LIMIT 1");
@@ -102,8 +109,10 @@ export class MailboxIdentities extends IdentityDirectory {
       first && input.kind === "hosted",
       input.signature ?? "",
     );
+
     if (input.kind === "external") this.sendChallenge(id, address);
     this.ctx.change("identity", "added", { identityId: id });
+
     return id;
   }
 
@@ -119,6 +128,7 @@ export class MailboxIdentities extends IdentityDirectory {
       this.ctx.now(),
       identityId,
     );
+
     const jobId = this.mailer.createSystemJob({
       to: { name: undefined, address },
       subject: "Confirm you can send from this address",
@@ -128,25 +138,30 @@ export class MailboxIdentities extends IdentityDirectory {
       fromAddress: this.defaultIdentity()?.address ?? "",
       trafficClass: "transactional",
     });
+
     if (!jobId)
       reject("conflict", "a verified sending identity is needed to verify an external address");
   }
 
   resendIdentityChallenge(identityId: string): void {
     const i = this.identity(identityId) ?? reject("not_found", "identity");
+
     if (i.kind !== "external" || i.verified)
       reject("conflict", "identity does not need verification");
     this.sendChallenge(identityId, i.address);
   }
 
-  verifyIdentity(identityId: string, token: string): { readonly verified: boolean } {
+  verifyIdentity(identityId: string, token: string): VerifyIdentityResult {
     const r =
       this.sql.one<IdentityRow>("SELECT * FROM identities WHERE identity_id = ?", identityId) ??
       reject("not_found", "identity");
+
     if (r.verified === 1) return { verified: true };
+
     const fresh =
       r.challenge_sent_at !== null &&
       this.ctx.now() - Number(r.challenge_sent_at) < IDENTITY_CHALLENGE_TTL_MS;
+
     if (!r.challenge_token || !fresh || !timingSafeEqual(r.challenge_token, token.trim()))
       return { verified: false };
     this.sql.run(
@@ -154,11 +169,13 @@ export class MailboxIdentities extends IdentityDirectory {
       identityId,
     );
     this.ctx.change("identity", "verified", { identityId });
+
     return { verified: true };
   }
 
   setDefaultIdentity(identityId: string): void {
     const i = this.identity(identityId) ?? reject("not_found", "identity");
+
     if (!i.verified) reject("forbidden", "identity not verified");
     this.sql.run(
       "UPDATE identities SET is_default = CASE WHEN identity_id = ? THEN 1 ELSE 0 END",

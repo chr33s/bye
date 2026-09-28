@@ -7,20 +7,26 @@ import type { Warning } from "./types.ts";
 export const bytesToBinary = (bytes: Uint8Array): string => {
   let out = "";
   const chunk = 0x8000;
+
   for (let i = 0; i < bytes.length; i += chunk) {
     out += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
+
   return out;
 };
 
 export const binaryToBytes = (binary: string): Uint8Array => {
   const out = new Uint8Array(binary.length);
+
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i) & 0xff;
+
   return out;
 };
 
 const utf8Fatal = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
+
 const utf8Lenient = new TextDecoder("utf-8");
+
 const utf8Encoder = new TextEncoder();
 
 export const utf8Encode = (text: string): Uint8Array => utf8Encoder.encode(text);
@@ -28,6 +34,7 @@ export const utf8Encode = (text: string): Uint8Array => utf8Encoder.encode(text)
 /** Decode a binary string as UTF-8 when valid (RFC 6532 headers), otherwise as Latin-1. */
 export const binaryToText = (binary: string): string => {
   if (!/[\u0080-ÿ]/.test(binary)) return binary;
+
   try {
     return utf8Fatal.decode(binaryToBytes(binary));
   } catch {
@@ -37,7 +44,11 @@ export const binaryToText = (binary: string): string => {
 
 const latin1Decode = (bytes: Uint8Array): string => bytesToBinary(bytes);
 
-const CHARSET_ALIASES: Readonly<Record<string, string>> = {
+interface CharsetAliasTable {
+  readonly [charset: string]: string;
+}
+
+const CHARSET_ALIASES: CharsetAliasTable = {
   utf8: "utf-8",
   "utf-8": "utf-8",
   "us-ascii": "latin1-exact",
@@ -51,6 +62,7 @@ const CHARSET_ALIASES: Readonly<Record<string, string>> = {
 const addWarning = (warnings: Array<Warning> | undefined, warning: Warning): void => {
   if (!warnings) return;
   const key = JSON.stringify(warning);
+
   if (!warnings.some((w) => JSON.stringify(w) === key)) warnings.push(warning);
 };
 
@@ -66,13 +78,18 @@ export const decodeCharset = (
       .toLowerCase()
       .replace(/^["']|["']$/g, "")
       .split("*")[0] ?? "utf-8";
+
   const label = CHARSET_ALIASES[raw] ?? raw;
+
   if (label === "utf-8") return utf8Lenient.decode(bytes);
+
   if (label === "latin1-exact") return latin1Decode(bytes);
+
   try {
     return new TextDecoder(label).decode(bytes);
   } catch {
     addWarning(warnings, { _tag: "UnknownCharset", charset: raw });
+
     return utf8Lenient.decode(bytes);
   }
 };
@@ -83,8 +100,11 @@ export { addWarning as pushWarning };
 
 export const decodeBase64Binary = (input: string): string => {
   let clean = input.replace(/[^A-Za-z0-9+/]/g, "");
+
   if (clean.length % 4 === 1) clean = clean.slice(0, -1);
+
   while (clean.length % 4 !== 0) clean += "=";
+
   try {
     return atob(clean);
   } catch {
@@ -96,7 +116,9 @@ export const encodeBase64 = (bytes: Uint8Array): string => btoa(bytesToBinary(by
 
 export const wrapLines = (text: string, width = 76): string => {
   const lines: Array<string> = [];
+
   for (let i = 0; i < text.length; i += width) lines.push(text.slice(i, i + width));
+
   return lines.join("\r\n");
 };
 
@@ -109,13 +131,17 @@ export const fromBase64Url = (text: string): Uint8Array | undefined => tryFromBa
 
 export const decodeQuotedPrintableBinary = (input: string): string => {
   let out = "";
+
   for (let i = 0; i < input.length; i++) {
     const ch = input[i]!;
+
     if (ch !== "=") {
       out += ch;
       continue;
     }
+
     const next = input.slice(i + 1, i + 3);
+
     if (/^[0-9A-Fa-f]{2}$/.test(next)) {
       out += String.fromCharCode(parseInt(next, 16));
       i += 2;
@@ -126,33 +152,42 @@ export const decodeQuotedPrintableBinary = (input: string): string => {
     } else {
       // Soft break followed by trailing whitespace, or a malformed escape: keep literally.
       const rest = /^[ \t]+\r?\n/.exec(input.slice(i + 1));
+
       if (rest) i += rest[0].length;
       else out += ch;
     }
   }
+
   return out;
 };
 
 export const encodeQuotedPrintable = (bytes: Uint8Array): string => {
   const lines = bytesToBinary(bytes).replace(/\r\n/g, "\n").split("\n");
   const out: Array<string> = [];
+
   for (const line of lines) {
     let encoded = "";
+
     for (let i = 0; i < line.length; i++) {
       const code = line.charCodeAt(i);
       const last = i === line.length - 1;
       let token: string;
+
       if ((code === 32 || code === 9) && !last) token = line[i]!;
       else if (code >= 33 && code <= 126 && code !== 61) token = line[i]!;
       else token = `=${code.toString(16).toUpperCase().padStart(2, "0")}`;
+
       if (encoded.length + token.length > 75) {
         out.push(`${encoded}=`);
         encoded = "";
       }
+
       encoded += token;
     }
+
     out.push(encoded);
   }
+
   return out.join("\r\n");
 };
 
@@ -168,18 +203,22 @@ export const decodeEncodedWords = (value: string, warnings?: Array<Warning>): st
   let out = "";
   let last = 0;
   let pending: { charset: string; bytes: string } | undefined;
+
   const flush = () => {
     if (pending) out += decodeCharset(binaryToBytes(pending.bytes), pending.charset, warnings);
     pending = undefined;
   };
+
   for (const match of value.matchAll(ENCODED_WORD)) {
     const index = match.index ?? 0;
     const between = value.slice(last, index);
     const charset = (match[1] ?? "").toLowerCase().split("*")[0] ?? "utf-8";
+
     const binary =
       (match[2] ?? "").toLowerCase() === "b"
         ? decodeBase64Binary(match[3] ?? "")
         : decodeQWord(match[3] ?? "");
+
     if (pending && /^\s*$/.test(between)) {
       if (pending.charset === charset) pending.bytes += binary;
       else {
@@ -191,9 +230,12 @@ export const decodeEncodedWords = (value: string, warnings?: Array<Warning>): st
       out += between;
       pending = { charset, bytes: binary };
     }
+
     last = index + match[0].length;
   }
+
   flush();
+
   return out + value.slice(last);
 };
 
@@ -214,16 +256,21 @@ export const encodeHeaderWords = (text: string): string => {
   const words: Array<string> = [];
   let chunk = "";
   let chunkBytes = 0;
+
   for (const cp of text) {
     const size = utf8Encode(cp).length;
+
     if (chunkBytes + size > 45) {
       words.push(chunk);
       chunk = "";
       chunkBytes = 0;
     }
+
     chunk += cp;
     chunkBytes += size;
   }
+
   if (chunk) words.push(chunk);
+
   return words.map((w) => `=?UTF-8?B?${encodeBase64(utf8Encode(w))}?=`).join(" ");
 };

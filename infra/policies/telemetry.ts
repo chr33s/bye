@@ -2,7 +2,7 @@
 // These flags do NOT disable the Cloudflare state-store Worker's OTLP exporter; strict
 // Cloudflare-only operation additionally requires an audited state-store build (EXTERNAL_OWNERS.md).
 
-export const REQUIRED_DEPLOY_ENV: Readonly<Record<string, string>> = {
+export const REQUIRED_DEPLOY_ENV = {
   ALCHEMY_TELEMETRY_DISABLED: "1",
   DO_NOT_TRACK: "1",
   NO_TRACK: "1",

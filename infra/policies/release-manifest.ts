@@ -44,6 +44,7 @@ export const configHash = (
         `${name}=${secret ? (env[name] ? "<present>" : "<missing>") : (env[name] ?? "<missing>")}`,
     )
     .sort();
+
   return sha256(parts.join("\n"));
 };
 
@@ -84,9 +85,7 @@ export const manifestDrift = (
       "stateUrlHash",
       "planDigest",
     ] as const
-  )
-    .filter((k) => reviewed[k] !== current[k])
-    .map((k) => `${k} changed since review`);
+  ).flatMap((k) => (reviewed[k] !== current[k] ? [`${k} changed since review`] : []));
 
 const currentInputs = (): ReleaseInputs => ({
   commit:
@@ -98,22 +97,27 @@ const currentInputs = (): ReleaseInputs => ({
 
 if (import.meta.main) {
   const [cmd, a, b] = process.argv.slice(2);
+
   if (cmd === "create" && a && b) {
     const manifest = buildManifest(
       JSON.parse(readFileSync(a, "utf8")) as ExportedPlan,
       currentInputs(),
     );
+
     writeFileSync(b, `${JSON.stringify(manifest, null, 2)}\n`);
     console.log(
       `release manifest ${manifest.stack}/${manifest.stage} plan ${manifest.planDigest.slice(0, 12)}`,
     );
   } else if (cmd === "verify" && a && b) {
     const reviewed = JSON.parse(readFileSync(a, "utf8")) as ReleaseManifest;
+
     const drift = manifestDrift(
       reviewed,
       buildManifest(JSON.parse(readFileSync(b, "utf8")) as ExportedPlan, currentInputs()),
     );
+
     for (const d of drift) console.error(`release: ${d}`);
+
     if (drift.length) process.exit(1);
     console.log("release inputs match the reviewed plan");
   } else {

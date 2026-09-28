@@ -3,22 +3,30 @@
 import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/auth.ts", () => ({ stepUpWithPasskey: vi.fn() }));
-
 const jsdom = new JSDOM(
   '<!doctype html><body><main id="main"></main><p id="status" role="status"></p></body>',
   { url: "https://bye.example.test/" },
 );
-const g = globalThis as Record<string, unknown>;
-for (const k of ["window", "document", "location", "history", "HTMLElement", "Node", "Event"])
-  g[k] = (jsdom.window as unknown as Record<string, unknown>)[k];
-g.localStorage = jsdom.window.localStorage;
+
+Object.assign(globalThis, {
+  window: jsdom.window,
+  document: jsdom.window.document,
+  location: jsdom.window.location,
+  history: jsdom.window.history,
+  HTMLElement: jsdom.window.HTMLElement,
+  Node: jsdom.window.Node,
+  Event: jsdom.window.Event,
+  localStorage: jsdom.window.localStorage,
+});
 
 const { coverPanel, coverPanelEnabled } = await import("../src/views/cover-panel.ts");
+
 const { state } = await import("../src/core/state.ts");
 
 type Reply = { status?: number; body: unknown };
+
 let calls: Array<{ method: string; path: string; body: unknown }> = [];
+
 let reply: (method: string, path: string) => Reply | Promise<Reply>;
 
 beforeEach(() => {
@@ -34,6 +42,7 @@ beforeEach(() => {
       body: init.body ? JSON.parse(init.body as string) : undefined,
     });
     const r = await reply(init.method ?? "GET", u.pathname);
+
     return new Response(JSON.stringify(r.body), {
       status: r.status ?? 200,
       headers: { "content-type": "application/json" },
@@ -44,12 +53,16 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
+
 /** Wait for the panel's async load to finish (the body drops aria-busy when it is done). */
 const loaded = async (panel: HTMLElement) => {
   for (let i = 0; i < 50 && panel.querySelector(".cover-body[aria-busy]"); i++) await settle();
 };
+
 const NOW = new Date(2026, 8, 28, 12, 0).getTime();
+
 const at = (h: number, dayOffset = 0) => new Date(2026, 8, 28 + dayOffset, h).getTime();
+
 const occ = (eventId: string, startMs: number, allDay = false) => ({
   eventId,
   calendarId: "cal_a",
@@ -81,6 +94,7 @@ describe("calendar cover panel (web)", () => {
     const gate = new Promise<void>((r) => (release = r));
     reply = async () => {
       await gate;
+
       return {
         body: {
           schemaVersion: 1,
@@ -88,6 +102,7 @@ describe("calendar cover panel (web)", () => {
         },
       };
     };
+
     const panel = coverPanel(() => NOW);
     document.body.append(panel);
     const title = panel.querySelector("summary")!;
@@ -101,21 +116,27 @@ describe("calendar cover panel (web)", () => {
     release();
     await loaded(panel);
     expect(panel.querySelector(".cover-body")!.hasAttribute("aria-busy")).toBe(false);
+
     const today = [...panel.querySelectorAll('ul[aria-label="Today\'s events"] li')].map(
       (li) => li.textContent,
     );
+
     expect(today).toHaveLength(3);
     expect(today[0]).toContain("All day");
     expect(today[0]).toContain("holiday title");
     expect(today[1]).toContain("morning title");
+
     const links = [...panel.querySelectorAll("a")].map((a) => [
       a.textContent,
       a.getAttribute("href"),
     ]);
+
     expect(links).toContainEqual(["Open calendar", "#/calendar/day/2026-09-28"]);
+
     const next = [...panel.querySelectorAll("h2")].find(
       (h) => h.textContent === "Next",
     )!.nextElementSibling!;
+
     expect(next.textContent).toContain("later title");
     expect(next.querySelector("a")!.getAttribute("href")).toBe(
       "#/calendar/event/later?key=later-k&cal=cal_a",
@@ -166,6 +187,7 @@ describe("calendar cover panel (web)", () => {
     expect(coverPanel(() => NOW).querySelector("details")!.open).toBe(false);
 
     [...panel.querySelectorAll("button")].find((b) => b.textContent === "Hide panel")!.click();
+
     for (let i = 0; i < 50 && panel.isConnected; i++) await settle();
     const command = calls.find((c) => c.method === "POST")!;
     expect(command.path).toBe("/v1/mailboxes/mbx_1/commands");

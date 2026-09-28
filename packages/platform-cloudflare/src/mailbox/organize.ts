@@ -37,7 +37,7 @@ export interface MailboxContact {
   readonly groups: ReadonlyArray<string>;
 }
 
-export interface MailboxNote {
+export type MailboxNote = {
   readonly noteId: string;
   readonly kind: "thread" | "sticky" | "cover";
   readonly threadId: string | null;
@@ -45,7 +45,7 @@ export interface MailboxNote {
   readonly fileKeys: ReadonlyArray<string>;
   readonly revision: number;
   readonly updatedAt: number;
-}
+};
 
 export interface MailboxClip {
   readonly clipId: string;
@@ -106,6 +106,24 @@ interface ContactRow {
   readonly notes: string;
 }
 
+type ImportContactsResult = { readonly imported: number };
+
+type BoardResult = {
+  readonly boardId: string;
+  readonly name: string;
+  readonly stages: ReadonlyArray<{
+    readonly stageId: string;
+    readonly name: string;
+    readonly cards: ReadonlyArray<{
+      readonly cardId: string;
+      readonly threadId: string;
+      readonly completed: boolean;
+    }>;
+  }>;
+};
+
+type CreateBoardResult = { readonly boardId: string; readonly stageIds: ReadonlyArray<string> };
+
 /**
  * Personal organization inside MailboxDO: labels, rules, bundles, product workflow boards,
  * personal collections, notes/clips, and contacts (E12–E16). Notes and clips never enter MIME.
@@ -129,8 +147,10 @@ export class MailboxOrganizer {
   /** Get-or-create: an existing label with the same name keeps its id. */
   createLabel(name: string, color?: string): string {
     const clean = name.trim();
+
     if (!clean) reject("bad_request", "label name required");
     const existing = this.labelId(clean);
+
     if (existing) return existing;
     const id = this.ctx.id("lbl");
     this.sql.run(
@@ -141,17 +161,22 @@ export class MailboxOrganizer {
     );
     this.ctx.indexUpsert("label", id);
     this.ctx.change("label", "created", { labelId: id });
+
     return id;
   }
 
   renameLabel(labelId: string, name: string): void {
     const clean = name.trim();
+
     if (!clean) reject("bad_request", "label name required");
     const clash = this.labelId(clean);
+
     if (clash && clash !== labelId) reject("conflict", "label name already used");
+
     if (this.sql.run("UPDATE labels SET name = ? WHERE label_id = ?", clean, labelId) === 0)
       reject("not_found", "label");
     this.ctx.indexUpsert("label", labelId);
+
     for (const t of this.sql.all<{ thread_id: string }>(
       "SELECT thread_id FROM thread_labels WHERE label_id = ?",
       labelId,
@@ -165,9 +190,11 @@ export class MailboxOrganizer {
       "SELECT thread_id FROM thread_labels WHERE label_id = ?",
       labelId,
     );
+
     this.sql.run("DELETE FROM thread_labels WHERE label_id = ?", labelId);
     this.sql.run("DELETE FROM labels WHERE label_id = ?", labelId);
     this.ctx.indexDelete("label", labelId);
+
     for (const t of threads) this.ctx.reindexThread(t.thread_id);
     this.ctx.change("label", "deleted", { labelId });
   }
@@ -181,6 +208,7 @@ export class MailboxOrganizer {
       "SELECT label_id, name, color FROM labels WHERE label_id = ?",
       labelId,
     );
+
     return r ? { labelId: r.label_id, name: r.name, color: r.color } : undefined;
   }
 
@@ -204,9 +232,12 @@ export class MailboxOrganizer {
     remove: ReadonlyArray<string>,
   ): void {
     this.requireThread(threadId);
+
     for (const name of add) this.assignLabelByName(threadId, name);
+
     for (const name of remove) {
       const id = this.labelId(name);
+
       if (id)
         this.sql.run(
           "DELETE FROM thread_labels WHERE thread_id = ? AND label_id = ?",
@@ -214,6 +245,7 @@ export class MailboxOrganizer {
           id,
         );
     }
+
     this.ctx.reindexThread(threadId);
     this.ctx.change("thread", "labels", { threadId });
   }
@@ -234,18 +266,21 @@ export class MailboxOrganizer {
   /** Label names for many threads in one query. */
   labelsOf(threadIds: ReadonlyArray<string>): Map<string, Array<string>> {
     const out = new Map<string, Array<string>>();
+
     const rows = allInChunks(threadIds, (chunk) =>
       this.sql.all<{ thread_id: string; name: string }>(
         `SELECT t.thread_id, l.name FROM thread_labels t JOIN labels l ON l.label_id = t.label_id WHERE t.thread_id IN (${placeholders(chunk.length)}) ORDER BY l.name`,
         ...chunk,
       ),
     );
+
     // Each thread's rows come from exactly one chunk, so per-thread name order is preserved.
     for (const [id, group] of groupBy(rows, (r) => r.thread_id))
       out.set(
         id,
         group.map((r) => r.name),
       );
+
     return out;
   }
 
@@ -264,13 +299,16 @@ export class MailboxOrganizer {
     readonly position?: number;
   }): string {
     const c = rule.conditions;
+
     if (!c.from && !c.fromDomain && !c.to && !c.subjectContains && !c.listId)
       reject("bad_request", "rule needs a condition");
     const ruleId = rule.ruleId ?? this.ctx.id("rul");
+
     const position =
       rule.position ??
       Number(this.sql.one<{ p: number | null }>("SELECT MAX(position) AS p FROM rules")?.p ?? 0) +
         1;
+
     this.sql.run(
       `INSERT INTO rules (rule_id, position, conditions, actions, enabled) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT (rule_id) DO UPDATE SET position = excluded.position, conditions = excluded.conditions, actions = excluded.actions, enabled = excluded.enabled`,
@@ -281,6 +319,7 @@ export class MailboxOrganizer {
       rule.enabled ?? true,
     );
     this.ctx.change("rule", "put", { ruleId });
+
     return ruleId;
   }
 
@@ -313,15 +352,19 @@ export class MailboxOrganizer {
    */
   evaluateRules(summary: MessageSummary, recipient: string): RuleOutcome {
     const from = normalizeAddress(summary.from.address);
+
     const recipients = new Set(
       [recipient, ...summary.to.map((a) => a.address), ...summary.cc.map((a) => a.address)].map(
         normalizeAddress,
       ),
     );
+
     const out: RuleOutcome = { labels: [], bundle: false };
+
     for (const rule of this.listRules()) {
       if (!rule.enabled) continue;
       const c = rule.conditions;
+
       const match =
         (!c.from || normalizeAddress(c.from) === from) &&
         (!c.fromDomain ||
@@ -331,12 +374,17 @@ export class MailboxOrganizer {
         (!c.subjectContains ||
           summary.subject.toLowerCase().includes(c.subjectContains.toLowerCase())) &&
         (!c.listId || (summary.listId ?? "").toLowerCase().includes(c.listId.toLowerCase()));
+
       if (!match) continue;
       out.labels.push(...(rule.actions.labels ?? []));
+
       if (rule.actions.destination && !out.destination) out.destination = rule.actions.destination;
+
       if (rule.actions.bundle) out.bundle = true;
+
       if (rule.actions.workflowBoardId && !out.workflowBoardId)
         out.workflowBoardId = rule.actions.workflowBoardId;
+
       if (
         rule.actions.redeliverTo &&
         !out.redeliverTo &&
@@ -344,6 +392,7 @@ export class MailboxOrganizer {
       )
         out.redeliverTo = rule.actions.redeliverTo;
     }
+
     return out;
   }
 
@@ -353,7 +402,7 @@ export class MailboxOrganizer {
     name: string,
     stages: ReadonlyArray<string>,
     enrollAddress?: string,
-  ): { readonly boardId: string; readonly stageIds: ReadonlyArray<string> } {
+  ): CreateBoardResult {
     if (stages.length === 0) reject("bad_request", "board needs a stage");
     const boardId = this.ctx.id("wfb");
     this.sql.run(
@@ -362,6 +411,7 @@ export class MailboxOrganizer {
       name,
       enrollAddress ? normalizeAddress(enrollAddress) : null,
     );
+
     const stageIds = stages.map((s, i) => {
       const id = this.ctx.id("wfs");
       this.sql.run(
@@ -371,16 +421,21 @@ export class MailboxOrganizer {
         s,
         i,
       );
+
       return id;
     });
+
     this.ctx.change("workflow", "created", { boardId });
+
     return { boardId, stageIds };
   }
 
   addStage(boardId: string, name: string): string {
     if (!this.sql.one("SELECT 1 AS x FROM workflow_boards WHERE board_id = ?", boardId))
       reject("not_found", "board");
+
     if (!name.trim()) reject("bad_request", "stage name required");
+
     const pos =
       Number(
         this.sql.one<{ p: number | null }>(
@@ -388,6 +443,7 @@ export class MailboxOrganizer {
           boardId,
         )?.p ?? -1,
       ) + 1;
+
     const id = this.ctx.id("wfs");
     this.sql.run(
       "INSERT INTO workflow_stages (stage_id, board_id, name, position) VALUES (?, ?, ?, ?)",
@@ -397,11 +453,13 @@ export class MailboxOrganizer {
       pos,
     );
     this.ctx.change("workflow", "stage", { boardId });
+
     return id;
   }
 
   renameStage(stageId: string, name: string): void {
     if (!name.trim()) reject("bad_request", "stage name required");
+
     if (
       this.sql.run(
         "UPDATE workflow_stages SET name = ? WHERE stage_id = ?",
@@ -436,13 +494,17 @@ export class MailboxOrganizer {
       "SELECT stage_id FROM workflow_stages WHERE board_id = ? ORDER BY position LIMIT 1",
       boardId,
     );
+
     if (!first) return undefined;
+
     const existing = this.sql.one<{ card_id: string }>(
       "SELECT card_id FROM workflow_cards WHERE board_id = ? AND thread_id = ?",
       boardId,
       threadId,
     );
+
     if (existing) return existing.card_id;
+
     const pos =
       Number(
         this.sql.one<{ p: number | null }>(
@@ -450,6 +512,7 @@ export class MailboxOrganizer {
           first.stage_id,
         )?.p ?? -1,
       ) + 1;
+
     const cardId = this.ctx.id("wfc");
     this.sql.run(
       "INSERT INTO workflow_cards (card_id, board_id, stage_id, thread_id, position) VALUES (?, ?, ?, ?, ?)",
@@ -460,6 +523,7 @@ export class MailboxOrganizer {
       pos,
     );
     this.ctx.change("workflow", "enrolled", { boardId, threadId });
+
     return cardId;
   }
 
@@ -467,15 +531,18 @@ export class MailboxOrganizer {
   enrollByAddress(threadId: string, recipients: ReadonlyArray<string>): void {
     if (recipients.length === 0) return;
     const addresses = recipients.slice(0, 50);
+
     const boards = this.sql.all<{ board_id: string }>(
       `SELECT board_id FROM workflow_boards WHERE enroll_address IN (${placeholders(addresses.length)})`,
       ...addresses,
     );
+
     for (const b of boards) this.enrollInBoard(b.board_id, threadId);
   }
 
   addToBoard(boardId: string, threadId: string): string {
     this.requireThread(threadId);
+
     return this.enrollInBoard(boardId, threadId) ?? reject("not_found", "board");
   }
 
@@ -485,6 +552,7 @@ export class MailboxOrganizer {
         "SELECT board_id FROM workflow_cards WHERE card_id = ?",
         cardId,
       ) ?? reject("not_found", "card");
+
     if (
       !this.sql.one(
         "SELECT 1 AS x FROM workflow_stages WHERE stage_id = ? AND board_id = ?",
@@ -516,28 +584,18 @@ export class MailboxOrganizer {
     this.ctx.change("workflow", "completed", { cardId, done });
   }
 
-  board(boardId: string): {
-    readonly boardId: string;
-    readonly name: string;
-    readonly stages: ReadonlyArray<{
-      readonly stageId: string;
-      readonly name: string;
-      readonly cards: ReadonlyArray<{
-        readonly cardId: string;
-        readonly threadId: string;
-        readonly completed: boolean;
-      }>;
-    }>;
-  } {
+  board(boardId: string): BoardResult {
     const b =
       this.sql.one<{ name: string }>(
         "SELECT name FROM workflow_boards WHERE board_id = ?",
         boardId,
       ) ?? reject("not_found", "board");
+
     const stages = this.sql.all<{ stage_id: string; name: string }>(
       "SELECT stage_id, name FROM workflow_stages WHERE board_id = ? ORDER BY position",
       boardId,
     );
+
     const cards = groupBy(
       this.sql.all<{
         card_id: string;
@@ -550,6 +608,7 @@ export class MailboxOrganizer {
       ),
       (c) => c.stage_id,
     );
+
     return {
       boardId,
       name: b.name,
@@ -576,6 +635,7 @@ export class MailboxOrganizer {
       this.ctx.now(),
     );
     this.ctx.change("collection", "created", { collectionId: id });
+
     return id;
   }
 
@@ -586,6 +646,7 @@ export class MailboxOrganizer {
   ): void {
     if (!this.sql.one("SELECT 1 AS x FROM collections WHERE collection_id = ?", collectionId))
       reject("not_found", "collection");
+
     for (const t of add) {
       this.requireThread(t);
       this.sql.run(
@@ -595,6 +656,7 @@ export class MailboxOrganizer {
         this.ctx.now(),
       );
     }
+
     for (const t of remove)
       this.sql.run(
         "DELETE FROM collection_items WHERE collection_id = ? AND thread_id = ?",
@@ -612,6 +674,7 @@ export class MailboxOrganizer {
       "SELECT collection_id, name FROM collections WHERE collection_id = ?",
       collectionId,
     );
+
     return r ? { collectionId: r.collection_id, name: r.name } : undefined;
   }
 
@@ -671,9 +734,11 @@ export class MailboxOrganizer {
     | { readonly _tag: "Saved"; readonly noteId: string; readonly revision: number }
     | { readonly _tag: "Conflict"; readonly note: MailboxNote } {
     if (input.threadId) this.requireThread(input.threadId);
+
     if (input.kind === "thread" && !input.threadId)
       reject("bad_request", "thread note requires threadId");
     const existing = input.noteId ? this.note(input.noteId) : undefined;
+
     if (existing && input.expectedRevision !== existing.revision)
       return { _tag: "Conflict", note: existing };
     const noteId = existing?.noteId ?? input.noteId ?? this.ctx.id("not");
@@ -691,6 +756,7 @@ export class MailboxOrganizer {
     );
     this.ctx.indexUpsert("note", noteId);
     this.ctx.change("note", "saved", { noteId });
+
     return { _tag: "Saved", noteId, revision };
   }
 
@@ -702,6 +768,7 @@ export class MailboxOrganizer {
 
   note(noteId: string): MailboxNote | undefined {
     const r = this.sql.one<NoteRow>("SELECT * FROM notes WHERE note_id = ?", noteId);
+
     return r ? toNote(r) : undefined;
   }
 
@@ -740,6 +807,7 @@ export class MailboxOrganizer {
     );
     this.ctx.indexUpsert("clip", clipId);
     this.ctx.change("clip", "created", { clipId });
+
     return clipId;
   }
 
@@ -756,6 +824,7 @@ export class MailboxOrganizer {
 
   clip(clipId: string): MailboxClip | undefined {
     const r = this.sql.one<ClipRow>("SELECT * FROM clips WHERE clip_id = ?", clipId);
+
     return r ? toClip(r) : undefined;
   }
 
@@ -778,17 +847,21 @@ export class MailboxOrganizer {
       contact.notes ?? "",
       this.ctx.now(),
     );
+
     if (contact.groups) {
       this.sql.run("DELETE FROM contact_group_members WHERE contact_id = ?", id);
+
       for (const g of contact.groups) {
         let gid = this.sql.one<{ group_id: string }>(
           "SELECT group_id FROM contact_groups WHERE name = ?",
           g,
         )?.group_id;
+
         if (!gid) {
           gid = this.ctx.id("grp");
           this.sql.run("INSERT INTO contact_groups (group_id, name) VALUES (?, ?)", gid, g);
         }
+
         this.sql.run(
           "INSERT OR IGNORE INTO contact_group_members (group_id, contact_id) VALUES (?, ?)",
           gid,
@@ -796,8 +869,10 @@ export class MailboxOrganizer {
         );
       }
     }
+
     this.ctx.indexUpsert("contact", id);
     this.ctx.change("contact", "put", { contactId: id });
+
     return id;
   }
 
@@ -818,6 +893,7 @@ export class MailboxOrganizer {
   private toContacts(rows: ReadonlyArray<ContactRow>): Array<MailboxContact> {
     if (rows.length === 0) return [];
     const groups = new Map<string, Array<string>>();
+
     const found = allInChunks(
       rows.map((r) => r.contact_id),
       (chunk) =>
@@ -826,11 +902,13 @@ export class MailboxOrganizer {
           ...chunk,
         ),
     );
+
     for (const [id, group] of groupBy(found, (g) => g.contact_id))
       groups.set(
         id,
         group.map((g) => g.name),
       );
+
     return rows.map((r) => ({
       contactId: r.contact_id,
       name: r.name,
@@ -844,6 +922,7 @@ export class MailboxOrganizer {
   searchContacts(query: string): ReadonlyArray<MailboxContact> {
     // instr() instead of LIKE: DO SQLite caps LIKE patterns at 50 bytes, and user input can exceed it.
     const needle = query.toLowerCase();
+
     return this.toContacts(
       this.sql.all<ContactRow>(
         "SELECT * FROM contacts WHERE instr(lower(name), ?) > 0 OR instr(lower(emails), ?) > 0 OR instr(lower(notes), ?) > 0 ORDER BY name",
@@ -877,6 +956,7 @@ export class MailboxOrganizer {
     // Domain match is a suffix comparison, not LIKE: DO SQLite caps LIKE patterns at 50 bytes.
     const exact = q.includes("@");
     const where = exact ? "from_address = ?" : "lower(substr(from_address, -length(?))) = ?";
+
     return this.sql
       .all<{ delivery_id: string; thread_id: string; subject: string; date: number }>(
         `SELECT delivery_id, thread_id, subject, date FROM deliveries WHERE direction = 'in' AND ${where} ORDER BY date DESC LIMIT ?`,
@@ -935,16 +1015,20 @@ export class MailboxOrganizer {
     limit = 10,
   ): ReadonlyArray<{ readonly address: string; readonly name: string | null }> {
     const needle = prefix.toLowerCase();
+
     const recent = this.sql.all<{ address: string; name: string | null }>(
       "SELECT address, name FROM recent_recipients WHERE instr(lower(address), ?) = 1 OR instr(lower(COALESCE(name, '')), ?) = 1 ORDER BY last_used_at DESC, uses DESC LIMIT ?",
       needle,
       needle,
       limit,
     );
+
     const seen = new Set(recent.map((r) => r.address));
+
     const contacts = this.searchContacts(prefix)
       .flatMap((c) => c.emails.map((address) => ({ address, name: c.name })))
       .filter((c) => !seen.has(c.address));
+
     return [...recent, ...contacts].slice(0, limit);
   }
 
@@ -955,24 +1039,30 @@ export class MailboxOrganizer {
       readonly emails: ReadonlyArray<string>;
       readonly notes?: string;
     }>,
-  ): { readonly imported: number } {
+  ): ImportContactsResult {
     let imported = 0;
+
     for (const c of contacts) {
       const primary = c.emails[0] ? normalizeAddress(c.emails[0]) : undefined;
+
       const existing = primary
         ? this.sql.one<{ contact_id: string }>(
             "SELECT contact_id FROM contacts WHERE instr(lower(emails), ?) > 0",
             JSON.stringify(primary),
           )
         : undefined;
-      this.putContact({
-        ...(existing ? { contactId: existing.contact_id } : {}),
+
+      let contact: Parameters<typeof this.putContact>[0] = {
         name: c.name,
         emails: c.emails,
         notes: c.notes ?? "",
-      });
+      };
+
+      if (existing) contact = { ...contact, contactId: existing.contact_id };
+      this.putContact(contact);
       imported++;
     }
+
     return { imported };
   }
 

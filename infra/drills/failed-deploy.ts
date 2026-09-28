@@ -15,18 +15,28 @@
 import { acquireLease, type LeaseFetcher, releaseLease } from "../state/lease.ts";
 import { handleStateRequest, type StateEnv, StateStoreObject } from "../state/core.ts";
 
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | ReadonlyArray<JsonValue>
+  | { readonly [key: string]: JsonValue };
+
+type ResourceProps = Readonly<Record<string, JsonValue>>;
+
 export interface ManifestResource {
   readonly fqn: string;
   readonly type: string;
   /** Persistent data (D1, R2, DO namespace, queues): replacement is never acceptable. */
   readonly persistent: boolean;
-  readonly props: Readonly<Record<string, unknown>>;
+  readonly props: ResourceProps;
 }
 
 interface StateValue {
   readonly status: "creating" | "created";
   readonly type: string;
-  readonly props: Readonly<Record<string, unknown>>;
+  readonly props: ResourceProps;
   readonly attr: { readonly id: string };
 }
 
@@ -117,9 +127,11 @@ const readState = async (
   fqn: string,
 ): Promise<StateValue | undefined> => {
   const r = await b.call(resourcePath(stage, fqn));
+
   if (r.status !== 200) return undefined;
   // An absent resource is answered with an empty body (the contract's "absent").
   const text = await r.text();
+
   return text.trim() === "" ? undefined : ((JSON.parse(text) as StateValue | null) ?? undefined);
 };
 
@@ -130,11 +142,11 @@ const writeState = async (
   value: StateValue,
 ): Promise<void> => {
   const r = await b.call(resourcePath(stage, fqn), { method: "PUT", body: JSON.stringify(value) });
+
   if (r.status !== 200) throw new Error(`state write ${fqn} failed with ${r.status}`);
 };
 
-const sameProps = (a: Readonly<Record<string, unknown>>, b: Readonly<Record<string, unknown>>) =>
-  JSON.stringify(a) === JSON.stringify(b);
+const sameProps = (a: ResourceProps, b: ResourceProps) => JSON.stringify(a) === JSON.stringify(b);
 
 /** Plan the manifest against recorded state, the way the engine diffs desired vs. state. */
 export const planDeploy = async (
@@ -143,8 +155,10 @@ export const planDeploy = async (
   manifest: ReadonlyArray<ManifestResource>,
 ): Promise<ReadonlyArray<Step>> => {
   const steps: Array<Step> = [];
+
   for (const r of manifest) {
     const s = await readState(b, stage, r.fqn);
+
     if (!s) steps.push({ op: "create", fqn: r.fqn });
     // A resource the crashed run began: finish it in place, keeping any physical ID it recorded.
     else if (s.status === "creating") steps.push({ op: "resume", fqn: r.fqn, id: s.attr.id });
@@ -152,6 +166,7 @@ export const planDeploy = async (
     else if (!sameProps(s.props, r.props)) steps.push({ op: "update", fqn: r.fqn, id: s.attr.id });
     else steps.push({ op: "noop", fqn: r.fqn });
   }
+
   return steps;
 };
 
@@ -168,6 +183,7 @@ export const applyPlan = async (
   options: { readonly crashAfter?: number; readonly newId: (fqn: string) => string },
 ): Promise<{ readonly crashed: boolean }> => {
   let changed = 0;
+
   for (const step of steps) {
     if (step.op === "noop") continue;
     const r = manifest.find((m) => m.fqn === step.fqn)!;
@@ -179,6 +195,7 @@ export const applyPlan = async (
       attr: { id },
     });
     changed++;
+
     if (options.crashAfter !== undefined && changed === options.crashAfter)
       return { crashed: true };
     await writeState(b, stage, r.fqn, {
@@ -188,6 +205,7 @@ export const applyPlan = async (
       attr: { id },
     });
   }
+
   return { crashed: false };
 };
 
@@ -199,13 +217,16 @@ export const runFailedDeployDrill = async (
   const recovery = options.recovery ?? "release";
   let seq = 0;
   const newId = (fqn: string) => `${fqn.replace(/\W/g, "-").toLowerCase()}-${(++seq).toString(36)}`;
+
   const fetcher: LeaseFetcher = async (url, init) => {
     const u = new URL(url);
+
     return b.call(`${u.pathname}${u.search}`, {
       method: init.method,
-      ...(init.body === undefined ? {} : { body: init.body }),
+      body: init.body,
     });
   };
+
   const lease = {
     baseUrl: "https://state.drill",
     token: "unused",
@@ -222,8 +243,10 @@ export const runFailedDeployDrill = async (
   const crashAfter = Math.ceil(DRILL_MANIFEST.length / 2);
   await applyPlan(b, stage, DRILL_MANIFEST, firstPlan, { crashAfter, newId });
   const idsBeforeCrash = new Map<string, string>();
+
   for (const r of DRILL_MANIFEST) {
     const s = await readState(b, stage, r.fqn);
+
     if (s) idsBeforeCrash.set(r.fqn, s.attr.id);
   }
 
@@ -234,10 +257,12 @@ export const runFailedDeployDrill = async (
   if (recovery === "release") await releaseLease(lease, STACK, stage, "gha-run-1");
   else b.object.acquireLock(STACK, stage, "gha-run-1", 1_000, Date.now() - 2 * 6 * 3600_000); // backdate: already expired
   const retaken = await acquireLease(lease, STACK, stage, "gha-run-2");
+
   if (!retaken.ok) throw new Error(`recovery could not take the lease: ${retaken.detail}`);
 
   // Step 3: re-plan the same manifest. Nothing persistent may be replaced; begun resources resume.
   const resumePlan = await planDeploy(b, stage, DRILL_MANIFEST);
+
   const replacements = resumePlan
     .filter((s) => s.op === "replace" && DRILL_MANIFEST.find((m) => m.fqn === s.fqn)!.persistent)
     .map((s) => s.fqn);
@@ -247,13 +272,18 @@ export const runFailedDeployDrill = async (
   await releaseLease(lease, STACK, stage, "gha-run-2");
   let converged = true;
   let idsKept = true;
+
   for (const r of DRILL_MANIFEST) {
     const s = await readState(b, stage, r.fqn);
+
     if (!s || s.status !== "created" || !sameProps(s.props, r.props)) converged = false;
     const before = idsBeforeCrash.get(r.fqn);
+
     if (before !== undefined && s?.attr.id !== before) idsKept = false;
   }
+
   const finalPlan = await planDeploy(b, stage, DRILL_MANIFEST);
+
   return {
     crashedAfter: crashAfter,
     secondWriterBlocked: !blocked.ok,
@@ -271,6 +301,7 @@ export const memoryBackend = async (): Promise<DrillBackend> => {
   const { MemoryDurableStorage } = await import("../../packages/testing/src/sqlite.ts");
   const token = "drill-state-token-0123456789abcdef";
   const puts = new Map<string, string>();
+
   const env: StateEnv = {
     STATE_TOKEN: token,
     STATE_ENCRYPTION_KEY: `v1:${"cd".repeat(32)}`,
@@ -278,7 +309,7 @@ export const memoryBackend = async (): Promise<DrillBackend> => {
       put: async (k: string, v: string) => void puts.set(k, v),
       get: async (k: string) => (puts.has(k) ? { text: async () => puts.get(k)! } : null),
       list: async ({ prefix }) => ({
-        objects: [...puts.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })),
+        objects: [...puts.keys()].flatMap((key) => (key.startsWith(prefix) ? [{ key }] : [])),
       }),
       delete: async (keys) => {
         for (const k of Array.isArray(keys) ? keys : [keys]) puts.delete(k);
@@ -286,7 +317,9 @@ export const memoryBackend = async (): Promise<DrillBackend> => {
     },
     STATE: { getByName: () => object },
   };
+
   const object = new StateStoreObject({ storage: new MemoryDurableStorage() as never }, env);
+
   const call = (path: string, init: RequestInit = {}) =>
     handleStateRequest(
       new Request(`https://state.drill${path}`, {
@@ -295,6 +328,7 @@ export const memoryBackend = async (): Promise<DrillBackend> => {
       }),
       env,
     );
+
   return { call, object };
 };
 
@@ -311,6 +345,7 @@ if (import.meta.main) {
     await runFailedDeployDrill(await memoryBackend(), { recovery: "release" }),
     await runFailedDeployDrill(await memoryBackend(), { recovery: "expiry" }),
   ];
+
   console.log(JSON.stringify(reports, null, 2));
   process.exit(reports.every(drillPassed) ? 0 : 1);
 }

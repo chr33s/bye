@@ -6,6 +6,7 @@
 // are never printed — only names.
 //
 // Usage: node --experimental-strip-types infra/policies/check-config.ts   (exit 1 lists missing names)
+import { Predicate } from "effect";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { domainDefaults, parseDomain } from "../resources/domain.ts";
@@ -42,12 +43,14 @@ export const declaredConfig = (
   dir = join(import.meta.dirname, "../resources"),
 ): ReadonlyArray<ConfigName> => {
   const found = new Map<string, ConfigName>();
+
   const files = [
     ...readdirSync(dir)
       .filter((f) => f.endsWith(".ts"))
       .map((f) => join(dir, f)),
     join(dir, "../stack.ts"),
   ];
+
   for (const file of files) {
     for (const c of scanConfig(readFileSync(file, "utf8"))) {
       const prior = found.get(c.name);
@@ -60,9 +63,11 @@ export const declaredConfig = (
       );
     }
   }
+
   // Deploy-time names the stack reads from process.env rather than a Config declaration.
   for (const name of SCANNER_DEPLOY_ENV)
     if (!found.has(name)) found.set(name, { name, secret: false, optional: true });
+
   return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
 };
 
@@ -98,10 +103,11 @@ export const unmappedInCi = (
   ciWorkflow: string,
   names: ReadonlyArray<ConfigName> = declaredConfig(),
 ): ReadonlyArray<string> =>
-  names
-    .filter((c) => !CI_UNMAPPED.includes(c.name))
-    .filter((c) => !new RegExp(`^\\s+${c.name}:\\s`, "m").test(ciWorkflow))
-    .map((c) => c.name);
+  names.flatMap((c) =>
+    !CI_UNMAPPED.includes(c.name) && !new RegExp(`^\\s+${c.name}:\\s`, "m").test(ciWorkflow)
+      ? [c.name]
+      : [],
+  );
 
 /**
  * Secrets the PR-executed `preview`/`preview-destroy` jobs may resolve (besides the tiered
@@ -125,11 +131,13 @@ export const previewSecretOverreach = (
   names: ReadonlyArray<ConfigName> = declaredConfig(),
 ): ReadonlyArray<string> => {
   const allowed = new Set([
-    ...names.filter((c) => !c.optional && c.secret).map((c) => c.name),
+    ...names.flatMap((c) => (!c.optional && c.secret ? [c.name] : [])),
     ...PREVIEW_OPTIONAL_SECRETS,
     ...PREVIEW_DEPLOY_SECRETS,
   ]);
+
   const used = [...jobText.matchAll(/secrets\.([A-Z0-9_]+)/g)].map((m) => m[1]!);
+
   return [...new Set(used)].filter((n) => !allowed.has(n)).sort();
 };
 
@@ -167,27 +175,32 @@ export const unsandboxedMail = (
   stage = env.STAGE ?? "",
 ): ReadonlyArray<string> => {
   const classified = classifyStage(stage);
-  if (classified._tag !== "Valid" || classified.stage.persistent) return [];
+
+  if (!Predicate.isTagged(classified, "Valid") || classified.stage.persistent) return [];
+
   if ((env.MAIL_SANDBOX_DOMAINS ?? "").trim() !== "") return [];
   const classes = enabledClasses(env);
+
   return [
     ...MAIL_CREDENTIALS.filter((n) => (env[n] ?? "").trim() !== ""),
-    ...CREDENTIAL_FREE_CLASSES.filter((c) => classes.has(c)).map(
-      (c) => `MAIL_TRAFFIC_CLASSES=${c}`,
+    ...CREDENTIAL_FREE_CLASSES.flatMap((c) =>
+      classes.has(c) ? [`MAIL_TRAFFIC_CLASSES=${c}`] : [],
     ),
   ];
 };
 
 /** The environment the stack sees: absent names filled from DOMAIN (infra/resources/domain.ts). */
-export const withDomainDefaults = (
-  env: Readonly<Record<string, string | undefined>>,
-): Readonly<Record<string, string | undefined>> => ({ ...env, ...domainDefaults(env) });
+export const withDomainDefaults = (env: Readonly<Record<string, string | undefined>>) => ({
+  ...env,
+  ...domainDefaults(env),
+});
 
 export const missingConfig = (
   env: Readonly<Record<string, string | undefined>>,
   names = requiredConfig(),
 ): ReadonlyArray<string> => {
   const resolved = withDomainDefaults(env);
+
   return names
     .filter((c) => !resolved[c.name] || resolved[c.name]!.trim() === "")
     .map((c) => c.name);
@@ -199,6 +212,7 @@ export const domainProblems = (
 ): ReadonlyArray<string> => {
   try {
     parseDomain(env.DOMAIN);
+
     return [];
   } catch (e) {
     return [e instanceof Error ? e.message : String(e)];
@@ -215,15 +229,19 @@ export const WEBHOOK_SECRETS: ReadonlyArray<string> = [
   "BILLING_WEBHOOK_SECRET",
   "SEND_EVENTS_WEBHOOK_SECRET",
 ];
+
 export const MIN_WEBHOOK_SECRET_LENGTH = 32;
 
 export const webhookSecretProblems = (
   env: Readonly<Record<string, string | undefined>>,
 ): ReadonlyArray<string> =>
-  WEBHOOK_SECRETS.filter((n) => {
+  WEBHOOK_SECRETS.flatMap((n) => {
     const v = (env[n] ?? "").trim();
-    return v !== "" && v.length < MIN_WEBHOOK_SECRET_LENGTH;
-  }).map((n) => `${n} is shorter than ${MIN_WEBHOOK_SECRET_LENGTH} characters`);
+
+    return v !== "" && v.length < MIN_WEBHOOK_SECRET_LENGTH
+      ? [`${n} is shorter than ${MIN_WEBHOOK_SECRET_LENGTH} characters`]
+      : [];
+  });
 
 /** SCANNER_SIGNATURES/SCANNER_IMAGE, validated with the stack's own rule before any plan. */
 export const scannerProblems = (
@@ -231,6 +249,7 @@ export const scannerProblems = (
 ): ReadonlyArray<string> => {
   try {
     scannerSignatureSource(env);
+
     return [];
   } catch (e) {
     return [e instanceof Error ? e.message : String(e)];
@@ -269,13 +288,16 @@ export const missingPreviewAttestation = (
   stage = env.STAGE ?? "",
 ): boolean => {
   const classified = classifyStage(stage);
-  if (classified._tag !== "Valid" || !classified.stage.persistent) return false;
+
+  if (!Predicate.isTagged(classified, "Valid") || !classified.stage.persistent) return false;
   const classes = enabledClasses(env);
+
   if (
     !MAIL_CREDENTIALS.some((n) => (env[n] ?? "").trim() !== "") &&
     !CREDENTIAL_FREE_CLASSES.some((c) => classes.has(c))
   )
     return false;
+
   return (
     (env[PROVIDER_PREVIEW_ATTESTATION.name] ?? "").trim() !== PROVIDER_PREVIEW_ATTESTATION.value
   );
@@ -283,25 +305,33 @@ export const missingPreviewAttestation = (
 
 if (import.meta.main) {
   const domain = domainProblems(process.env);
+
   for (const problem of domain) console.error(`config: ${problem}`);
+
   if (domain.length) process.exit(1);
   const missing = missingConfig(process.env);
+
   for (const name of missing) console.error(`config: ${name} is not set`);
   const forbidden = forbiddenConfig(process.env);
+
   for (const name of forbidden)
     console.error(`config: ${name} must not be set on ${process.env.STAGE}`);
   const unsandboxed = unsandboxedMail(process.env);
+
   for (const name of unsandboxed)
     console.error(
       `config: ${name} is set on ${process.env.STAGE} but MAIL_SANDBOX_DOMAINS is empty (§15.8)`,
     );
   const attestation = missingPreviewAttestation(process.env);
+
   if (attestation)
     console.error(
       `config: ${PROVIDER_PREVIEW_ATTESTATION.name} must be "${PROVIDER_PREVIEW_ATTESTATION.value}" on ${process.env.STAGE} (provider sent-email previews off, §10)`,
     );
   const pairing = [...webhookSecretProblems(process.env), ...scannerProblems(process.env)];
+
   for (const problem of pairing) console.error(`config: ${problem}`);
+
   if (missing.length || forbidden.length || unsandboxed.length || attestation || pairing.length)
     process.exit(1);
   console.log(`config: ${requiredConfig().length} required names present`);

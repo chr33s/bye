@@ -4,7 +4,7 @@ import {
   CLOUDFLARE_TRANSACTIONAL_CAPABILITIES,
   type TransportCapabilities,
 } from "@bye/domain";
-import { Effect } from "effect";
+import { Effect, Predicate } from "effect";
 import { dkimSign, type DkimKey } from "./dkim.ts";
 import type { TransportAdapter } from "./router.ts";
 
@@ -33,9 +33,13 @@ export const loadRawBytes = async (
   contentKey: string,
 ): Promise<Uint8Array<ArrayBuffer> | null> => {
   const body = await content.load(contentKey);
+
   if (body === null) return null;
-  if (typeof body === "string") return new TextEncoder().encode(body) as Uint8Array<ArrayBuffer>;
+
+  if (Predicate.isString(body)) return new TextEncoder().encode(body) as Uint8Array<ArrayBuffer>;
+
   if (body instanceof Uint8Array) return new Uint8Array(body);
+
   return new Uint8Array(await new Response(body).arrayBuffer());
 };
 
@@ -45,10 +49,11 @@ export const loadRawBytes = async (
  * provider may already have accepted the message (§5.2 ambiguous send).
  */
 export const classifyCloudflareSendError = (
-  error: unknown,
+  cause: unknown,
   phase: "before-request" | "in-flight",
 ): TransportFailure => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = cause instanceof Error ? cause.message : String(cause);
+
   // Throttling/quota/transient provider errors mean "not accepted, try later" — checked before the
   // permanent patterns, which would otherwise match e.g. "rate limit exceeded".
   if (phase === "before-request" || /rate|quota|temporar|try again/i.test(message))
@@ -56,11 +61,13 @@ export const classifyCloudflareSendError = (
       kind: "RetryableBeforeAcceptance",
       detail: message.slice(0, 300),
     });
+
   if (
     /not (allowed|verified|authorized)|invalid|rejected|forbidden|too large|limit/i.test(message)
   ) {
     return new TransportFailure({ kind: "Rejected", detail: message.slice(0, 300) });
   }
+
   return new TransportFailure({ kind: "Unknown", detail: message.slice(0, 300) });
 };
 
@@ -76,11 +83,13 @@ export const makeCloudflareTransactionalTransport = (
         try: () => content.load(submission.contentKey),
         catch: (e) => classifyCloudflareSendError(e, "before-request"),
       });
+
       if (raw === null)
         return yield* new TransportFailure({
           kind: "RetryableBeforeAcceptance",
           detail: "rendered content missing",
         });
+
       const result = yield* Effect.tryPromise({
         try: () =>
           binding.send({
@@ -90,10 +99,12 @@ export const makeCloudflareTransactionalTransport = (
           }),
         catch: (e) => classifyCloudflareSendError(e, "in-flight"),
       });
+
       // Cloudflare controls the wire Message-ID; the acceptance ID is not assumed to equal it.
       const acceptance: Acceptance = {
         providerId: (result && result.messageId) || `cf:${submission.sendJobId}`,
       };
+
       return acceptance;
     }).pipe(Effect.withSpan("transport.cloudflare.submit")),
 });
@@ -119,17 +130,21 @@ export const makeCloudflarePersonalTransport = (
         try: () => loadRawBytes(content, submission.contentKey),
         catch: (e) => classifyCloudflareSendError(e, "before-request"),
       });
+
       if (raw === null)
         return yield* new TransportFailure({
           kind: "RetryableBeforeAcceptance",
           detail: "rendered content missing",
         });
+
       const bytes = yield* Effect.tryPromise({
         try: async () => {
           const key = dkimKey ? await dkimKey() : null;
+
           if (!key) return raw;
           const signed = await dkimSign(raw, key);
-          return signed._tag === "Signed" ? signed.raw : raw;
+
+          return Predicate.isTagged(signed, "Signed") ? signed.raw : raw;
         },
         catch: () =>
           new TransportFailure({
@@ -137,7 +152,9 @@ export const makeCloudflarePersonalTransport = (
             detail: "DKIM signing key could not be used",
           }),
       });
+
       const accepted: Array<string> = [];
+
       for (const recipient of submission.envelopeRecipients) {
         const result = yield* Effect.tryPromise({
           try: () =>
@@ -150,11 +167,14 @@ export const makeCloudflarePersonalTransport = (
                   detail: `accepted for ${accepted.length} of ${submission.envelopeRecipients.length} recipients before a failure`,
                 }),
         });
+
         accepted.push(
           (result && result.messageId) || `cf:${submission.sendJobId}:${accepted.length}`,
         );
       }
+
       const acceptance: Acceptance = { providerId: accepted.join(",") };
+
       return acceptance;
     }).pipe(Effect.withSpan("transport.cloudflare.personal.submit")),
 });

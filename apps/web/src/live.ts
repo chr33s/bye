@@ -20,7 +20,9 @@ export const connectLive = (mailboxId: string, onChange: () => void): (() => voi
         { query: { mailbox: mailboxId, cursor } },
       )
       .catch(() => null);
+
     if (!page) return;
+
     if (page.expired || page.changes.length > 0) onChange();
     cursor = page.cursor;
     localStorage.setItem(key, String(cursor));
@@ -28,16 +30,19 @@ export const connectLive = (mailboxId: string, onChange: () => void): (() => voi
 
   const open = () => {
     if (stopped) return;
+
     const url = new URL(
       `/v1/live?mailbox=${encodeURIComponent(mailboxId)}&cursor=${cursor}`,
       location.href,
     );
+
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     socket = new WebSocket(url);
     socket.onopen = () => {
       backoff = 1000;
       void catchUp();
     };
+
     socket.onmessage = () => void catchUp();
     socket.onclose = () => {
       if (!stopped) setTimeout(open, (backoff = Math.min(backoff * 2, 60_000)));
@@ -46,6 +51,7 @@ export const connectLive = (mailboxId: string, onChange: () => void): (() => voi
 
   const poll = setInterval(() => void catchUp().catch(() => undefined), 60_000);
   open();
+
   return () => {
     stopped = true;
     clearInterval(poll);

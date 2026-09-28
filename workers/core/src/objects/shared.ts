@@ -38,17 +38,21 @@ export class SharedSpaceDO extends DurableObject<CoreEnv> {
 
   spaceStore(): SharedSpaceStore {
     if (!this.name.startsWith("space:")) throw new Error("not a shared space");
+
     return (this.space ??= new SharedSpaceStore(this.ctx.storage, kernelClock));
   }
 
   worldStore(): WorldStore {
     if (!this.name.startsWith("world:")) throw new Error("not a world author");
+
     return (this.world ??= new WorldStore(this.ctx.storage, kernelClock, this.env.SESSION_KEY));
   }
 
   private async afterCommit(): Promise<void> {
     const kernel = this.space?.kernel ?? this.world?.kernel;
+
     if (!kernel) return;
+
     if (this.space) broadcastSeq(this.ctx, kernel.currentSeq());
     await flush(this.env, kernel, this.name);
   }
@@ -69,22 +73,27 @@ export class SharedSpaceDO extends DurableObject<CoreEnv> {
   /** The kernel of whichever authority this object hosts (null for an unknown name). */
   private kernelOf() {
     if (this.name.startsWith("space:")) return this.spaceStore().kernel;
+
     if (this.name.startsWith("world:")) return this.worldStore().kernel;
+
     return null;
   }
 
   /** Cron reconciliation (§6 row 3): relay any stranded outbox rows and compact change history. */
   async reconcile(_now: number): Promise<{ readonly nextWake: number | null }> {
     const kernel = this.kernelOf();
+
     if (!kernel) return { nextWake: null };
     kernel.compactChanges(10_000);
     await flush(this.env, kernel, this.name);
+
     return { nextWake: kernel.nextDueAt() };
   }
 
   /** Hibernating change-hint socket for a shared space (§8); membership checked by the API Worker. */
   override async fetch(request: Request): Promise<Response> {
     if (!this.name.startsWith("space:")) return new Response("not found", { status: 404 });
+
     return acceptLiveSocket(this.ctx, request, this.spaceStore().kernel.currentSeq());
   }
 
@@ -105,7 +114,9 @@ export class SharedSpaceDO extends DurableObject<CoreEnv> {
   /** Every RPC runs through the platform envelope: rejections cross as data, defects throw. */
   private async run<A>(f: () => A | Promise<A>): Promise<RpcResult<A>> {
     const r = await toRpc(f);
+
     if (r.ok) this.ctx.waitUntil(this.afterCommit());
+
     return r;
   }
 
@@ -116,6 +127,7 @@ export class SharedSpaceDO extends DurableObject<CoreEnv> {
         await this.indexMembership(input.spaceId, input.ownerId, "owner");
         await this.catalog("space", input.spaceId);
       }
+
       return r;
     });
   }
@@ -147,6 +159,7 @@ export class SharedSpaceDO extends DurableObject<CoreEnv> {
   eraseMember(userId: string) {
     return this.run(() => this.spaceStore().eraseMember(userId)).then(async (r) => {
       if (r.ok) await this.indexMembership(this.name.replace(/^space:/, ""), userId, null);
+
       return r;
     });
   }
@@ -186,6 +199,7 @@ export class SharedSpaceDO extends DurableObject<CoreEnv> {
   setMember(actorId: string, userId: string, role: "owner" | "member" | null) {
     return this.run(() => this.spaceStore().setMember(actorId, userId, role)).then(async (r) => {
       if (r.ok) await this.indexMembership(this.name.replace(/^space:/, ""), userId, role);
+
       return r;
     });
   }
@@ -247,6 +261,7 @@ export class SharedSpaceDO extends DurableObject<CoreEnv> {
   initWorld(input: Parameters<WorldStore["init"]>[0]) {
     return this.run(() => this.worldStore().init(input)).then(async (r) => {
       if (r.ok) await this.catalog("world", input.handle);
+
       return r;
     });
   }
@@ -279,6 +294,7 @@ export class SharedSpaceDO extends DurableObject<CoreEnv> {
     return this.run(() => {
       if (!NEWSLETTER_METHODS.includes(method)) throw new Error(`newsletter.${method} not allowed`);
       const ledger = this.worldStore().newsletter;
+
       return (ledger[method] as (...a: typeof args) => ReturnType<NewsletterLedger[K]>)(...args);
     });
   }

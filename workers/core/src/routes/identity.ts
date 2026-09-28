@@ -1,5 +1,5 @@
 // Identity, credential and security-settings routes (A03, X02).
-import { Effect } from "effect";
+import { Effect, type Types } from "effect";
 import { issueApiToken, NotFound, Principal, requireStepUp } from "@bye/application";
 import { AuthService, CommerceService, SupportService } from "@bye/platform-cloudflare";
 import type { CoreEnv } from "../env.ts";
@@ -20,6 +20,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(() =>
       Effect.gen(function* () {
         const p = yield* Principal;
+
         return {
           userId: p.userId,
           kind: p.kind,
@@ -36,13 +37,18 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
     "/v1/tokens",
     authedBody(
       CreateApiTokenRequest,
-      ({ body }) =>
-        issueApiToken({
+      ({ body }) => {
+        const input: Types.Mutable<Parameters<typeof issueApiToken>[0]> = {
           kind: body.kind ?? "agent",
           label: body.label,
-          ...(body.scopes ? { scopes: body.scopes } : {}),
-          ...(body.expiresAt === undefined ? {} : { expiresAt: body.expiresAt }),
-        }),
+        };
+
+        if (body.scopes) input.scopes = body.scopes;
+
+        if (body.expiresAt !== undefined) input.expiresAt = body.expiresAt;
+
+        return issueApiToken(input);
+      },
       { status: 201 },
     ),
   ),
@@ -53,6 +59,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const p = yield* requireUser();
         const auth = yield* AuthService;
+
         return { items: yield* auth.listApiTokens(p.userId) };
       }),
     ),
@@ -64,9 +71,11 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const p = yield* requireUser();
         const auth = yield* AuthService;
+
         if (!(yield* auth.revokeApiToken(p.userId, params.id!)))
           return yield* new NotFound({ resource: "token" });
         yield* Effect.promise(() => closeLiveSockets(env, p.userId, params.id!));
+
         return { revoked: true };
       }),
     ),
@@ -80,6 +89,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const p = yield* requireUser();
         const auth = yield* AuthService;
+
         return yield* auth.securityStatus(p.userId);
       }),
     ),
@@ -94,6 +104,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
           const p = yield* requireUser();
           yield* requireStepUp("recovery");
           const auth = yield* AuthService;
+
           return { codes: yield* auth.generateRecoveryCodes(p.userId) };
         }),
       { status: 201 },
@@ -109,13 +120,16 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
           yield* requireStepUp("credentials");
           const auth = yield* AuthService;
           const { secret } = yield* auth.enrollTotp(p.userId);
+
           const { address } = yield* ctl(() =>
             env.DIRECTORY.prepare("SELECT primary_address AS address FROM users WHERE id = ?")
               .bind(p.userId)
               .first<{ address: string }>()
               .then((r) => r ?? { address: p.userId }),
           );
+
           const issuer = new URL(env.APP_ORIGIN).hostname;
+
           return {
             secret,
             otpauthUri: `otpauth://totp/${encodeURIComponent(`${issuer}:${address}`)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`,
@@ -132,6 +146,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
         const p = yield* requireUser();
         const auth = yield* AuthService;
         yield* auth.confirmTotp(p.userId, body.code);
+
         return { enabled: true };
       }),
     ),
@@ -144,6 +159,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
         const p = yield* requireUser();
         yield* requireStepUp("credentials");
         const auth = yield* AuthService;
+
         return { disabled: yield* auth.disableTotp(p.userId) };
       }),
     ),
@@ -155,6 +171,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const p = yield* requireUser();
         const auth = yield* AuthService;
+
         return { items: yield* auth.listPasskeys(p.userId) };
       }),
     ),
@@ -168,6 +185,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
         const p = yield* requireUser();
         yield* requireStepUp("credentials");
         const auth = yield* AuthService;
+
         return yield* auth.beginChallenge("register", p.userId);
       }),
     ),
@@ -182,12 +200,14 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
           const p = yield* requireUser();
           yield* requireStepUp("credentials");
           const auth = yield* AuthService;
+
           const id = yield* auth.registerPasskey(
             p.userId,
             body.challengeId,
             body.response,
             body.label ?? "",
           );
+
           return { id };
         }),
       { status: 201 },
@@ -202,6 +222,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
         yield* requireStepUp("credentials");
         const auth = yield* AuthService;
         yield* auth.removePasskey(p.userId, params.id!);
+
         return { removed: true };
       }),
     ),
@@ -215,6 +236,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
         const p = yield* requireUser();
         const auth = yield* AuthService;
         const rows = yield* auth.listSessions(p.userId);
+
         return {
           items: rows.map((s) => ({
             id: s.id,
@@ -235,9 +257,11 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const p = yield* requireUser();
         const auth = yield* AuthService;
+
         if (!(yield* auth.revokeSession(p.userId, params.id!)))
           return yield* new NotFound({ resource: "session" });
         yield* Effect.promise(() => closeLiveSockets(env, p.userId, params.id!));
+
         return { revoked: true };
       }),
     ),
@@ -251,6 +275,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const p = yield* requireUser();
         const support = yield* SupportService;
+
         return { items: yield* support.list(p.userId) };
       }),
     ),
@@ -265,6 +290,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
           const p = yield* requireUser();
           yield* requireStepUp("sharing");
           const support = yield* SupportService;
+
           return yield* support.grant(p.userId, body.reason, body.hours ?? 24);
         }),
       { status: 201 },
@@ -277,8 +303,10 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const p = yield* requireUser();
         const support = yield* SupportService;
+
         if (!(yield* support.revoke(p.userId, params.id!)))
           return yield* new NotFound({ resource: "support grant" });
+
         return { revoked: true };
       }),
     ),
@@ -293,6 +321,7 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
         const p = yield* requireUser();
         const commerce = yield* CommerceService;
         const code = yield* commerce.referralCode(p.userId);
+
         return { code, url: `${env.APP_ORIGIN}/signup?ref=${code}` };
       }),
     ),

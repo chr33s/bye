@@ -36,12 +36,15 @@ export const makeR2BlobStore = (bucket: R2BucketLike) =>
           body,
           meta?.contentType ? { httpMetadata: { contentType: meta.contentType } } : undefined,
         );
+
         if (!r) throw new Error("precondition failed");
+
         return { key: r.key, size: r.size };
       }),
     get: (key) =>
       wrap("get", key, async (): Promise<BlobObject | null> => {
         const o = await bucket.get(key);
+
         return o
           ? {
               key: o.key,
@@ -55,6 +58,7 @@ export const makeR2BlobStore = (bucket: R2BucketLike) =>
     head: (key) =>
       wrap("head", key, async () => {
         const h = await bucket.head(key);
+
         return h ? { size: h.size } : null;
       }),
     delete: (key) => wrap("delete", key, () => bucket.delete(key)),

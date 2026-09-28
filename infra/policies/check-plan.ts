@@ -28,10 +28,8 @@ export const FOUNDATION_TYPES: ReadonlySet<string> = new Set([
   "Cloudflare.Zone.Zone",
 ]);
 
-export const loadPlan = (raw: unknown): Plan =>
-  (raw as { format?: string }).format === "bye.plan-export.v1"
-    ? normalizePlan(raw as ExportedPlan)
-    : (raw as Plan);
+export const loadPlan = (raw: ExportedPlan | Plan): Plan =>
+  "format" in raw && raw.format === "bye.plan-export.v1" ? normalizePlan(raw) : (raw as Plan);
 
 export const checkPlan = (
   mode: string,
@@ -39,8 +37,11 @@ export const checkPlan = (
   decommissions: ReadonlyArray<DecommissionRecord>,
 ): ReadonlyArray<string> => {
   if (mode === "steady") return steadyStateViolations(plan);
+
   if (mode === "destroy") return destroyPlanViolations(plan, FOUNDATION_TYPES);
+
   if (mode === "drift") return driftViolations(plan);
+
   return evaluatePlan({ plan, decommissions, privateBindings: PRIVATE_BINDINGS }).violations.map(
     formatViolation,
   );
@@ -51,21 +52,27 @@ if (import.meta.main) {
   const modeIndex = args.indexOf("--mode");
   const mode = modeIndex >= 0 ? (args[modeIndex + 1] ?? "deploy") : "deploy";
   const path = args.filter((_, i) => i !== modeIndex && i !== modeIndex + 1)[0];
+
   if (path === undefined) {
     console.error(
       "usage: check-plan.ts [--mode deploy|steady|destroy|drift] <plan-export.json|plan.json>",
     );
     process.exit(2);
   }
+
   const plan = loadPlan(JSON.parse(readFileSync(path, "utf8")));
+
   const decommissions = JSON.parse(
     readFileSync(`${import.meta.dirname}/decommissions.json`, "utf8"),
   ) as ReadonlyArray<DecommissionRecord>;
+
   const violations = [
     ...checkPlan(mode, plan, decommissions),
     ...missingTelemetryOptOuts(process.env).map((k) => `deploy environment must set ${k}`),
   ];
+
   for (const v of violations) console.error(`policy(${mode}): ${v}`);
+
   if (violations.length > 0) process.exit(1);
   console.log(
     `plan ${mode} check for ${plan.stack}/${plan.stage}: ${plan.entries.length} entries, passed`,

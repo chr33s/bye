@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { binaryToBytes, mboxEntryText, serializeVCards } from "@bye/mail-codec";
 import { ControlDirectory } from "@bye/platform-cloudflare";
-import { Schema } from "effect";
+import { Schema, Predicate } from "effect";
 import { recordGcIntent } from "../blobgc.ts";
 import { kernelClock } from "../durable-host.ts";
 import { recordUsage } from "../usage.ts";
@@ -16,6 +16,7 @@ export const ExportParamsSchema = Schema.Struct({
   mailboxIds: Schema.Array(Schema.String),
   calendarIds: Schema.Array(Schema.String),
 });
+
 export type ExportParams = typeof ExportParamsSchema.Encoded;
 
 /** Exports stay downloadable this long, then become GC intents (§12, A04). */
@@ -65,16 +66,20 @@ export const appendMboxPage = async (
   const parts = [...input.parts];
   let pending: Array<Uint8Array> = [];
   let size = 0;
+
   const push = async (bytes: Uint8Array) => {
     let offset = 0;
+
     while (offset < bytes.byteLength) {
       const take = Math.min(partBytes - size, bytes.byteLength - offset);
       pending.push(bytes.subarray(offset, offset + take));
       size += take;
       offset += take;
+
       if (size === partBytes) {
         const joined = new Uint8Array(size);
         let o = 0;
+
         for (const b of pending) joined.set(b, (o += b.byteLength) - b.byteLength);
         const partNumber = parts.length + 1;
         const uploaded = await upload.uploadPart(partNumber, joined);
@@ -84,14 +89,19 @@ export const appendMboxPage = async (
       }
     }
   };
+
   if (input.carry) {
     const carried = await env.EXPORTS.get(input.carry);
+
     if (carried) await push(new Uint8Array(await carried.arrayBuffer()));
   }
+
   const page = await mailbox(env, mailboxId).exportManifestPage(input.cursor, pageSize);
+
   for (const d of page.deliveries) {
     // One message in memory at a time (≤ the 25 MiB inbound limit), never the whole page.
     const original = await env.ORIGINALS.get(d.messageKey);
+
     if (original)
       await push(
         binaryToBytes(
@@ -103,14 +113,18 @@ export const appendMboxPage = async (
         ),
       );
   }
+
   let carry: string | null = null;
+
   if (size > 0) {
     const joined = new Uint8Array(size);
     let o = 0;
+
     for (const b of pending) joined.set(b, (o += b.byteLength) - b.byteLength);
     await env.EXPORTS.put(carryOut, joined);
     carry = carryOut;
   }
+
   return { cursor: page.nextCursor, parts, carry };
 };
 
@@ -122,11 +136,14 @@ export const completeMbox = async (
   state: MboxState,
 ): Promise<string> => {
   const existing = await env.EXPORTS.head(key);
+
   if (existing) return key;
   const upload = env.EXPORTS.resumeMultipartUpload(key, uploadId);
   const parts = [...state.parts];
+
   if (state.carry) {
     const tail = await env.EXPORTS.get(state.carry);
+
     if (tail)
       parts.push({
         partNumber: parts.length + 1,
@@ -134,6 +151,7 @@ export const completeMbox = async (
           .etag,
       });
   }
+
   if (parts.length === 0) {
     await upload.abort().catch(() => undefined);
     await env.EXPORTS.put(key, new Uint8Array(0), {
@@ -142,13 +160,16 @@ export const completeMbox = async (
   } else {
     await upload.complete(parts);
   }
+
   return key;
 };
 
 const purgeExportPrefix = async (env: CoreEnv, prefix: string): Promise<void> => {
   for (;;) {
     const listed = await env.EXPORTS.list({ prefix, limit: 1000 });
+
     if (listed.objects.length) await env.EXPORTS.delete(listed.objects.map((o) => o.key));
+
     if (!listed.truncated) break;
   }
 };
@@ -159,6 +180,7 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
     const { exportId, userId, mailboxIds, calendarIds } = decodeParams(ExportParamsSchema)(
       event.payload,
     );
+
     const env = this.env;
     const prefix = `t/${userId}/export/${exportId}`;
     const files: Array<string> = [];
@@ -170,6 +192,7 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
       // step reads exactly the same inputs. Nothing is buffered across the whole mailbox.
       const key = `${prefix}/${mailboxId}.mbox`;
       const carryKey = (i: number) => `${prefix}/.carry/${mailboxId}/${String(i).padStart(6, "0")}`;
+
       const uploadId = await promiseStep(
         step,
         `v1:mbox-begin:${mailboxId}`,
@@ -181,8 +204,10 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
             })
           ).uploadId,
       );
+
       let state: MboxState = { cursor: null, parts: [], carry: null };
       let index = 0;
+
       do {
         const input: MboxState = state;
         const i = index++;
@@ -197,7 +222,9 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
           RETRY,
         );
       } while (state.cursor);
+
       const final: MboxState = state;
+
       if (final.revoked) {
         // Access ended mid-export: discard the partial MBOX and skip this mailbox entirely.
         await promiseStep(step, `v1:mbox-abort:${mailboxId}`, Schema.Boolean, async () => {
@@ -205,10 +232,12 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
             .abort()
             .catch(() => undefined);
           await purgeExportPrefix(env, `${prefix}/.carry/${mailboxId}/`);
+
           return true;
         });
         continue;
       }
+
       files.push(
         await promiseStep(
           step,
@@ -221,8 +250,10 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
       await promiseStep(step, `v1:mbox-cleanup:${mailboxId}`, Schema.Boolean, async () => {
         // Only after the MBOX is durably complete; a retry here is harmless.
         await purgeExportPrefix(env, `${prefix}/.carry/${mailboxId}/`);
+
         return true;
       });
+
       const manifestKey = await promiseStep(
         step,
         `v1:manifest:${mailboxId}`,
@@ -240,9 +271,11 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
               policies: m.policies,
             }),
           );
+
           return settingsKey;
         },
       );
+
       // Access ended before the settings were read: the MBOX (read while allowed) stays; no settings.
       if (!manifestKey) continue;
       files.push(
@@ -259,6 +292,7 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
             clips: unknown;
             policies: unknown;
           };
+
           const cards = manifest.contacts.map((c) => ({
             version: "4.0",
             uid: c.contactId,
@@ -270,6 +304,7 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
             note: c.notes || undefined,
             categories: c.groups,
           }));
+
           await this.env.EXPORTS.put(`${prefix}/${mailboxId}.vcf`, serializeVCards(cards), {
             httpMetadata: { contentType: "text/vcard" },
           });
@@ -284,24 +319,30 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
               httpMetadata: { contentType: "application/json" },
             },
           );
+
           return `${prefix}/${mailboxId}.vcf`;
         }),
       );
     }
+
     for (const calendarId of calendarIds) {
       files.push(
         await promiseStep(step, `v1:ics:${calendarId}`, Schema.String, async () => {
           const ics = await settle(calendar(this.env, calendarId).read(userId, { type: "Export" }));
-          if (typeof ics !== "string") throw new Error("calendar export: not text");
+
+          if (!Predicate.isString(ics)) throw new Error("calendar export: not text");
           const key = `${prefix}/${calendarId}.ics`;
           await this.env.EXPORTS.put(key, ics, { httpMetadata: { contentType: "text/calendar" } });
+
           return key;
         }),
       );
     }
+
     await promiseStep(step, "v1:retention", Schema.Boolean, async () => {
       for (const key of files) {
         const head = await env.EXPORTS.head(key);
+
         if (head) await recordUsage(env, "user", userId, "exports", head.size);
         await recordGcIntent(env, {
           bucket: "EXPORTS",
@@ -312,14 +353,17 @@ export class ExportWorkflow extends WorkflowEntrypoint<CoreEnv, ExportParams> {
           delayMs: EXPORT_RETENTION_MS,
         });
       }
+
       // Releases the one-export-in-flight claim (POST /v1/exports); the cooldown still applies.
       await env.DIRECTORY.prepare(
         "UPDATE account_exports SET completed_at = ? WHERE id = ? AND user_id = ?",
       )
         .bind(Date.now(), exportId, userId)
         .run();
+
       return true;
     });
+
     return { v: 1, exportId, files, expiresAt: Date.now() + EXPORT_RETENTION_MS };
   }
 }

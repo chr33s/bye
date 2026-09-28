@@ -104,12 +104,15 @@ export abstract class CalendarBase {
       "SELECT id, name, color, kind, visible, revision FROM cal_calendars WHERE id = ? AND deleted = 0",
       id,
     );
+
     return r ? toCalendar(r) : undefined;
   }
 
   roleFor(calendarId: string, actor: string): CalendarRole | undefined {
     if (!this.calendar(calendarId)) return undefined;
+
     if (this.isOwner(actor)) return "owner";
+
     return this.sql.one<{ role: "read" | "write" }>(
       "SELECT role FROM cal_grants WHERE calendar_id = ? AND grantee = ?",
       calendarId,
@@ -120,6 +123,7 @@ export abstract class CalendarBase {
   /** Calendars the actor can read, with their role: one query (owner sees all, grantees theirs). */
   listCalendars(actor: string): Array<CalendarRecord & { readonly role: CalendarRole }> {
     const owner = this.isOwner(actor);
+
     return this.sql
       .all<CalendarRow & { grant_role: "read" | "write" | null }>(
         `SELECT c.id, c.name, c.color, c.kind, c.visible, c.revision, g.role AS grant_role
@@ -129,6 +133,7 @@ export abstract class CalendarBase {
       )
       .flatMap((r) => {
         const role: CalendarRole | null = owner ? "owner" : r.grant_role;
+
         return role ? [{ ...toCalendar(r), role }] : [];
       });
   }
@@ -147,17 +152,23 @@ export abstract class CalendarBase {
   /** Access check: the actor's role on a calendar covers `need`, and the calendar accepts writes. */
   requireRole(calendarId: string, actor: string, need: "read" | "write"): CalendarRecord {
     const role = this.roleFor(calendarId, actor);
+
     if (!role) throw calendarError("not_found", "calendar not found");
+
     if (need === "write" && role === "read") throw calendarError("forbidden", "read-only grant");
+
     return need === "write" ? this.writableCalendar(calendarId) : this.calendar(calendarId)!;
   }
 
   /** Domain invariant (independent of who asks): the calendar exists and is not a read-only subscription. */
   protected writableCalendar(calendarId: string): CalendarRecord {
     const calendar = this.calendar(calendarId);
+
     if (!calendar) throw calendarError("not_found", "calendar not found");
+
     if (calendar.kind === "subscription")
       throw calendarError("read_only", "subscribed calendars are read-only");
+
     return calendar;
   }
 
@@ -190,6 +201,7 @@ export abstract class CalendarBase {
   protected toRecords(rows: ReadonlyArray<EventRow>): Array<CalendarEventRecord> {
     if (rows.length === 0) return [];
     const exceptions = new Map<string, Array<CalException>>();
+
     for (const e of this.sql.all<{ event_id: string; body: string }>(
       "SELECT event_id, body FROM cal_exceptions WHERE event_id IN (SELECT value FROM json_each(?)) ORDER BY event_id, recurrence_key",
       JSON.stringify(rows.map((r) => r.id)),
@@ -198,6 +210,7 @@ export abstract class CalendarBase {
       list.push(json<CalException>(e.body, { recurrenceKey: "", cancelled: true }));
       exceptions.set(e.event_id, list);
     }
+
     return rows.map((r) => ({
       id: r.id,
       calendarId: r.calendar_id,
@@ -221,9 +234,11 @@ export abstract class CalendarBase {
   /** Read an event. `privateNote` and the source backlink are returned only to the owner. */
   getEvent(actor: string, eventId: string): CalendarEventRecord {
     const row = this.eventRow(eventId);
+
     if (!row) throw calendarError("not_found", "event not found");
     this.requireRole(row.calendar_id, actor, "read");
     const record = this.toRecord(row);
+
     return this.isOwner(actor)
       ? record
       : { ...record, privateNote: undefined, sourceRef: undefined };

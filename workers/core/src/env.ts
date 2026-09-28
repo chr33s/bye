@@ -204,8 +204,11 @@ export const CORE_BINDING_NAMES = [
 
 /** Ingress journals are partitioned so one hot object never serializes all inbound mail. */
 export const INGRESS_JOURNAL_PARTITIONS = 16;
+
 export const journalPartition = (ingestionId: string): string => {
   let h = 0;
+
   for (let i = 0; i < ingestionId.length; i++) h = (h * 31 + ingestionId.charCodeAt(i)) >>> 0;
+
   return `journal-${h % INGRESS_JOURNAL_PARTITIONS}`;
 };

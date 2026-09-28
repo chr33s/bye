@@ -7,6 +7,7 @@
 // cached and refetched on an unknown `kid`), `iss` = the team domain, `aud` contains the
 // application's AUD tag, `exp`/`nbf` with a small clock skew, and a non-empty `email`.
 import { createPublicKey, type JsonWebKey, verify } from "node:crypto";
+import { Option, Predicate, Schema } from "effect";
 import type { Fetch } from "./oauth.ts";
 
 export const ACCESS_JWT_HEADER = "cf-access-jwt-assertion";
@@ -35,14 +36,29 @@ const SKEW_S = 60;
 
 export const normalizeTeamDomain = (team: string): string => {
   const url = new URL(team.includes("://") ? team : `https://${team}`);
+
   if (url.protocol !== "https:") throw new Error("the Access team domain must be https");
+
   return url.origin;
 };
 
-const b64urlJson = (part: string): Record<string, unknown> | null => {
+const JwtPart = Schema.Struct({
+  alg: Schema.optional(Schema.Unknown),
+  kid: Schema.optional(Schema.Unknown),
+  iss: Schema.optional(Schema.Unknown),
+  aud: Schema.optional(Schema.Unknown),
+  exp: Schema.optional(Schema.Unknown),
+  nbf: Schema.optional(Schema.Unknown),
+  email: Schema.optional(Schema.Unknown),
+});
+
+const decodeJwtPart = Schema.decodeUnknownOption(JwtPart);
+
+const b64urlJson = (part: string) => {
   try {
-    const v = JSON.parse(Buffer.from(part, "base64url").toString("utf8")) as unknown;
-    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+    return Option.getOrNull(
+      decodeJwtPart(JSON.parse(Buffer.from(part, "base64url").toString("utf8"))),
+    );
   } catch {
     return null;
   }
@@ -66,8 +82,10 @@ export const accessVerifier = (o: AccessVerifierOptions) => {
     (inflight ??= (async () => {
       try {
         const r = await o.fetch(certsUrl);
+
         if (!r.ok) return;
         const body = (await r.json()) as { keys?: ReadonlyArray<Jwk> };
+
         if (Array.isArray(body.keys)) {
           keys = body.keys.filter((k) => k.kty === "RSA");
           fetchedAt = now();
@@ -81,26 +99,33 @@ export const accessVerifier = (o: AccessVerifierOptions) => {
 
   const keyFor = async (kid: string | undefined): Promise<Jwk | undefined> => {
     const find = () => keys.find((k) => kid === undefined || k.kid === kid);
+
     if (now() - fetchedAt > cacheMs) await refresh();
     let key = find();
+
     if (key === undefined && now() - fetchedAt > refetchMs) {
       await refresh();
       key = find();
     }
+
     return key;
   };
 
   return async (token: string | null | undefined): Promise<string | null> => {
     if (!token || token.length > 8192) return null;
     const parts = token.split(".");
+
     if (parts.length !== 3) return null;
     const [h, p, sig] = parts as [string, string, string];
     const header = b64urlJson(h);
     const payload = b64urlJson(p);
+
     if (!header || !payload || header.alg !== "RS256") return null;
-    const key = await keyFor(typeof header.kid === "string" ? header.kid : undefined);
+    const key = await keyFor(Predicate.isString(header.kid) ? header.kid : undefined);
+
     if (!key) return null;
     let valid = false;
+
     try {
       valid = verify(
         "RSA-SHA256",
@@ -111,14 +136,20 @@ export const accessVerifier = (o: AccessVerifierOptions) => {
     } catch {
       return null;
     }
+
     if (!valid) return null;
+
     if (payload.iss !== issuer) return null;
     const aud = payload.aud;
+
     if (!(Array.isArray(aud) ? aud.includes(o.audience) : aud === o.audience)) return null;
     const t = Math.floor(now() / 1000);
-    if (typeof payload.exp !== "number" || payload.exp + SKEW_S < t) return null;
-    if (typeof payload.nbf === "number" && payload.nbf - SKEW_S > t) return null;
+
+    if (!Predicate.isNumber(payload.exp) || payload.exp + SKEW_S < t) return null;
+
+    if (Predicate.isNumber(payload.nbf) && payload.nbf - SKEW_S > t) return null;
     const email = payload.email;
-    return typeof email === "string" && email.length > 0 && email.length <= 256 ? email : null;
+
+    return Predicate.isString(email) && email.length > 0 && email.length <= 256 ? email : null;
   };
 };

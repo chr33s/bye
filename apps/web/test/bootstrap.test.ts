@@ -3,17 +3,19 @@ import { JSDOM } from "jsdom";
 import { describe, expect, it, vi } from "vitest";
 
 const TOKEN = "t".repeat(43);
-vi.mock("../src/auth.ts", () => ({
-  recoverWithCode: vi.fn(),
-  signInWithPasskey: vi.fn(),
-  signUpWithPasskey: vi.fn(),
-}));
 
 const install = (url: string) => {
   const jsdom = new JSDOM("<!doctype html><body></body>", { url });
-  const g = globalThis as Record<string, unknown>;
-  for (const k of ["window", "document", "location", "history", "HTMLElement", "Node", "Event"])
-    g[k] = (jsdom.window as unknown as Record<string, unknown>)[k];
+  Object.assign(globalThis, {
+    window: jsdom.window,
+    document: jsdom.window.document,
+    location: jsdom.window.location,
+    history: jsdom.window.history,
+    HTMLElement: jsdom.window.HTMLElement,
+    Node: jsdom.window.Node,
+    Event: jsdom.window.Event,
+  });
+
   return jsdom;
 };
 

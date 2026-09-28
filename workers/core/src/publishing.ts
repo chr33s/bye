@@ -52,7 +52,9 @@ const handlePart = (v: string) =>
  */
 export const worldHandle = (address: string, serviceDomain: string): string => {
   const [local = "", domain = ""] = address.toLowerCase().split("@");
+
   if (domain === serviceDomain.toLowerCase()) return handlePart(local).slice(0, 63) || "author";
+
   return `${handlePart(local).slice(0, 30) || "author"}--${handlePart(domain)}`
     .slice(0, 63)
     .replace(/-+$/, "");
@@ -67,7 +69,9 @@ export const worldFallbackHandle = async (address: string, base: string): Promis
   const digest = new Uint8Array(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(address.toLowerCase())),
   );
+
   const hash = Array.from(digest.slice(0, 4), (b) => b.toString(16).padStart(2, "0")).join("");
+
   return `${base.split("--")[0]!.slice(0, 40)}--h${hash}`;
 };
 
@@ -91,10 +95,12 @@ export const publicSiteHtml = async (env: CoreEnv, html: string): Promise<string
     blockRemoteImages: false,
   });
   const signed = new Map<string, string>();
+
   for (const url of [...new Set(urls)].slice(0, MAX_PUBLIC_REMOTE_IMAGES)) {
     if (!url.startsWith("https://")) continue;
     signed.set(url, await signProxyUrl(url, env.PROXY_SIGNING_KEY, `${env.MAIL_ORIGIN}/img`));
   }
+
   return sanitizeHtml(html, {
     proxyImage: (url) => signed.get(url) ?? null,
     cid: () => null,
@@ -127,12 +133,18 @@ const slugMediaKeys = async (
   const prefix = publishedKey.media(handle, `${slug.slice(0, 60)}-r`);
   const keys: Array<string> = [];
   let cursor: string | undefined;
+
   for (let page = 0; page < MEDIA_PRUNE_MAX_PAGES; page++) {
-    const listed = await env.PUBLISHED.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
+    const listed = await env.PUBLISHED.list(
+      cursor ? { prefix, limit: 1000, cursor } : { prefix, limit: 1000 },
+    );
+
     for (const o of listed.objects) if (/^\d+-/.test(o.key.slice(prefix.length))) keys.push(o.key);
+
     if (!listed.truncated) break;
     cursor = listed.cursor;
   }
+
   return keys;
 };
 
@@ -150,15 +162,20 @@ const pruneMedia = async (
 ): Promise<ReadonlyArray<string>> => {
   if (slugs.length === 0) return [];
   const candidates = new Set<string>();
+
   for (const slug of new Set(slugs))
     for (const key of await slugMediaKeys(env, handle, slug)) candidates.add(key);
+
   if (candidates.size === 0) return [];
   const live = new Set<string>(keep);
+
   for (const p of (await settle(world(env, handle).publicPosts())) as ReadonlyArray<PostView>)
     for (const m of p.media ?? []) live.add(m.publicKey);
   const doomed = [...candidates].filter((k) => !live.has(k));
+
   for (let i = 0; i < doomed.length; i += 1000)
     await env.PUBLISHED.delete(doomed.slice(i, i + 1000));
+
   return doomed;
 };
 
@@ -177,6 +194,7 @@ export const writeSite = async (
   const posts: ReadonlyArray<PostView> = await settle(stub.publicPosts());
   const rss = await settle(stub.rss(publicOrigin));
   const live = posts.filter((p) => p.status === "published");
+
   for (const post of live) {
     await env.PUBLISHED.put(
       publishedKey.post(handle, post.slug),
@@ -189,15 +207,19 @@ export const writeSite = async (
       },
     );
   }
+
   // Unpublished posts are not in the public list, so callers name them explicitly; never leave a public copy.
   const liveSlugs = new Set(live.map((p) => p.slug));
+
   const gone = new Set([
-    ...posts.filter((p) => p.status !== "published").map((p) => p.slug),
+    ...posts.flatMap((p) => (p.status !== "published" ? [p.slug] : [])),
     ...removedSlugs.filter((slug) => !liveSlugs.has(slug)),
   ]);
+
   for (const slug of gone) await env.PUBLISHED.delete(publishedKey.post(handle, slug));
   // Media copies follow their post: none survive unpublish, and a new revision replaces the old.
   const republished = published ? live.find((p) => p.id === published.postId) : undefined;
+
   const prunedMedia = [
     ...(await pruneMedia(env, handle, [...gone])),
     ...(republished
@@ -209,9 +231,11 @@ export const writeSite = async (
         )
       : []),
   ];
+
   const index = live
     .map((p) => `<li><a href="/@${handle}/${p.slug}">${escapeHtml(p.title)}</a></li>`)
     .join("");
+
   await env.PUBLISHED.put(
     publishedKey.index(handle),
     page(
@@ -224,6 +248,7 @@ export const writeSite = async (
     httpMetadata: { contentType: "application/rss+xml; charset=utf-8" },
   });
   const slugs = [...new Set([...posts.map((p) => p.slug), ...removedSlugs])];
+
   return [
     `${publicOrigin}/@${handle}`,
     `${publicOrigin}/@${handle}/feed.xml`,
@@ -245,6 +270,7 @@ export const purgePublic = async (env: CoreEnv, urls: ReadonlyArray<string>): Pr
     env.CF_PUBLIC_ZONE_ID,
     urls,
   );
+
   return true;
 };
 
@@ -255,6 +281,7 @@ export const refreshSite = async (
   published?: PublishPlan,
 ): Promise<{ readonly purged: boolean }> => {
   const urls = await writeSite(env, handle, publicOrigin(env), removedSlugs, published);
+
   return { purged: await purgePublic(env, urls).catch(() => false) };
 };
 
@@ -271,7 +298,9 @@ export const worldAuthor = async (env: CoreEnv, authorId: string): Promise<World
     .prepare("SELECT primary_address AS address, display_name AS name FROM users WHERE id = ?")
     .bind(authorId)
     .first<{ address: string; name: string }>();
+
   if (!user) return null;
+
   // A handle already owned by another author refuses with `forbidden`: use the fallback handle.
   const init = (handle: string) =>
     settleOr(
@@ -283,11 +312,15 @@ export const worldAuthor = async (env: CoreEnv, authorId: string): Promise<World
       }),
       "forbidden",
     ).then((r) => r !== null);
+
   let handle = worldHandle(user.address, serviceDomain(env));
+
   if (!(await init(handle))) {
     handle = await worldFallbackHandle(user.address, handle);
+
     if (!(await init(handle))) reject("conflict", "world handle unavailable");
   }
+
   return { authorId, handle, address: user.address, name: user.name };
 };
 
@@ -300,6 +333,7 @@ export const copyPublicMedia = async (
     await Promise.all(
       copies.slice(i, i + 4).map(async (c) => {
         const object = (await env.PARTS.get(c.from)) ?? (await env.ORIGINALS.get(c.from));
+
         if (!object) throw new Error("media missing");
         await env.PUBLISHED.put(c.to, object.body, { httpMetadata: object.httpMetadata ?? {} });
       }),
@@ -325,6 +359,7 @@ export const siteRendered = async (
   revision: number,
 ): Promise<boolean> => {
   const marker = await env.PARTS.get(siteMarkerKey(handle, postId));
+
   return marker !== null && Number(await marker.text()) >= revision;
 };
 
@@ -340,6 +375,7 @@ export const renderPublished = async (
   await copyPublicMedia(env, plan.copies);
   const result = await refreshSite(env, handle, [], plan);
   await env.PARTS.put(siteMarkerKey(handle, plan.postId), String(plan.revision));
+
   return result;
 };
 
@@ -382,6 +418,7 @@ const afterCommit = async (
   plan: PublishPlan,
 ): Promise<{ readonly purged: boolean }> => {
   await startFanout(env, author, plan);
+
   try {
     return await renderPublished(env, author.handle, plan);
   } catch (error) {
@@ -393,6 +430,7 @@ const afterCommit = async (
         error: describeError(error),
       }),
     );
+
     return { purged: false };
   }
 };
@@ -427,18 +465,22 @@ export const publishForAuthor = async (
   eventId?: string,
 ): Promise<PublishResult> => {
   const author = (await worldAuthor(env, authorId)) ?? reject("not_found", "author not found");
+
   const committed = await settle(
     world(env, author.handle).publishFromMail(
       { origin: "internal-send", authenticatedUserId: authorId, ...input },
       eventId,
     ),
   );
+
   const plan: PublishPlan = {
     postId: committed.postId,
     revision: committed.revision,
     copies: "copies" in committed ? committed.copies : [],
   };
+
   const { purged } = input.publish ? await afterCommit(env, author, plan) : { purged: false };
+
   return { postId: plan.postId, revision: plan.revision, handle: author.handle, purged };
 };
 
@@ -451,16 +493,17 @@ export const publishExistingForAuthor = async (
   const author = (await worldAuthor(env, authorId)) ?? reject("not_found", "author not found");
   const plan = await settle(world(env, author.handle).publishPost(authorId, postId));
   const { purged } = await afterCommit(env, author, plan);
+
   return { postId: plan.postId, revision: plan.revision, handle: author.handle, purged };
 };
 
-/** An authority refusal as the shared use cases' typed failure; anything else is infrastructure. */
-const publishFailure = (e: unknown): SharedFailure =>
-  isRejection(e) ? e : new Unavailable({ dependency: "world", detail: "publish" });
-
 /** The publish ports' live layer: both run the ONE pipeline above. */
 const publishEffect = <A>(f: () => Promise<A>) =>
-  Effect.tryPromise({ try: f, catch: publishFailure });
+  Effect.tryPromise({
+    try: f,
+    catch: (e): SharedFailure =>
+      isRejection(e) ? e : new Unavailable({ dependency: "world", detail: "publish" }),
+  });
 
 export const worldPublishingLayer = (env: CoreEnv) =>
   Layer.mergeAll(
@@ -508,6 +551,7 @@ const deliverSystemMail = async (
 ): Promise<void> => {
   const policy = systemMailPolicy(env);
   const send = () => env.TRANSACTIONAL_EMAIL.send(new EmailMessage(from, to, raw));
+
   if (actorUserId === undefined) {
     const suppressed = await env.DIRECTORY.withSession("first-primary")
       .prepare(
@@ -515,14 +559,20 @@ const deliverSystemMail = async (
       )
       .bind(normalizeAddress(to), Date.now())
       .first();
+
     if (suppressed !== null) throw new SystemMailRefused("suppressed");
+
     if (await policy.isSuspended("identity", normalizeAddress(from)))
       throw new SystemMailRefused("suspended");
     await send();
+
     return;
   }
+
   const verdict = await policy.reserve({ userId: actorUserId, identity: from, recipients: [to] });
+
   if (!verdict.allowed) throw new SystemMailRefused(verdict.reason);
+
   try {
     await send();
   } catch (error) {
@@ -549,6 +599,7 @@ export const sendSystemEmail = async (
 ): Promise<void> => {
   const domain = serviceDomain(env);
   const from = `no-reply@${domain}`;
+
   const built = buildMessage({
     from: { name: "bye", address: from },
     to: [{ name: undefined, address: input.to }],
@@ -558,6 +609,7 @@ export const sendSystemEmail = async (
     date: Date.now(),
     messageId: `sys-${crypto.randomUUID()}@${domain}`,
   });
+
   await deliverSystemMail(
     env,
     from,
@@ -584,6 +636,7 @@ export const sendSubscriptionConfirmation = async (
   const domain = serviceDomain(env);
   const from = `world@${domain}`;
   const link = `${origin}/@${handle}/confirm/${token}`;
+
   const built = buildMessage({
     from: { name: `@${handle}`, address: from },
     to: [{ name: undefined, address }],
@@ -593,6 +646,7 @@ export const sendSubscriptionConfirmation = async (
     date: Date.now(),
     messageId: `confirm-${crypto.randomUUID()}@${domain}`,
   });
+
   await deliverSystemMail(
     env,
     from,

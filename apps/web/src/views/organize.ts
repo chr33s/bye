@@ -1,3 +1,4 @@
+import type { JsonObject } from "@bye/native-shared/json";
 import { api, list, apiDownload, apiRaw, query } from "../api.ts";
 import { degrade } from "../core/degrade.ts";
 import {
@@ -19,6 +20,7 @@ import { mailCommand, mb } from "../core/state.ts";
 // and revert, the attachment library and revocable large-file links.
 
 const reload = () => window.dispatchEvent(new HashChangeEvent("hashchange"));
+
 const csv = (value: string) =>
   value
     .split(",")
@@ -87,9 +89,11 @@ export const renderContacts = async (
                 type: "button",
                 onclick: act("Loaded history", async () => {
                   const address = c.emails[0] ?? "";
+
                   const items = await list<{ threadId: string; subject: string; date: number }>(
                     `/v1/mailboxes/${mb()}/senders/${encodeURIComponent(address)}/history`,
                   );
+
                   history.replaceChildren(
                     h("h2", {}, `History with ${address}`),
                     h(
@@ -174,6 +178,7 @@ export const renderContacts = async (
               "Imported",
               async () => {
                 const file = vcard.files?.[0];
+
                 if (!file) throw new Error("Choose a .vcf file");
                 await apiRaw(
                   "POST",
@@ -199,6 +204,7 @@ export const renderLabels = async (signal: AbortSignal): Promise<void> => {
     color: string | null;
     threads: number;
   }>(`/v1/mailboxes/${mb()}/labels`, signal);
+
   const name = h("input", { required: true });
   show(
     section(
@@ -221,6 +227,7 @@ export const renderLabels = async (signal: AbortSignal): Promise<void> => {
                   "Renamed",
                   async () => {
                     const next = prompt("New name", text(l.name));
+
                     if (next)
                       await mailCommand({ _tag: "RenameLabel", labelId: l.labelId, name: next });
                   },
@@ -264,14 +271,16 @@ export const renderLabels = async (signal: AbortSignal): Promise<void> => {
 export const renderRules = async (signal: AbortSignal): Promise<void> => {
   const rules = await list<{
     ruleId: string;
-    conditions: Record<string, unknown>;
-    actions: Record<string, unknown>;
+    conditions: JsonObject;
+    actions: JsonObject;
     enabled: boolean;
   }>(`/v1/mailboxes/${mb()}/rules`, signal);
+
   const from = h("input", { placeholder: "sender@example.com" });
   const fromDomain = h("input", { placeholder: "example.com" });
   const subject = h("input", { placeholder: "contains…" });
   const labels = h("input", { placeholder: "Receipts, Travel" });
+
   const destination = h(
     "select",
     {},
@@ -280,6 +289,7 @@ export const renderRules = async (signal: AbortSignal): Promise<void> => {
     h("option", { value: "feed" }, "Newsletters"),
     h("option", { value: "paper-trail" }, "Receipts"),
   );
+
   const bundle = h("input", { type: "checkbox" });
   show(
     section(
@@ -317,22 +327,16 @@ export const renderRules = async (signal: AbortSignal): Promise<void> => {
               mailCommand({
                 _tag: "PutRule",
                 conditions: {
-                  ...(from.value ? { from: from.value } : {}),
-                  ...(fromDomain.value ? { fromDomain: fromDomain.value } : {}),
-                  ...(subject.value ? { subjectContains: subject.value } : {}),
+                  from: from.value || undefined,
+                  fromDomain: fromDomain.value || undefined,
+                  subjectContains: subject.value || undefined,
                 },
                 actions: {
-                  ...(csv(labels.value).length ? { labels: csv(labels.value) } : {}),
-                  ...(destination.value
-                    ? {
-                        destination: choice(
-                          destination.value,
-                          ["imbox", "feed", "paper-trail"],
-                          "imbox",
-                        ),
-                      }
-                    : {}),
-                  ...(bundle.checked ? { bundle: true } : {}),
+                  labels: csv(labels.value).length ? csv(labels.value) : undefined,
+                  destination: destination.value
+                    ? choice(destination.value, ["imbox", "feed", "paper-trail"], "imbox")
+                    : undefined,
+                  bundle: bundle.checked || undefined,
                 },
                 enabled: true,
               }),
@@ -366,6 +370,7 @@ export const renderWorkflows = async (
         cards: ReadonlyArray<{ cardId: string; threadId: string; completed: boolean }>;
       }>;
     }>("GET", `/v1/mailboxes/${mb()}/workflows/${encodeURIComponent(boardId)}`, undefined, signal);
+
     const stageName = h("input", { required: true });
     show(
       section(
@@ -392,6 +397,7 @@ export const renderWorkflows = async (
                       "Renamed",
                       async () => {
                         const next = prompt("Stage name", stage.name);
+
                         if (next)
                           await mailCommand({
                             _tag: "RenameStage",
@@ -476,14 +482,17 @@ export const renderWorkflows = async (
         ),
       ),
     );
+
     return;
   }
+
   const boards = await list<{
     boardId: string;
     name: string;
     cards: number;
     enrollAddress: string | null;
   }>(`/v1/mailboxes/${mb()}/workflows`, signal);
+
   const name = h("input", { required: true });
   const stages = h("input", { value: "To do, Doing, Done" });
   const enroll = h("input", { type: "email", placeholder: "optional: team@example.com" });
@@ -511,7 +520,7 @@ export const renderWorkflows = async (
                 _tag: "CreateBoard",
                 name: name.value,
                 stages: csv(stages.value),
-                ...(enroll.value ? { enrollAddress: enroll.value } : {}),
+                enrollAddress: enroll.value || undefined,
               }),
             reload,
           ),
@@ -545,6 +554,7 @@ export const renderCollections = async (
       undefined,
       signal,
     );
+
     const threadId = h("input", { placeholder: "thread ID", "aria-label": "Thread to add" });
     show(
       section(
@@ -585,12 +595,15 @@ export const renderCollections = async (
         ),
       ),
     );
+
     return;
   }
+
   const collections = await list<{ collectionId: string; name: string; threads: number }>(
     `/v1/collections?mailbox=${encodeURIComponent(mb())}`,
     signal,
   );
+
   const name = h("input", { required: true });
   show(
     section(
@@ -633,6 +646,7 @@ export const renderNotes = async (signal: AbortSignal): Promise<void> => {
     body: string;
     updatedAt?: number;
   }>(`/v1/mailboxes/${mb()}/notes`, signal);
+
   const body = h("textarea", { rows: 3, required: true });
   show(
     section(
@@ -684,10 +698,12 @@ export const renderNotes = async (signal: AbortSignal): Promise<void> => {
 
 export const renderClips = async (params: URLSearchParams, signal: AbortSignal): Promise<void> => {
   const q = params.get("q") ?? "";
+
   const clips = await list<{ clipId: string; threadId: string; text: string; createdAt: number }>(
     `/v1/mailboxes/${mb()}/clips${query({ q })}`,
     signal,
   );
+
   const search = h("input", { type: "search", value: q, "aria-label": "Search clips" });
   show(
     section(
@@ -741,6 +757,7 @@ export const renderPolicies = async (signal: AbortSignal): Promise<void> => {
       at: number;
     }>(`/v1/mailboxes/${mb()}/policies/history`, signal),
   ]);
+
   const setPolicy = (kind: string, subject: string, decision: string, destination = "imbox") =>
     mailCommand({
       _tag: "SetPolicy",
@@ -757,19 +774,23 @@ export const renderPolicies = async (signal: AbortSignal): Promise<void> => {
               notify: false,
             },
     });
+
   const subject = h("input", { required: true, placeholder: "sender@example.com or example.com" });
+
   const kind = h(
     "select",
     {},
     h("option", { value: "address" }, "Address"),
     h("option", { value: "domain" }, "Domain"),
   );
+
   const decision = h(
     "select",
     {},
     h("option", { value: "allowed" }, "Allow"),
     h("option", { value: "blocked" }, "Block"),
   );
+
   const destination = h(
     "select",
     {},
@@ -777,6 +798,7 @@ export const renderPolicies = async (signal: AbortSignal): Promise<void> => {
     h("option", { value: "feed" }, "Newsletters"),
     h("option", { value: "paper-trail" }, "Receipts"),
   );
+
   show(
     section(
       "policies-title",
@@ -874,6 +896,7 @@ export const renderAttachments = async (
 ): Promise<void> => {
   const type = params.get("type") ?? "";
   const from = params.get("from") ?? "";
+
   const [items, links] = await Promise.all([
     list<{
       deliveryId: string;
@@ -889,6 +912,7 @@ export const renderAttachments = async (
       signal,
     ).catch(degrade([])),
   ]);
+
   const typeInput = h(
     "select",
     { "aria-label": "Type" },
@@ -898,8 +922,9 @@ export const renderAttachments = async (
       ["application/pdf", "PDFs"],
       ["text/", "Text"],
       ["application/", "Documents"],
-    ].map(([v, l]) => h("option", { value: v!, ...(v === type ? { selected: true } : {}) }, l!)),
+    ].map(([v, l]) => h("option", { value: v!, selected: v === type }, l!)),
   );
+
   const fromInput = h("input", { type: "search", value: from, "aria-label": "From sender" });
   const selected = new Set<number>();
   show(
@@ -968,6 +993,7 @@ export const renderAttachments = async (
             const chosen = [...selected]
               .map((n) => items[n]!)
               .map((i) => ({ deliveryId: i.deliveryId, partId: i.partId }));
+
             if (!chosen.length) throw new Error("Select files first");
             await apiDownload(
               `/v1/mailboxes/${mb()}/attachments/zip`,

@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Predicate, Schema } from "effect";
 
 // Public error envelope. Stable across library upgrades (§7.3); never carries defects or provider payloads.
 
@@ -14,6 +14,7 @@ export const ErrorCode = Schema.Literals([
   "unavailable",
   "internal",
 ]);
+
 export type ErrorCode = typeof ErrorCode.Type;
 
 /**
@@ -34,7 +35,9 @@ export const REJECTION_CODES = [
   "step_up_required",
   "unavailable",
 ] as const;
+
 export const RejectionCode = Schema.Literals(REJECTION_CODES);
+
 export type RejectionCode = (typeof REJECTION_CODES)[number];
 
 /**
@@ -51,14 +54,13 @@ export class Rejection extends Schema.TaggedError<Rejection>()("Rejection", {
 export const reject = (
   code: RejectionCode,
   message: string,
-  details?: Readonly<Record<string, unknown>>,
+  details?: Readonly<Rejection["details"] & object>,
 ): never => {
-  throw new Rejection({ code, message, ...(details ? { details: { ...details } } : {}) });
+  throw new Rejection(details ? { code, message, details: { ...details } } : { code, message });
 };
 
 export const isRejection = (e: unknown): e is Rejection =>
-  e instanceof Rejection ||
-  (typeof e === "object" && e !== null && (e as { _tag?: unknown })._tag === "Rejection");
+  e instanceof Rejection || Predicate.isTagged(e, "Rejection");
 
 export const ErrorEnvelope = Schema.Struct({
   error: Schema.Struct({
@@ -68,6 +70,7 @@ export const ErrorEnvelope = Schema.Struct({
     details: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   }),
 });
+
 export type ErrorEnvelope = typeof ErrorEnvelope.Type;
 
 export const HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {

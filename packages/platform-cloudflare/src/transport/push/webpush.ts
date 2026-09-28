@@ -39,19 +39,22 @@ export interface VapidKeys {
 
 const hkdf = async (salt: Bytes, ikm: Bytes, info: Bytes, length: number): Promise<Bytes> => {
   const key = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+
   return new Uint8Array(
     await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt, info }, key, length * 8),
   );
 };
 
-const ecJwk = (publicKey: Bytes, d?: Bytes): EcJwk => ({
-  kty: "EC",
-  crv: "P-256",
-  x: b64uEncode(publicKey.slice(1, 33)),
-  y: b64uEncode(publicKey.slice(33, 65)),
-  ...(d ? { d: b64uEncode(d) } : {}),
-  ext: true,
-});
+const ecJwk = (publicKey: Bytes, d?: Bytes): EcJwk => {
+  const base = {
+    kty: "EC",
+    crv: "P-256",
+    x: b64uEncode(publicKey.slice(1, 33)),
+    y: b64uEncode(publicKey.slice(33, 65)),
+  } as const;
+
+  return d ? { ...base, d: b64uEncode(d), ext: true } : { ...base, ext: true };
+};
 
 export interface EncryptOptions {
   /** For tests: fixed 16-byte salt and application-server ECDH key pair. */
@@ -69,14 +72,18 @@ export const encryptWebPush = async (
 ): Promise<Bytes> => {
   const uaPublic = b64uDecode(subscription.p256dh);
   const authSecret = b64uDecode(subscription.auth);
+
   if (uaPublic.byteLength !== 65 || uaPublic[0] !== 4) throw new Error("invalid p256dh key");
+
   if (authSecret.byteLength !== 16) throw new Error("invalid auth secret");
   const recordSize = options.recordSize ?? 4096;
+
   if (plaintext.byteLength + 1 + 16 > recordSize)
     throw new Error("payload too large for one record");
 
   let asPublic: Bytes;
   let asPrivate: WebKey;
+
   if (options.serverKeys) {
     asPublic = options.serverKeys.publicKey;
     asPrivate = await crypto.subtle.importKey(
@@ -90,11 +97,13 @@ export const encryptWebPush = async (
     const pair = (await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, [
       "deriveBits",
     ])) as { publicKey: WebKey; privateKey: WebKey };
+
     asPublic = new Uint8Array(
       (await crypto.subtle.exportKey("raw", pair.publicKey)) as ArrayBuffer,
     );
     asPrivate = pair.privateKey;
   }
+
   const uaKey = await crypto.subtle.importKey(
     "raw",
     uaPublic,
@@ -102,6 +111,7 @@ export const encryptWebPush = async (
     false,
     [],
   );
+
   const ecdhSecret = new Uint8Array(
     await crypto.subtle.deriveBits({ name: "ECDH", public: uaKey } as never, asPrivate, 256),
   );
@@ -114,6 +124,7 @@ export const encryptWebPush = async (
 
   const record = concat(plaintext, new Uint8Array([0x02])); // last-record delimiter, no padding
   const aes = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["encrypt"]);
+
   const ciphertext = new Uint8Array(
     await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, aes, record),
   );
@@ -123,6 +134,7 @@ export const encryptWebPush = async (
   new DataView(header.buffer).setUint32(16, recordSize);
   header[20] = asPublic.byteLength;
   header.set(asPublic, 21);
+
   return concat(header, ciphertext);
 };
 
@@ -134,6 +146,7 @@ export const vapidAuthorization = async (
   ttlSeconds = 12 * 3600,
 ): Promise<string> => {
   const publicKey = b64uDecode(keys.publicKey);
+
   const key = await crypto.subtle.importKey(
     "jwk",
     ecJwk(publicKey, b64uDecode(keys.privateKey)) as never,
@@ -141,6 +154,7 @@ export const vapidAuthorization = async (
     false,
     ["sign"],
   );
+
   const jwt = await signJwt(
     { typ: "JWT", alg: "ES256" },
     {
@@ -151,6 +165,7 @@ export const vapidAuthorization = async (
     key,
     { name: "ECDSA", hash: "SHA-256" },
   );
+
   return `vapid t=${jwt}, k=${keys.publicKey}`;
 };
 
@@ -174,11 +189,23 @@ export type PushFetch = (
 /** A push service answers promptly; a stalled endpoint must not hold the notify consumer. */
 export const WEB_PUSH_TIMEOUT_MS = 10_000;
 
+/** Notification content serialized into the encrypted push body. */
+export type WebPushPayload = Readonly<Record<string, string | number | boolean>>;
+
+type PushRequestHeaders = {
+  authorization: string;
+  "content-encoding": string;
+  "content-type": string;
+  ttl: string;
+  urgency: string;
+  topic?: string;
+};
+
 /** Deliver one encrypted Web Push message. 404/410 mean the subscription is gone (RFC 8030 §7.3). */
 export const sendWebPush = async (
   fetchFn: PushFetch,
   subscription: WebPushSubscription,
-  payload: unknown,
+  payload: WebPushPayload,
   vapid: VapidKeys,
   options: {
     readonly ttlSeconds?: number;
@@ -188,24 +215,27 @@ export const sendWebPush = async (
   } = {},
 ): Promise<PushResult> => {
   const body = await encryptWebPush(subscription, utf8(JSON.stringify(payload)));
+
+  const headers: PushRequestHeaders = {
+    authorization: await vapidAuthorization(subscription.endpoint, vapid, options.now),
+    "content-encoding": "aes128gcm",
+    "content-type": "application/octet-stream",
+    ttl: String(options.ttlSeconds ?? 86_400),
+    urgency: options.urgency ?? "normal",
+  };
+
+  if (options.topic) headers.topic = options.topic.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32);
+
   const response = await fetchFn(subscription.endpoint, {
     method: "POST",
-    headers: {
-      authorization: await vapidAuthorization(subscription.endpoint, vapid, options.now),
-      "content-encoding": "aes128gcm",
-      "content-type": "application/octet-stream",
-      ttl: String(options.ttlSeconds ?? 86_400),
-      urgency: options.urgency ?? "normal",
-      ...(options.topic
-        ? { topic: options.topic.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32) }
-        : {}),
-    },
+    headers,
     body,
     // The endpoint is user-registered: a redirect is never followed (it could point anywhere the
     // registration-time check refused); a 3xx classifies as Rejected.
     redirect: "manual",
     signal: AbortSignal.timeout(WEB_PUSH_TIMEOUT_MS),
   });
+
   return classifyPushStatus(response.status);
 };
 

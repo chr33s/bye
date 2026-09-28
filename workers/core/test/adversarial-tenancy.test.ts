@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +24,8 @@ import {
   makeHarness,
   type StoredObject,
   rfc822,
+  executionContext,
+  mockAs,
 } from "./harness.ts";
 
 // §13 adversarial suites over the real MailCore wiring: cross-tenant key guessing, restore with
@@ -34,10 +37,7 @@ import {
   }
 };
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 interface Account {
   readonly userId: string;
@@ -50,10 +50,12 @@ interface Account {
 
 const signup = async (h: Harness, address: string): Promise<Account> => {
   const directory = new ControlDirectory(h.env.DIRECTORY, kernelClock);
+
   const account = await directory.provisionPersonalAccount({
     address,
     displayName: address.split("@")[0]!,
   });
+
   await h.env.CALENDARS.getByName(account.calendarId).provision({
     ownerId: account.userId,
     selfAddresses: [account.address],
@@ -61,36 +63,44 @@ const signup = async (h: Harness, address: string): Promise<Account> => {
   });
   const auth = new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env));
   const session = await auth.issueSession(account.userId, "test", true);
+
   return { ...account, cookie: `__Host-session=${session.token}`, token: session.token };
 };
 
-const api = async (
+const api = async <BodyValue>(
   h: Harness,
   account: Account | null,
   method: string,
   path: string,
-  body?: unknown,
+  body?: BodyValue,
 ) => {
+  const requestHeaders = new Headers();
+
+  if (account) requestHeaders.set("cookie", account.cookie);
+
+  if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+  if (method !== "GET") requestHeaders.set("content-type", "application/json");
+
   const response = await handleFetch(
-    new Request(path.startsWith("http") ? path : `${h.env.APP_ORIGIN}${path}`, {
-      method,
-      headers: {
-        ...(account ? { cookie: account.cookie } : {}),
-        ...(method === "GET"
-          ? {}
-          : { origin: h.env.APP_ORIGIN, "content-type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }),
+    new Request(
+      path.startsWith("http") ? path : `${h.env.APP_ORIGIN}${path}`,
+      body !== undefined
+        ? { method, headers: requestHeaders, body: JSON.stringify(body) }
+        : { method, headers: requestHeaders },
+    ),
     h.env,
     ctx,
   );
+
   const text = await response.text();
   const isJson = (response.headers.get("content-type") ?? "").includes("json");
+
   return { status: response.status, text, body: text && isJson ? JSON.parse(text) : null };
 };
 
 let n = 0;
+
 const cmdId = () => `cmd_${(++n).toString(36).padStart(20, "0")}`;
 
 const allowDomain = (h: Harness, a: Account, domain: string) =>
@@ -142,22 +152,26 @@ describe("adversarial tenancy and recovery", () => {
       ["GET", `/v1/mailboxes/${bob.mailboxId}/deliveries/${deliveryId}/attachments/1`],
       ["GET", `/v1/mailboxes/${bob.mailboxId}/attachments`],
     ] as const;
+
     for (const [method, path] of probes) {
       const r = await api(h, ana, method, path);
       expect([401, 403, 404], `${method} ${path}`).toContain(r.status);
       expect(r.text).not.toContain("bob-only-content");
       expect(r.text).not.toContain("Bob private subject");
     }
+
     // Calendar: the authority answers per principal; Bob's events never appear in Ana's reads.
     const at = (hour: number) => ({
       kind: "timed",
       tzid: "UTC",
       local: { year: 2026, month: 9, day: 28, hour, minute: 0, second: 0 },
     });
+
     const cal = await api(h, bob, "POST", `/v1/calendars/${bob.calendarId}/commands`, {
       schemaVersion: 1,
       command: { type: "CreateCalendar", commandId: cmdId(), name: "Bob", color: "#1f3a5f" },
     });
+
     const created = await api(h, bob, "POST", `/v1/calendars/${bob.calendarId}/commands`, {
       schemaVersion: 1,
       command: {
@@ -169,13 +183,16 @@ describe("adversarial tenancy and recovery", () => {
         end: at(10),
       },
     });
+
     expect(created.status).toBe(200);
+
     const events = await api(
       h,
       ana,
       "GET",
       `/v1/calendars/${bob.calendarId}/events?from=2026-09-27T00:00:00Z&to=2026-09-30T00:00:00Z`,
     );
+
     expect(events.text).not.toContain("Bob secret meeting");
     expect(events.body?.occurrences ?? []).toEqual([]);
     expect(
@@ -186,11 +203,13 @@ describe("adversarial tenancy and recovery", () => {
         })
       ).status,
     ).not.toBe(200);
+
     const cmd = await api(h, ana, "POST", `/v1/mailboxes/${bob.mailboxId}/commands`, {
       _tag: "Screen",
       commandId: cmdId(),
       decisions: [{ sender: "sender@example.net", decision: "block" }],
     });
+
     expect(cmd.status).toBe(403);
     // Bob's thread ID replayed against Ana's own mailbox resolves to nothing of Bob's.
     const own = await api(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/threads/${threadId}`);
@@ -211,6 +230,7 @@ describe("adversarial tenancy and recovery", () => {
     const status = await api(h, ana, "GET", "/v1/exports/x");
     const url = new URL(status.body.files[0].url);
     const token = url.searchParams.get("token")!;
+
     // Ana's valid token cannot be replayed against Bob's key, and prefix tricks are refused.
     for (const key of [
       bobKey,
@@ -223,11 +243,14 @@ describe("adversarial tenancy and recovery", () => {
         "GET",
         `/v1/downloads?key=${encodeURIComponent(key)}&token=${token}`,
       );
+
       expect(r.status).toBe(403);
       expect(r.text).not.toContain("bob export");
     }
+
     // Another user's export status never lists Bob's files.
     expect(JSON.stringify(status.body)).not.toContain(bob.userId);
+
     // Forged render/preview tokens for Bob's deliveries are refused on the render origin.
     for (const token of [
       `${bob.mailboxId}.dlv_x.${Date.now() + 60_000}.AAAA`,
@@ -249,6 +272,7 @@ describe("adversarial tenancy and recovery", () => {
       ["ORIGINALS", new Map(h.buckets.ORIGINALS.objects)],
       ["PARTS", new Map(h.buckets.PARTS.objects)],
     ]);
+
     const entry = h.namespaces.MAILBOXES.instances.get(ana.mailboxId)!;
     const backupPath = join(mkdtempSync(join(tmpdir(), "bye-restore-")), "mailbox.sqlite");
     entry.state.storage.db.exec(`VACUUM INTO '${backupPath}'`);
@@ -261,7 +285,7 @@ describe("adversarial tenancy and recovery", () => {
     for (const [name, objects] of r2Backup)
       for (const [k, v] of objects) h.buckets[name as "ORIGINALS" | "PARTS"].objects.set(k, v);
     const state = new HarnessState({ name: ana.mailboxId });
-    (state.storage as unknown as { db: DatabaseSync }).db = new DatabaseSync(backupPath);
+    (state.storage as { db: DatabaseSync }).db = new DatabaseSync(backupPath);
     h.namespaces.MAILBOXES.instances.set(ana.mailboxId, {
       object: new MailboxDO(state as never, h.env),
       state,
@@ -271,11 +295,13 @@ describe("adversarial tenancy and recovery", () => {
     const { replayed } = await replayTombstones(h.env);
     expect(replayed).toBeGreaterThan(0);
     expect(underPrefix(h, prefix)).toEqual([]);
+
     const tables = state.storage.db
       .prepare(
         "SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'deliveries'",
       )
       .get() as { n: number };
+
     expect(tables.n).toBe(0);
   });
 
@@ -284,6 +310,7 @@ describe("adversarial tenancy and recovery", () => {
     const ana = await signup(h, "ana@bye.test");
     await allowDomain(h, ana, "example.net");
     await deliver(h, "ana@bye.test", "Newest erasure", "late");
+
     for (let i = 0; i < 500; i++) await writeTombstone(h.env, "world", `old-${i}`, i);
     await writeTombstone(h.env, "mailbox", ana.mailboxId, Date.now());
     await replayTombstones(h.env);
@@ -314,6 +341,7 @@ describe("adversarial tenancy and recovery", () => {
       .prepare("SELECT org_id FROM mailboxes WHERE id = ?")
       .bind(to.mailboxId)
       .first<{ org_id: string }>())!.org_id;
+
     await h.d1
       .prepare(
         "INSERT INTO memberships (org_id, user_id, role, status, created_at, updated_at) VALUES (?, ?, 'member', 'active', ?, ?)",
@@ -326,23 +354,27 @@ describe("adversarial tenancy and recovery", () => {
       )
       .bind(to.mailboxId, from.userId, Date.now())
       .run();
-    const store = (
-      h.namespaces.MAILBOXES.instance(from.mailboxId) as unknown as {
-        store: import("@bye/platform-cloudflare").MailboxStore;
-      }
+
+    const store = mockAs<{ store: import("@bye/platform-cloudflare").MailboxStore }>(
+      h.namespaces.MAILBOXES.instance(from.mailboxId),
     ).store;
+
     const imbox = await api(h, from, "GET", `/v1/mailboxes/${from.mailboxId}/views/imbox`);
+
     const thread = await api(
       h,
       from,
       "GET",
       `/v1/mailboxes/${from.mailboxId}/threads/${imbox.body.items[0].threadId}`,
     );
+
     const d = thread.body.deliveries[0] as { deliveryId: string; messageKey?: string };
+
     const messageKey = store.ctx.sql.one<{ message_key: string }>(
       "SELECT message_key FROM deliveries WHERE delivery_id = ?",
       d.deliveryId,
     )!.message_key;
+
     store.transfers.redeliver({
       deliveryId: d.deliveryId,
       targetMailboxId: to.mailboxId,
@@ -351,6 +383,7 @@ describe("adversarial tenancy and recovery", () => {
     });
     await h.namespaces.MAILBOXES.instance(from.mailboxId).alarm?.();
     await h.drain();
+
     return messageKey;
   };
 
@@ -388,15 +421,16 @@ describe("adversarial tenancy and recovery", () => {
     expect(
       (await api(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`)).text,
     ).not.toContain("Moved doc");
+
     // The target holds its own tenant-scoped copy, so the source's sweep cannot touch it.
-    const bobStore = (
-      h.namespaces.MAILBOXES.instance(bob.mailboxId) as unknown as {
-        store: import("@bye/platform-cloudflare").MailboxStore;
-      }
+    const bobStore = mockAs<{ store: import("@bye/platform-cloudflare").MailboxStore }>(
+      h.namespaces.MAILBOXES.instance(bob.mailboxId),
     ).store;
+
     const targetKey = bobStore.ctx.sql.one<{ message_key: string }>(
       "SELECT message_key FROM deliveries ORDER BY received_at DESC LIMIT 1",
     )!.message_key;
+
     expect(targetKey).not.toBe(key);
     expect(targetKey.startsWith(`t/${bob.mailboxId}/`)).toBe(true);
     await recordGcIntent(h.env, {
@@ -415,11 +449,14 @@ describe("adversarial tenancy and recovery", () => {
 
   it("log redaction: ordinary flows never log bodies, queries, credentials or signing keys", async () => {
     const lines: Array<string> = [];
+
     const capture = (...args: Array<unknown>) =>
-      void lines.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
+      void lines.push(args.map((a) => (Predicate.isString(a) ? a : JSON.stringify(a))).join(" "));
+
     const spies = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
       vi.spyOn(console, level).mockImplementation(capture),
     );
+
     try {
       const ana = await signup(h, "ana@bye.test");
       await allowDomain(h, ana, "example.net");
@@ -446,6 +483,7 @@ describe("adversarial tenancy and recovery", () => {
       );
       h.d1.failing = false;
       const all = lines.join("\n");
+
       for (const canary of [
         "BODYCANARY",
         "QUERYCANARY",

@@ -17,9 +17,12 @@ const dt = (s: string) => {
   const [d, t = "00:00:00"] = s.split("T");
   const [year, month, day] = d!.split("-").map(Number);
   const [hour, minute, second = 0] = t.split(":").map(Number);
+
   return { year: year!, month: month!, day: day!, hour: hour!, minute: minute!, second };
 };
+
 const utc = (s: string) => Date.parse(s.endsWith("Z") ? s : `${s}Z`);
+
 const iso = (ms: number) => new Date(ms).toISOString();
 
 const expandIso = (
@@ -45,6 +48,7 @@ describe("UNTIL with a zoned DTSTART across DST", () => {
       "America/New_York",
       w,
     );
+
     expect(out).toEqual([
       "2026-03-06T14:00:00.000Z",
       "2026-03-07T14:00:00.000Z",
@@ -61,6 +65,7 @@ describe("UNTIL with a zoned DTSTART across DST", () => {
   it("[C03] a UTC UNTIL is compared as an instant on the post-DST offset", () => {
     const run = (until: string) =>
       expandIso(`FREQ=DAILY;UNTIL=${until}`, "2026-03-06T09:00", "America/New_York", w);
+
     expect(run("20260310T130000Z")).toHaveLength(5);
     // 12:59:59Z would have covered a pre-DST 09:00 (14:00Z) day but not post-DST 13:00Z.
     expect(run("20260310T125959Z")).toHaveLength(4);
@@ -69,6 +74,7 @@ describe("UNTIL with a zoned DTSTART across DST", () => {
   it("[C03] a UTC UNTIL across fall back uses the standard-time offset", () => {
     const run = (until: string) =>
       expandIso(`FREQ=DAILY;UNTIL=${until}`, "2026-10-30T09:00", "America/New_York", w);
+
     // 2026-11-02 09:00 EST = 14:00Z.
     expect(run("20261102T140000Z").at(-1)).toBe("2026-11-02T14:00:00.000Z");
     expect(run("20261102T140000Z")).toHaveLength(4);
@@ -83,6 +89,7 @@ describe("UNTIL with a zoned DTSTART across DST", () => {
       "America/Los_Angeles",
       w,
     );
+
     expect(out.at(-1)).toBe("2026-03-11T01:00:00.000Z");
     expect(out).toHaveLength(5);
   });
@@ -111,6 +118,7 @@ describe("expansion bounds", () => {
 
   it("[C03] a never-matching rule (Feb 30) terminates with only DTSTART", () => {
     const huge = { from: utc("2026-01-01T00:00:00"), to: utc("9999-01-01T00:00:00") };
+
     for (const rule of [
       "FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30",
       "FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30;COUNT=5",
@@ -123,6 +131,7 @@ describe("expansion bounds", () => {
       ]);
       expect(performance.now() - started).toBeLessThan(5000);
     }
+
     // In a bounded window, the empty-period probe stops well before maxPeriods.
     expect(
       expandIso("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30", "2026-01-01T10:00", "UTC", w, {
@@ -183,6 +192,7 @@ describe("calCountBefore", () => {
       rdates: [calTimed(dt("2025-12-01T10:00"), "UTC")],
       exdates: [calTimed(dt("2026-01-02T10:00"), "UTC")],
     };
+
     expect(calCountBefore(set, utc("2026-02-01T00:00:00"))).toBe(3);
   });
 
@@ -213,16 +223,19 @@ describe("calApplySeriesChanges", () => {
     const next = calApplySeriesChanges(timed, {
       start: calTimed(dt("2026-03-02T14:00"), "Europe/Berlin"),
     });
+
     expect(next.dtend).toEqual(calTimed(dt("2026-03-02T15:30"), "Europe/Berlin"));
     expect(next.rule).toBe(timed.rule);
   });
 
   it("an explicit end wins", () => {
     const end = calTimed(dt("2026-03-02T18:00"), "Europe/Berlin");
+
     const next = calApplySeriesChanges(timed, {
       start: calTimed(dt("2026-03-02T14:00"), "Europe/Berlin"),
       end,
     });
+
     expect(next.dtend).toEqual(end);
   });
 
@@ -248,12 +261,15 @@ describe("calApplySeriesChanges", () => {
       dtend: calAllDay({ year: 2026, month: 3, day: 3 }),
       data: { summary: "Trip" },
     };
+
     expect(
       calApplySeriesChanges(allDay, { start: calAllDay({ year: 2026, month: 3, day: 10 }) }).dtend,
     ).toEqual(calAllDay({ year: 2026, month: 3, day: 12 }));
+
     const mixed = calApplySeriesChanges(allDay, {
       start: calTimed(dt("2026-03-10T09:00"), "UTC"),
     });
+
     expect(mixed.dtend).toBe(allDay.dtend);
   });
 });

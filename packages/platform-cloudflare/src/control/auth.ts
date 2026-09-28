@@ -5,7 +5,7 @@ import { ControlSupport, SUPPORT_TOKEN_PREFIX } from "./support.ts";
 import {
   ALL_SCOPES,
   DEFAULT_AGENT_SCOPES,
-  type PrincipalShape,
+  type PrincipalContext,
   type Scope,
 } from "@bye/application";
 import type { KernelClock } from "../durable/kernel.ts";
@@ -30,6 +30,7 @@ import {
   changesOf,
   type D1Like,
   type D1SessionLike,
+  type D1Value,
   type D1StatementLike,
   primary,
   q,
@@ -48,7 +49,9 @@ import { isRejection, reject } from "@bye/contracts";
 // D1 stores only SHA-256 hashes. Authorization reads use primary-consistent sessions.
 
 export const SESSION_TTL_MS = 30 * 24 * 3600 * 1000;
+
 export const CHALLENGE_TTL_MS = 5 * 60 * 1000;
+
 export const SESSION_COOKIE = "__Host-session";
 
 export interface SessionRow {
@@ -74,6 +77,7 @@ export interface AuthConfig {
 
 /** TOTP step-up lockout (§10): this many failures within the window lock step-up for the window. */
 export const TOTP_MAX_FAILURES = 5;
+
 export const TOTP_LOCKOUT_MS = 15 * 60 * 1000;
 
 export type AuthCredential =
@@ -111,10 +115,13 @@ export const clearSessionCookie = (): string =>
 
 export const readCookie = (header: string | null, name: string): string | undefined => {
   if (!header) return undefined;
+
   for (const part of header.split(";")) {
     const eq = part.indexOf("=");
+
     if (eq > 0 && part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
   }
+
   return undefined;
 };
 
@@ -151,6 +158,7 @@ export class ControlAuth {
         this.clock.now() + CHALLENGE_TTL_MS,
       ).run(),
     );
+
     return { id, challenge };
   }
 
@@ -172,6 +180,7 @@ export class ControlAuth {
         consumed_at: number | null;
       }>(),
     );
+
     if (
       !row ||
       row.purpose !== purpose ||
@@ -180,13 +189,16 @@ export class ControlAuth {
     ) {
       return reject("unauthenticated", "challenge invalid or expired");
     }
+
     const { meta } = await q(
       this.db,
       "UPDATE auth_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
       this.clock.now(),
       id,
     ).run();
+
     if (meta.changes !== 1) reject("unauthenticated", "challenge already used");
+
     return { challenge: row.challenge, userId: row.user_id };
   }
 
@@ -199,13 +211,16 @@ export class ControlAuth {
     label = "",
   ): Promise<string> {
     const { challenge, userId: bound } = await this.consumeChallenge(challengeId, "register");
+
     if (bound !== userId) reject("forbidden", "challenge bound to another user");
     let reg;
+
     try {
       reg = await verifyRegistration(response, challenge, this.config.rp);
     } catch (e) {
       return reject("unauthenticated", (e as Error).message);
     }
+
     await this.db.batch([
       q(
         this.db,
@@ -223,6 +238,7 @@ export class ControlAuth {
         target: reg.credentialId,
       }),
     ]);
+
     return reg.credentialId;
   }
 
@@ -242,6 +258,7 @@ export class ControlAuth {
     // The counter advance and the session it authorizes commit together, and only if the counter
     // compare-and-set landed: two concurrent uses of one assertion cannot both get a session.
     const issued = await this.newSession(key.user_id, device, true);
+
     const results = await this.db.batch([
       this.advanceSignCount(response.credentialId, signCount),
       q(
@@ -257,7 +274,9 @@ export class ControlAuth {
         issued.session.step_up_at,
       ),
     ]);
+
     if (changesOf(results[0]) === 0) reject("unauthenticated", "authenticator counter replayed");
+
     return { token: issued.token, session: issued.session };
   }
 
@@ -286,6 +305,7 @@ export class ControlAuth {
         credentialId,
       ).first<{ user_id: string; public_key_jwk: string; sign_count: number }>(),
     );
+
     return key ?? reject("unauthenticated", "unknown credential");
   }
 
@@ -320,8 +340,10 @@ export class ControlAuth {
     const session = await this.sessionById(sessionId);
     const { challenge } = await this.consumeChallenge(challengeId, "step-up");
     const key = await this.passkey(response.credentialId);
+
     if (key.user_id !== session.user_id) reject("forbidden", "credential belongs to another user");
     const signCount = await this.assert(key, response, challenge);
+
     const results = await this.db.batch([
       this.advanceSignCount(response.credentialId, signCount),
       q(
@@ -331,6 +353,7 @@ export class ControlAuth {
         sessionId,
       ),
     ]);
+
     if (changesOf(results[0]) === 0) reject("unauthenticated", "authenticator counter replayed");
   }
 
@@ -342,18 +365,23 @@ export class ControlAuth {
   async stepUpWithTotp(sessionId: string, code: string): Promise<void> {
     const session = await this.sessionById(sessionId);
     const lockedUntil = await this.totpLockedUntil(session.user_id);
+
     if (lockedUntil !== null)
       return reject("rate_limited", "second factor locked", { lockedUntil });
+
     try {
       await this.verifyTotpCode(session.user_id, code);
     } catch (e) {
       if (isRejection(e) && e.code === "unauthenticated") {
         const locked = await this.recordTotpFailure(session.user_id);
+
         if (locked !== null)
           return reject("rate_limited", "second factor locked", { lockedUntil: locked });
       }
+
       throw e;
     }
+
     await this.db.batch([
       q(this.db, "UPDATE sessions SET step_up_at = ? WHERE id = ?", this.clock.now(), sessionId),
       q(this.db, "DELETE FROM auth_lockouts WHERE user_id = ? AND kind = 'totp'", session.user_id),
@@ -370,6 +398,7 @@ export class ControlAuth {
         this.clock.now(),
       ).first<{ locked_until: number }>(),
     );
+
     return row ? Number(row.locked_until) : null;
   }
 
@@ -380,6 +409,7 @@ export class ControlAuth {
   private async recordTotpFailure(userId: string): Promise<number | null> {
     const now = this.clock.now();
     const lockUntil = now + TOTP_LOCKOUT_MS;
+
     const results = await this.db.batch([
       q(
         this.db,
@@ -406,6 +436,7 @@ export class ControlAuth {
         userId,
       ),
     ]);
+
     const locked = changesOf(results[1]) > 0;
     const row = (results[2] as { results?: Array<{ failures: number }> } | undefined)?.results?.[0];
     await audit(this.db, this.clock, {
@@ -414,6 +445,7 @@ export class ControlAuth {
       target: userId,
       detail: locked ? { lockedUntil: lockUntil } : { failures: Number(row?.failures ?? 0) },
     }).run();
+
     return locked ? lockUntil : null;
   }
 
@@ -432,6 +464,7 @@ export class ControlAuth {
       sealed.ciphertext,
       this.clock.now(),
     ).run();
+
     return { secret: base32Encode(secret) };
   }
 
@@ -463,15 +496,20 @@ export class ControlAuth {
         last_step: number;
       }>(),
     );
+
     if (!row || (!allowUnconfirmed && row.confirmed_at === null))
       return reject("unauthenticated", "second factor not enrolled");
+
     const secret = await openWithKey(this.config.totpKeys, {
       keyVersion: row.key_version,
       iv: row.iv,
       ciphertext: row.ciphertext,
     });
+
     const step = await verifyTotp(secret, code, this.clock.now(), row.last_step);
+
     if (step === null) return reject("unauthenticated", "invalid code");
+
     // Compare-and-set prevents two concurrent uses of the same code.
     const { meta } = await q(
       this.db,
@@ -480,6 +518,7 @@ export class ControlAuth {
       userId,
       step,
     ).run();
+
     if (meta.changes !== 1) reject("unauthenticated", "code already used");
   }
 
@@ -493,6 +532,7 @@ export class ControlAuth {
   async rotateTotpKeys(pageSize = 100, maxPages = Number.POSITIVE_INFINITY): Promise<number> {
     let rotated = 0;
     let after = "";
+
     for (let page = 0; page < maxPages; page++) {
       const rows = (
         await q(
@@ -503,14 +543,17 @@ export class ControlAuth {
           pageSize,
         ).all<{ user_id: string; key_version: number; iv: string; ciphertext: string }>()
       ).results;
+
       if (rows.length === 0) break;
       const updates: Array<D1StatementLike> = [];
+
       for (const r of rows) {
         const plain = await openWithKey(this.config.totpKeys, {
           keyVersion: r.key_version,
           iv: r.iv,
           ciphertext: r.ciphertext,
         });
+
         const sealed = await sealWithKey(this.config.totpKeys, plain);
         updates.push(
           q(
@@ -524,11 +567,14 @@ export class ControlAuth {
           ),
         );
       }
+
       await this.db.batch(updates);
       rotated += rows.length;
       after = rows.at(-1)!.user_id;
+
       if (rows.length < pageSize) break;
     }
+
     return rotated;
   }
 
@@ -551,8 +597,10 @@ export class ControlAuth {
   async generateRecoveryCodes(userId: string, count = 10): Promise<ReadonlyArray<string>> {
     const codes = Array.from({ length: count }, () => {
       const s = base32Encode(randomBytes(10));
+
       return `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}`;
     });
+
     const hashes = await Promise.all(codes.map((c) => this.hashRecovery(userId, c)));
     await this.db.batch([
       q(this.db, "DELETE FROM recovery_codes WHERE user_id = ?", userId),
@@ -572,6 +620,7 @@ export class ControlAuth {
         target: userId,
       }),
     ]);
+
     return codes;
   }
 
@@ -593,13 +642,16 @@ export class ControlAuth {
         address.trim().toLowerCase(),
       ).first<{ id: string; status: string }>(),
     );
+
     if (!user || user.status !== "active") return reject("unauthenticated", "recovery failed");
     // Hash under every pepper version in the ring; each stored hash says which one it used.
     const versions = ringVersions(this.peppers);
+
     // bounded: one hash per pepper version in the configured ring (a handful at most).
     const candidates = await Promise.all(
       versions.map(async (v) => [v, await this.hashRecovery(user.id, code, v)] as const),
     );
+
     const found = await guardD1("recover", () =>
       q(
         primary(this.db),
@@ -608,6 +660,7 @@ export class ControlAuth {
         ...candidates.flat(),
       ).first<{ code_hash: string }>(),
     );
+
     if (!found) {
       // Codes made under a pepper that has left the ring can never verify: a configuration error
       // (retire a version only after its codes are regenerated), surfaced as such.
@@ -619,9 +672,12 @@ export class ControlAuth {
           ...versions,
         ).first<{ pepper_version: number }>(),
       );
+
       if (orphaned) throw new UnknownKeyVersion("recovery-pepper", Number(orphaned.pepper_version));
+
       return reject("unauthenticated", "recovery failed");
     }
+
     const hash = found.code_hash;
     // One atomic batch. The audit row doubles as the redemption marker: it is inserted only if
     // the compare-and-set burn changed a row, and every later statement is guarded on it, so a
@@ -659,12 +715,15 @@ export class ControlAuth {
         auditId,
       ),
     ]);
+
     const marker = await q(
       primary(this.db),
       "SELECT 1 AS ok FROM audit_log WHERE id = ?",
       auditId,
     ).first();
+
     if (!marker) return reject("unauthenticated", "recovery failed");
+
     return { token: issued.token, session: issued.session };
   }
 
@@ -677,6 +736,7 @@ export class ControlAuth {
   ): Promise<{ token: string; session: SessionRow }> {
     const issued = await this.newSession(userId, device, steppedUp);
     await issued.statement.run();
+
     return { token: issued.token, session: issued.session };
   }
 
@@ -694,6 +754,7 @@ export class ControlAuth {
     const token = randomToken();
     const tokenHash = await sha256Hex(token);
     const now = this.clock.now();
+
     const session: SessionRow = {
       id: this.clock.id("ses"),
       user_id: userId,
@@ -704,6 +765,7 @@ export class ControlAuth {
       device,
       revoked_at: null,
     };
+
     const statement = q(
       this.db,
       "INSERT INTO sessions (id, user_id, token_hash, device, created_at, last_seen_at, expires_at, step_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -716,6 +778,7 @@ export class ControlAuth {
       session.expires_at,
       session.step_up_at,
     );
+
     return { token, tokenHash, session, statement };
   }
 
@@ -727,8 +790,10 @@ export class ControlAuth {
         id,
       ).first<SessionRow>(),
     );
+
     if (!s || s.revoked_at !== null || s.expires_at < this.clock.now())
       return reject("unauthenticated", "session invalid");
+
     return s;
   }
 
@@ -741,11 +806,15 @@ export class ControlAuth {
     if (!token) return reject("unauthenticated", "missing credential");
     const hash = await sha256Hex(token);
     const kind = credentialKindOf(token);
+
     if (kind !== "session") {
       const found = await CREDENTIALS[kind].authenticate(this, token, hash);
+
       if (found) return found;
     }
+
     const session = await CREDENTIALS.session.authenticate(this, token, hash);
+
     return session ?? reject("unauthenticated", "invalid credential");
   }
 
@@ -754,11 +823,13 @@ export class ControlAuth {
     token: string,
   ): Promise<{ token: string; session: SessionRow; previousId: string }> {
     const cred = await this.authenticate(token);
+
     if (cred.kind !== "session") return reject("bad_request", "only sessions rotate");
     const next = randomToken();
     const now = this.clock.now();
     const id = this.clock.id("ses");
     const s = cred.session;
+
     // Compare-and-set on the old session: only the rotation that revokes it issues a successor, so
     // two concurrent rotations (or one racing a logout) cannot fork the session.
     const results = await this.db.batch([
@@ -782,7 +853,9 @@ export class ControlAuth {
         s.step_up_at,
       ),
     ]);
+
     if (changesOf(results[0]) === 0) return reject("unauthenticated", "session invalid");
+
     return {
       token: next,
       session: { ...s, id, created_at: now, last_seen_at: now, expires_at: now + SESSION_TTL_MS },
@@ -808,6 +881,7 @@ export class ControlAuth {
       sessionId,
       userId,
     ).run();
+
     return meta.changes === 1;
   }
 
@@ -829,6 +903,7 @@ export class ControlAuth {
     const scopes =
       input.scopes ??
       (input.kind === "agent" ? DEFAULT_AGENT_SCOPES : (["read", "draft"] as const));
+
     for (const s of scopes)
       if (!ALL_SCOPES.includes(s)) reject("bad_request", `unknown scope ${s}`);
     const token = `bye_${input.kind}_${randomToken()}`;
@@ -853,6 +928,7 @@ export class ControlAuth {
         detail: { kind: input.kind, scopes },
       }),
     ]);
+
     return { id, token, scopes };
   }
 
@@ -880,6 +956,7 @@ export class ControlAuth {
       last_used_at: number | null;
       expires_at: number | null;
     }>();
+
     return rows.results.map((r) => ({
       id: r.id,
       kind: r.kind,
@@ -911,6 +988,7 @@ export class ControlAuth {
       created_at: number;
       last_used_at: number | null;
     }>();
+
     return rows.results.map((r) => ({
       id: r.credential_id,
       label: r.label,
@@ -926,15 +1004,19 @@ export class ControlAuth {
    */
   async removePasskey(userId: string, credentialId: string): Promise<void> {
     const keys = await this.listPasskeys(userId);
+
     if (!keys.some((k) => k.id === credentialId)) return reject("not_found", "passkey");
+
     if (keys.length === 1) {
       const codes = await q(
         primary(this.db),
         "SELECT COUNT(*) AS n FROM recovery_codes WHERE user_id = ? AND used_at IS NULL",
         userId,
       ).first<{ n: number }>();
+
       if (!codes?.n) reject("conflict", "cannot remove the only sign-in credential");
     }
+
     await this.db.batch([
       q(
         this.db,
@@ -956,6 +1038,7 @@ export class ControlAuth {
       "SELECT 1 AS ok FROM totp_secrets WHERE user_id = ?",
       userId,
     ).first();
+
     if (!had) return false;
     // Delete and audit commit together; the audit row is written only when a secret existed.
     await this.db.batch([
@@ -966,6 +1049,7 @@ export class ControlAuth {
         target: userId,
       }),
     ]);
+
     return true;
   }
 
@@ -975,6 +1059,7 @@ export class ControlAuth {
     readonly recoveryCodesRemaining: number;
   }> {
     const db = primary(this.db);
+
     const [p, t, r] = await Promise.all([
       q(db, "SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?", userId).first<{ n: number }>(),
       q(db, "SELECT confirmed_at FROM totp_secrets WHERE user_id = ?", userId).first<{
@@ -986,6 +1071,7 @@ export class ControlAuth {
         userId,
       ).first<{ n: number }>(),
     ]);
+
     return {
       passkeys: Number(p?.n ?? 0),
       totp: t === null ? "none" : t.confirmed_at === null ? "pending" : "enabled",
@@ -1001,6 +1087,7 @@ export class ControlAuth {
       tokenId,
       userId,
     ).run();
+
     return meta.changes === 1;
   }
 
@@ -1010,9 +1097,10 @@ export class ControlAuth {
    * Build the per-request principal from a verified credential. Suspended memberships and
    * suspended/closed mailboxes are excluded immediately (§11, O02).
    */
-  async principal(cred: AuthCredential): Promise<PrincipalShape> {
+  async principal(cred: AuthCredential): Promise<PrincipalContext> {
     const userId = cred.kind === "session" ? cred.session.user_id : cred.userId;
     const db = primary(this.db);
+
     const [mailboxes, calendars, orgs, ents] = await guardD1("principal", () =>
       Promise.all([
         q(
@@ -1038,13 +1126,17 @@ export class ControlAuth {
         ).all<EntitlementRecord & { org_id: string | null }>(),
       ]),
     );
+
     // Entitlement enforcement (A01/A02): if every organization has lapsed past its grace period the
     // credential keeps read access only (mail keeps arriving; export and billing stay reachable).
     const now = this.clock.now();
+
     const lapsed =
       ents.results.length > 0 &&
       ents.results.every((e) => entitlementState(e.org_id === null ? null : e, now) === "lapsed");
+
     const baseScopes = cred.kind === "session" ? ALL_SCOPES : cred.scopes;
+
     return {
       userId,
       sessionId: cred.kind === "session" ? cred.session.id : cred.tokenId,
@@ -1087,13 +1179,13 @@ interface CredentialSpec {
 /** Optional `EXISTS (…)` condition every revocation statement must also satisfy (atomic batches). */
 export interface RevocationGuard {
   readonly exists: string;
-  readonly args: ReadonlyArray<unknown>;
+  readonly args: ReadonlyArray<D1Value>;
 }
 
 const guarded = (
   db: D1SessionLike,
   sql: string,
-  args: ReadonlyArray<unknown>,
+  args: ReadonlyArray<D1Value>,
   guard: RevocationGuard | undefined,
 ): D1StatementLike =>
   guard
@@ -1112,9 +1204,12 @@ export const CREDENTIALS: Readonly<Record<CredentialKind, CredentialSpec>> = {
           hash,
         ).first<SessionRow>(),
       );
+
       if (!session) return null;
+
       if (session.revoked_at !== null || session.expires_at < auth.clock.now())
         return reject("unauthenticated", "session expired");
+
       return { kind: "session", session };
     },
     revokeAllFor: (db, now, userId, _reason, guard) => [
@@ -1130,6 +1225,7 @@ export const CREDENTIALS: Readonly<Record<CredentialKind, CredentialSpec>> = {
     prefix: "bye_",
     authenticate: async (auth, _token, hash) => {
       const now = auth.clock.now();
+
       const tok = await guardD1("token", () =>
         q(
           primary(auth.db),
@@ -1144,10 +1240,13 @@ export const CREDENTIALS: Readonly<Record<CredentialKind, CredentialSpec>> = {
           revoked_at: number | null;
         }>(),
       );
+
       if (!tok) return null;
+
       if (tok.revoked_at !== null || (tok.expires_at !== null && tok.expires_at < now))
         return reject("unauthenticated", "invalid credential");
       await q(auth.db, "UPDATE api_tokens SET last_used_at = ? WHERE id = ?", now, tok.id).run();
+
       return {
         kind: tok.kind,
         tokenId: tok.id,
@@ -1168,6 +1267,7 @@ export const CREDENTIALS: Readonly<Record<CredentialKind, CredentialSpec>> = {
     prefix: "bda_",
     authenticate: async (auth, token) => {
       const device = await new ControlDeviceAuth(auth.db, auth.clock).authenticateAccess(token);
+
       return device
         ? { kind: "device", tokenId: device.sessionId, userId: device.userId, scopes: ALL_SCOPES }
         : null;
@@ -1205,6 +1305,7 @@ export const CREDENTIALS: Readonly<Record<CredentialKind, CredentialSpec>> = {
     prefix: SUPPORT_TOKEN_PREFIX,
     authenticate: async (auth, token) => {
       const support = await new ControlSupport(auth.db, auth.clock).authenticate(token);
+
       return support
         ? {
             kind: "support",
@@ -1231,6 +1332,7 @@ export const CREDENTIALS: Readonly<Record<CredentialKind, CredentialSpec>> = {
 export const credentialKindOf = (token: string): CredentialKind => {
   for (const kind of ["support", "device", "api"] as const)
     if (token.startsWith(CREDENTIALS[kind].prefix!)) return kind;
+
   return "session";
 };
 
@@ -1248,6 +1350,7 @@ export const revokeAllCredentials = (
   guard?: RevocationGuard,
 ): Array<D1StatementLike> => {
   const now = clock.now();
+
   return [
     ...(Object.keys(CREDENTIALS) as Array<CredentialKind>).flatMap((k) =>
       CREDENTIALS[k].revokeAllFor(db, now, userId, reason, guard),

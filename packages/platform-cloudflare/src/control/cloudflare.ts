@@ -1,3 +1,4 @@
+import type { Types } from "effect";
 import type { DnsRecord, DnsRecordType, EmailRoutingRule } from "./domains.ts";
 
 // Narrow Cloudflare API adapter for customer-domain onboarding (O01) and public cache purge (P01).
@@ -57,65 +58,114 @@ interface RawRule {
   actions?: Array<{ type: string; value?: Array<string> }>;
 }
 
-const toRule = (r: RawRule): EmailRoutingRule => ({
-  enabled: r.enabled === true,
-  ...(r.name !== undefined ? { name: r.name } : {}),
-  matchers: (r.matchers ?? []).map((m) => ({
-    type: m.type,
-    ...(m.field !== undefined ? { field: m.field } : {}),
-    ...(m.value !== undefined ? { value: m.value } : {}),
-  })),
-  actions: (r.actions ?? []).map((a) => ({
-    type: a.type,
-    ...(a.value !== undefined ? { value: [...a.value] } : {}),
-  })),
-});
+const toRule = (r: RawRule): EmailRoutingRule => {
+  const rule: Types.Mutable<EmailRoutingRule> = {
+    enabled: r.enabled === true,
+    matchers: (r.matchers ?? []).map((m) => {
+      const matcher: Types.Mutable<EmailRoutingRule["matchers"][number]> = { type: m.type };
+
+      if (m.field !== undefined) matcher.field = m.field;
+
+      if (m.value !== undefined) matcher.value = m.value;
+
+      return matcher;
+    }),
+    actions: (r.actions ?? []).map((a) => {
+      const action: Types.Mutable<EmailRoutingRule["actions"][number]> = { type: a.type };
+
+      if (a.value !== undefined) action.value = [...a.value];
+
+      return action;
+    }),
+  };
+
+  if (r.name !== undefined) rule.name = r.name;
+
+  return rule;
+};
+
+interface CloudflareRequestInit {
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+}
+
+interface DnsPayload {
+  type: string;
+  name: string;
+  content: string;
+  ttl: number;
+  priority?: number;
+}
 
 export const cloudflareApi = (token: string, fetchFn: CloudflareFetch): CloudflareApi => {
-  const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
-    const response = await fetchFn(`${API}${path}`, {
+  const call = async <T, B extends object = object>(
+    method: string,
+    path: string,
+    body?: B,
+  ): Promise<T> => {
+    const init: CloudflareRequestInit = {
       method,
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+    };
+
+    if (body !== undefined) init.body = JSON.stringify(body);
+    const response = await fetchFn(`${API}${path}`, init);
+
     const data = (await response.json().catch(() => ({}))) as {
       success?: boolean;
       result?: T;
       errors?: Array<{ message?: string }>;
     };
+
     if (!response.ok || data.success === false)
       throw new CloudflareApiError(
         response.status,
         data.errors?.[0]?.message ?? `cloudflare ${method} ${path} failed`,
       );
+
     return data.result as T;
   };
+
   const toRecord = (r: {
     id: string;
     type: string;
     name: string;
     content: string;
     priority?: number;
-  }): CloudflareDnsRecord => ({
-    id: r.id,
-    type: r.type as DnsRecordType,
-    name: r.name,
-    content: r.content,
-    ...(r.priority !== undefined ? { priority: r.priority } : {}),
-  });
-  const payload = (record: DnsRecord) => ({
-    type: record.type,
-    name: record.name,
-    content: record.content,
-    ttl: 1,
-    ...(record.priority !== undefined ? { priority: record.priority } : {}),
-  });
+  }): CloudflareDnsRecord => {
+    const out: Types.Mutable<CloudflareDnsRecord> = {
+      id: r.id,
+      type: r.type as DnsRecordType,
+      name: r.name,
+      content: r.content,
+    };
+
+    if (r.priority !== undefined) out.priority = r.priority;
+
+    return out;
+  };
+
+  const payload = (record: DnsRecord) => {
+    const out: DnsPayload = {
+      type: record.type,
+      name: record.name,
+      content: record.content,
+      ttl: 1,
+    };
+
+    if (record.priority !== undefined) out.priority = record.priority;
+
+    return out;
+  };
+
   return {
     findZone: async (name) => {
       const zones = await call<Array<{ id: string; name: string }>>(
         "GET",
         `/zones?name=${encodeURIComponent(name)}`,
       );
+
       return zones[0] ?? null;
     },
     listDns: async (zoneId, name) =>
@@ -155,7 +205,9 @@ export const cloudflareApi = (token: string, fetchFn: CloudflareFetch): Cloudfla
         enabled?: boolean;
         actions?: Array<{ type: string; value?: Array<string> }>;
       } | null>("GET", `/zones/${zoneId}/email/routing/rules/catch_all`);
+
       const action = rule?.enabled ? rule.actions?.find((a) => a.type === "worker") : undefined;
+
       return action?.value?.[0] ?? null;
     },
     catchAllRule: async (zoneId) => {
@@ -163,6 +215,7 @@ export const cloudflareApi = (token: string, fetchFn: CloudflareFetch): Cloudfla
         "GET",
         `/zones/${zoneId}/email/routing/rules/catch_all`,
       );
+
       return rule && Array.isArray(rule.actions) ? toRule(rule) : null;
     },
     putCatchAll: async (zoneId, rule) =>
@@ -198,17 +251,23 @@ export const dohResolver =
       `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${type}`,
       { headers: { accept: "application/dns-json" } },
     );
+
     if (!response.ok) throw new Error(`DoH ${type} ${name} failed`);
+
     const data = (await response.json()) as {
       Answer?: Array<{ name: string; type: number; data: string }>;
     };
+
     const code = { MX: 15, TXT: 16, CNAME: 5 }[type];
+
     return (data.Answer ?? [])
       .filter((a) => a.type === code)
       .map((a) => {
         const name0 = a.name.replace(/\.$/, "");
+
         if (type === "MX") {
           const [prio, host] = a.data.split(/\s+/);
+
           return {
             type,
             name: name0,
@@ -216,6 +275,7 @@ export const dohResolver =
             priority: Number(prio),
           };
         }
+
         return {
           type,
           name: name0,

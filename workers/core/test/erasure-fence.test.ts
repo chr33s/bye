@@ -13,7 +13,7 @@ import {
   writeTombstone,
 } from "../src/erasure.ts";
 import { quarantineUnprocessable } from "../src/scheduled.ts";
-import { type Harness, makeHarness, rfc822 } from "./harness.ts";
+import { type Harness, makeHarness, rfc822, mockAs } from "./harness.ts";
 
 // Erasure completeness and its persistent fence (§12): non-mailbox PARTS namespaces are purged,
 // search-shard clears are checked before the catalog is lost, and queued work cannot recreate an
@@ -39,10 +39,12 @@ describe("erasure fence and completeness", () => {
   it("[§12] calendar day photos and private World media are purged; others' objects stay", async () => {
     const ana = await account(h, "ana@bye.test");
     const bob = await account(h, "bob@bye.test");
+
     for (const u of [ana, bob]) {
       await h.buckets.PARTS.put(`cal/${u.calendarId}/photo/p${"x".repeat(20)}`, "photo");
       await h.buckets.PARTS.put(`t/${u.userId}/world-media/m1`, "media");
     }
+
     await eraseCalendarContent(h.env, ana.calendarId);
     await eraseUserRows(h.env, ana.userId);
     const left = keys(h, "PARTS");
@@ -57,27 +59,34 @@ describe("erasure fence and completeness", () => {
     await writeTombstone(h.env, "mailbox", ana.mailboxId);
     let failing = true;
     const shards = h.env.SEARCH_SHARDS;
+
     const env = {
       ...h.env,
       SEARCH_SHARDS: {
         getByName: (name: string) => {
           const real = shards.getByName(name);
+
           return {
             clear: async () => {
               if (failing) throw new Error("shard unavailable");
+
               return real.clear();
             },
           };
         },
       },
-    } as unknown as CoreEnv;
+    } as CoreEnv;
+
     await expect(eraseMailboxContent(env, ana.mailboxId)).rejects.toThrow("shard unavailable");
+
     // The authority (and so its shard catalog) was not erased yet.
-    const instance = h.namespaces.MAILBOXES.instance(ana.mailboxId) as unknown as {
-      ctx: DurableObjectState;
-    };
+    const instance = mockAs<{ ctx: DurableObjectState }>(
+      h.namespaces.MAILBOXES.instance(ana.mailboxId),
+    );
+
     expect(instance.ctx.storage.kv.get("erased")).toBeUndefined();
     expect(await replayUnverifiedTombstones(env)).toEqual({ replayed: 0 });
+
     const verified = () =>
       h.d1
         .prepare(
@@ -85,6 +94,7 @@ describe("erasure fence and completeness", () => {
         )
         .bind(ana.mailboxId)
         .first<{ verified_at: number | null }>();
+
     expect((await verified())?.verified_at).toBeNull();
     failing = false;
     expect(await replayUnverifiedTombstones(env)).toEqual({ replayed: 1 });

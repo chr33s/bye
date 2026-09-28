@@ -1,9 +1,10 @@
+import type { Types } from "effect";
 import { toBase64Url } from "@bye/domain";
 import { encodeBase64 } from "@bye/mail-codec";
 import { type Acceptance, type Submission, TransportFailure } from "@bye/application";
 import { Effect } from "effect";
 import { loadRawBytes, type RawContentSource } from "./cloudflare.ts";
-import { EXTERNAL_IDENTITY_CAPABILITIES, type FetchLike, makeHttpTransport } from "./http.ts";
+import { EXTERNAL_IDENTITY_CAPABILITIES, type FetchLike, httpTransport } from "./http.ts";
 import type { TransportAdapter } from "./router.ts";
 
 // ExternalIdentityTransport (§5.3, E19): sends as an externally hosted address through the user's
@@ -42,31 +43,42 @@ const refresh = async (
   timeoutMs: number,
 ): Promise<ExternalCredential | null> => {
   if (!c.refreshToken || !c.tokenEndpoint || !c.clientId) return null;
-  const body = new URLSearchParams({
+
+  const params = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: c.refreshToken,
     client_id: c.clientId,
-    ...(c.clientSecret ? { client_secret: c.clientSecret } : {}),
-  }).toString();
+  });
+
+  if (c.clientSecret) params.set("client_secret", c.clientSecret);
+  const body = params.toString();
+
   const response = await fetchFn(c.tokenEndpoint, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body,
     signal: AbortSignal.timeout(timeoutMs),
   });
+
   if (response.status !== 200) return null;
+
   const json = (await response.json()) as {
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
   };
+
   if (!json.access_token) return null;
-  return {
+
+  const refreshed: Types.Mutable<ExternalCredential> = {
     ...c,
     accessToken: json.access_token,
-    ...(json.refresh_token ? { refreshToken: json.refresh_token } : {}),
     expiresAt: Date.now() + (json.expires_in ?? 3600) * 1000,
   };
+
+  if (json.refresh_token) refreshed.refreshToken = json.refresh_token;
+
+  return refreshed;
 };
 
 /**
@@ -76,23 +88,35 @@ const refresh = async (
  */
 const inflightRefreshes = new Map<string, Promise<ExternalCredential | null>>();
 
+interface CredentialRefresh {
+  readonly leader: boolean;
+  readonly result: Promise<ExternalCredential | null>;
+}
+
 const refreshOnce = (
   key: string,
   run: () => Promise<ExternalCredential | null>,
-): { readonly leader: boolean; readonly result: Promise<ExternalCredential | null> } => {
+): CredentialRefresh => {
   const pending = inflightRefreshes.get(key);
+
   if (pending) return { leader: false, result: pending };
   const result = run().finally(() => inflightRefreshes.delete(key));
   inflightRefreshes.set(key, result);
+
   return { leader: true, result };
 };
+
+interface ExternalSendResult {
+  readonly status: number;
+  readonly id?: string;
+}
 
 const send = async (
   fetchFn: FetchLike,
   c: ExternalCredential,
   raw: Uint8Array,
   timeoutMs: number,
-): Promise<{ readonly status: number; readonly id?: string }> => {
+): Promise<ExternalSendResult> => {
   if (c.provider === "gmail") {
     const r = await fetchFn("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
       method: "POST",
@@ -100,9 +124,16 @@ const send = async (
       body: JSON.stringify({ raw: toBase64Url(raw) }),
       signal: AbortSignal.timeout(timeoutMs),
     });
+
     const id = r.status === 200 ? ((await r.json()) as { id?: string }).id : undefined;
-    return { status: r.status, ...(id ? { id } : {}) };
+
+    const sent: Types.Mutable<ExternalSendResult> = { status: r.status };
+
+    if (id) sent.id = id;
+
+    return sent;
   }
+
   const r = await fetchFn("https://graph.microsoft.com/v1.0/me/sendMail", {
     method: "POST",
     headers: { authorization: `Bearer ${c.accessToken}`, "content-type": "text/plain" },
@@ -110,6 +141,7 @@ const send = async (
     body: encodeBase64(raw),
     signal: AbortSignal.timeout(timeoutMs),
   });
+
   return { status: r.status };
 };
 
@@ -131,18 +163,21 @@ export const makeExternalIdentityApiTransport = (
             detail: "credential store unavailable",
           }),
       });
+
       if (!credential)
         return yield* new TransportFailure({
           kind: "Rejected",
           detail: "no authorized credential for this identity",
         });
+
       if (credential.provider === "http") {
         if (!credential.endpoint || !credential.apiKey)
           return yield* new TransportFailure({
             kind: "Rejected",
             detail: "incomplete relay credential",
           });
-        return yield* makeHttpTransport(
+
+        return yield* httpTransport(
           {
             endpoint: credential.endpoint,
             apiKey: credential.apiKey,
@@ -153,10 +188,13 @@ export const makeExternalIdentityApiTransport = (
           fetchFn,
         ).submit(submission);
       }
+
       const raw = yield* Effect.tryPromise({
         try: async () => {
           const bytes = await loadRawBytes(content, submission.contentKey);
+
           if (bytes === null) throw new Error("rendered content missing");
+
           return bytes;
         },
         catch: (e) =>
@@ -165,6 +203,7 @@ export const makeExternalIdentityApiTransport = (
             detail: e instanceof Error ? e.message : "content",
           }),
       });
+
       // Only the refresh leader persists; followers reuse the leader's result.
       const refreshAndPersist = (c: ExternalCredential) =>
         Effect.tryPromise({
@@ -173,8 +212,11 @@ export const makeExternalIdentityApiTransport = (
               `${submission.from.toLowerCase()}\0${c.refreshToken ?? ""}`,
               () => refresh(fetchFn, c, timeoutMs),
             );
+
             const refreshed = await flight.result;
+
             if (refreshed && flight.leader) await store.persist(submission.from, refreshed);
+
             return refreshed;
           },
           catch: () =>
@@ -183,9 +225,12 @@ export const makeExternalIdentityApiTransport = (
               detail: "token refresh failed",
             }),
         });
+
       let active = credential;
+
       if (!active.accessToken || (active.expiresAt ?? 0) < now() + 60_000) {
         const refreshed = yield* refreshAndPersist(active);
+
         if (!refreshed)
           return yield* new TransportFailure({
             kind: "Rejected",
@@ -193,14 +238,17 @@ export const makeExternalIdentityApiTransport = (
           });
         active = refreshed;
       }
+
       let result = yield* Effect.tryPromise({
         try: () => send(fetchFn, active, raw, timeoutMs),
         catch: () =>
           new TransportFailure({ kind: "Unknown", detail: "network error after submit" }),
       });
+
       if (result.status === 401) {
         // Unauthorized means not accepted: refresh once and retry.
         const refreshed = yield* refreshAndPersist(active);
+
         if (!refreshed)
           return yield* new TransportFailure({
             kind: "Rejected",
@@ -213,19 +261,24 @@ export const makeExternalIdentityApiTransport = (
             new TransportFailure({ kind: "Unknown", detail: "network error after submit" }),
         });
       }
+
       if (result.status >= 200 && result.status < 300) {
         const acceptance: Acceptance = {
           providerId: result.id ?? `${active.provider}:${submission.sendJobId}`,
         };
+
         return acceptance;
       }
+
       if (result.status === 429 || result.status === 408)
         return yield* new TransportFailure({
           kind: "RetryableBeforeAcceptance",
           detail: `http ${result.status}`,
         });
+
       if (result.status >= 500)
         return yield* new TransportFailure({ kind: "Unknown", detail: `http ${result.status}` });
+
       return yield* new TransportFailure({ kind: "Rejected", detail: `http ${result.status}` });
     }).pipe(Effect.withSpan("transport.external.submit")),
 });

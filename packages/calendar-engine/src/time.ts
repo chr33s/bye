@@ -1,3 +1,5 @@
+import { Predicate } from "effect";
+
 import {
   calAddDays,
   calCompareDates,
@@ -25,6 +27,7 @@ export const calTimed = (local: CalLocalDateTime, tzid: string): CalTime => ({
   local,
   tzid,
 });
+
 export const calAllDay = (date: CalLocalDate): CalTime => ({ kind: "date", date });
 
 /**
@@ -34,13 +37,16 @@ export const calAllDay = (date: CalLocalDate): CalTime => ({ kind: "date", date 
 export const calInstant = (t: CalTime, viewerZone = "UTC"): number =>
   t.kind === "timed" ? calZonedToInstant(t.local, t.tzid) : calStartOfDay(t.date, viewerZone);
 
-const inRange = (n: unknown, min: number, max: number): boolean =>
-  Number.isInteger(n) && (n as number) >= min && (n as number) <= max;
+const inRange = (n: number, min: number, max: number): boolean =>
+  Number.isInteger(n) && n >= min && n <= max;
 
 const dateProblem = (d: CalLocalDate | undefined): string | undefined => {
   if (!d || !inRange(d.year, 1, 9999)) return "year out of range";
+
   if (!inRange(d.month, 1, 12)) return "month out of range";
+
   if (!inRange(d.day, 1, calDaysInMonth(d.year, d.month))) return "day out of range";
+
   return undefined;
 };
 
@@ -50,14 +56,19 @@ const dateProblem = (d: CalLocalDate | undefined): string | undefined => {
  */
 export const calTimeProblem = (t: CalTime): string | undefined => {
   if (t.kind === "date") return dateProblem(t.date);
+
   if (t.kind !== "timed") return "unknown time kind";
-  if (typeof t.tzid !== "string" || t.tzid.length === 0 || !calIsValidTimeZone(t.tzid))
+
+  if (!Predicate.isString(t.tzid) || t.tzid.length === 0 || !calIsValidTimeZone(t.tzid))
     return `unknown time zone ${String(t.tzid)}`;
   const l = t.local;
   const d = dateProblem(l);
+
   if (d) return d;
+
   if (!inRange(l.hour, 0, 23) || !inRange(l.minute, 0, 59) || !inRange(l.second, 0, 59))
     return "time of day out of range";
+
   return undefined;
 };
 
@@ -75,12 +86,14 @@ export const calTimeKey = (t: CalTime): string =>
  */
 export const calRecurrenceKey = (recurrenceId: CalTime, seriesStart?: CalTime): string => {
   if (!seriesStart) return calTimeKey(recurrenceId);
+
   if (seriesStart.kind === "date")
     return calTimeKey(
       recurrenceId.kind === "date"
         ? recurrenceId
         : { kind: "date", date: calDateOf(recurrenceId.local) },
     );
+
   if (recurrenceId.kind === "date")
     return calTimeKey({
       kind: "timed",
@@ -92,7 +105,9 @@ export const calRecurrenceKey = (recurrenceId: CalTime, seriesStart?: CalTime): 
         second: seriesStart.local.second,
       },
     });
+
   if (recurrenceId.tzid === seriesStart.tzid) return calTimeKey(recurrenceId);
+
   return calTimeKey({
     kind: "timed",
     tzid: seriesStart.tzid,
@@ -102,6 +117,7 @@ export const calRecurrenceKey = (recurrenceId: CalTime, seriesStart?: CalTime): 
 
 export const calCompareTimes = (a: CalTime, b: CalTime): number => {
   if (a.kind === "date" && b.kind === "date") return calCompareDates(a.date, b.date);
+
   return calInstant(a) - calInstant(b);
 };
 
@@ -118,6 +134,7 @@ export type CalDuration =
 export const calDurationBetween = (start: CalTime, end: CalTime): CalDuration => {
   if (start.kind === "date" && end.kind === "date")
     return { kind: "days", days: Math.max(1, calDateToDays(end.date) - calDateToDays(start.date)) };
+
   return { kind: "ms", ms: Math.max(0, calInstant(end) - calInstant(start)) };
 };
 
@@ -129,23 +146,28 @@ export const calDurationBetween = (start: CalTime, end: CalTime): CalDuration =>
  */
 export const calEndFor = (start: CalTime, duration: CalDuration): CalTime => {
   if (start.kind === "date") {
-    const days =
-      duration.kind === "days"
-        ? duration.days
-        : duration.kind === "nominal"
-          ? duration.days + Math.round(duration.ms / 86_400_000)
-          : Math.max(1, Math.round(duration.ms / 86_400_000));
+    let days: number;
+
+    if (duration.kind === "days") days = duration.days;
+    else if (duration.kind === "nominal")
+      days = duration.days + Math.round(duration.ms / 86_400_000);
+    else days = Math.max(1, Math.round(duration.ms / 86_400_000));
+
     return { kind: "date", date: calAddDays(start.date, Math.max(1, days)) };
   }
+
   if (duration.kind === "nominal") {
     const local = { ...start.local, ...calAddDays(start.local, duration.days) };
+
     return {
       kind: "timed",
       tzid: start.tzid,
       local: calWallClock(calZonedToInstant(local, start.tzid) + duration.ms, start.tzid),
     };
   }
+
   const ms = duration.kind === "ms" ? duration.ms : duration.days * 86_400_000;
+
   return {
     kind: "timed",
     tzid: start.tzid,
@@ -160,11 +182,15 @@ export const calEndFor = (start: CalTime, duration: CalDuration): CalTime => {
 export const calTimeFromKey = (dtstart: CalTime, key: string): CalTime => {
   if (dtstart.kind === "date") {
     if (!/^\d{8}$/.test(key)) throw new Error("invalid occurrence key");
+
     return { kind: "date", date: calParseDate(key) };
   }
+
   const m = /^(\d{8})T(\d{2})(\d{2})(\d{2})$/.exec(key);
+
   if (!m) throw new Error("invalid occurrence key");
   const d = calParseDate(m[1]!);
+
   return {
     kind: "timed",
     tzid: dtstart.tzid,

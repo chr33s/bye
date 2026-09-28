@@ -66,8 +66,11 @@ export const checkSubmission = (
 ): SubmissionCheck => {
   if (!caps.trafficClasses.includes(trafficClass))
     return { _tag: "TrafficClassNotPermitted", trafficClass };
+
   if (bytes > caps.maxMessageBytes) return { _tag: "TooLarge", bytes, limit: caps.maxMessageBytes };
+
   if (recipients > caps.maxRecipients)
     return { _tag: "TooManyRecipients", count: recipients, limit: caps.maxRecipients };
+
   return { _tag: "Ok" };
 };

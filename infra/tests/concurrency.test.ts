@@ -11,6 +11,7 @@ describe("§7.4 bounded concurrency lint", () => {
       'yield* Effect.forEach(xs, f, { concurrency: "unbounded" });',
       "yield* Effect.forEach(xs, f, { concurrency: 4 });",
     ].join("\n");
+
     expect(scanSource("x.ts", src).map((f) => f.line)).toEqual([1, 5]);
   });
 

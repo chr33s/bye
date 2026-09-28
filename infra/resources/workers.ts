@@ -24,6 +24,7 @@ import type { StageInfo } from "./stage.ts";
 import { ConfigCache, Directory, Exports, Originals, Parts, Published } from "./storage.ts";
 
 export { COMPATIBILITY } from "./compat.ts";
+
 import { COMPATIBILITY } from "./compat.ts";
 import { devServer } from "./dev.ts";
 import { originConfig } from "./domain.ts";
@@ -39,10 +40,12 @@ export const AuthRateLimit = Cloudflare.RateLimit("AuthRateLimit", {
   namespaceId: 1001,
   simple: { limit: 20, period: 60 },
 });
+
 export const PublicRateLimit = Cloudflare.RateLimit("PublicRateLimit", {
   namespaceId: 1002,
   simple: { limit: 120, period: 60 },
 });
+
 /** Newsletter subscribe (confirmation mail to arbitrary addresses): far tighter than reads. */
 export const SubscribeRateLimit = Cloudflare.RateLimit("SubscribeRateLimit", {
   namespaceId: 1003,
@@ -237,14 +240,22 @@ export const makeCore = (
   sigmirror?: Cloudflare.Worker,
   canaryPercent?: number,
   install?: WorkersDevInstall,
-) =>
-  Cloudflare.Worker("MailCore", {
-    ...(install === undefined ? {} : { name: workersDevNames(install).core }),
+) => {
+  const named = install === undefined ? undefined : { name: workersDevNames(install).core };
+  const custom = domain === undefined ? undefined : { domain };
+
+  const rollout =
+    canaryPercent !== undefined && canaryPercent >= 0 && canaryPercent < 100
+      ? { version: { traffic: canaryPercent, affinity: { cookie: "__Host-session", ip: true } } }
+      : undefined;
+
+  return Cloudflare.Worker("MailCore", {
+    ...named,
     main: "./workers/core/src/index.ts",
     compatibility: COMPATIBILITY,
     ...devServer("MailCore"),
     workersDev: workersDevFor(stage, install),
-    ...(domain === undefined ? {} : { domain }),
+    ...custom,
     // Web/PWA shell (X01). API paths fall through to the Worker; assets carry no secrets.
     assets: {
       directory: "./apps/web/dist",
@@ -261,31 +272,34 @@ export const makeCore = (
     crons: [...CORE_CRONS],
     logpush: false,
     observability: observabilityFor(stage),
-    ...(canaryPercent !== undefined && canaryPercent >= 0 && canaryPercent < 100
-      ? { version: { traffic: canaryPercent, affinity: { cookie: "__Host-session", ip: true } } }
-      : {}),
+    ...rollout,
     // SIGMIRROR is stack-wired (CORE_STACK_BINDINGS): scanner containers reach the private mirror
     // only through this service binding via interceptOutboundHttp.
     env: sigmirror ? { ...coreEnv, SIGMIRROR: sigmirror } : coreEnv,
   });
+};
 
 export const makePublic = (
   stage: StageInfo,
   domain: string | undefined,
   core: Cloudflare.Worker,
   install?: WorkersDevInstall,
-) =>
-  Cloudflare.Worker("PublicSite", {
-    ...(install === undefined ? {} : { name: workersDevNames(install).site }),
+) => {
+  const named = install === undefined ? undefined : { name: workersDevNames(install).site };
+  const custom = domain === undefined ? undefined : { domain };
+
+  return Cloudflare.Worker("PublicSite", {
+    ...named,
     main: "./workers/public/src/index.ts",
     compatibility: COMPATIBILITY,
     ...devServer("PublicSite"),
     workersDev: workersDevFor(stage, install),
-    ...(domain === undefined ? {} : { domain }),
+    ...custom,
     logpush: false,
     observability: observabilityFor(stage),
     env: { ...publicEnvBase, CORE: Cloudflare.WorkerEntrypoint(core, "PublicGateway") },
   });
+};
 
 /**
  * Separate render origin (§10) for workers.dev installations, which have no second custom
@@ -309,6 +323,7 @@ export const makeRenderOrigin = (
   });
 
 export type CoreEnv = Cloudflare.InferEnv<typeof coreEnv>;
+
 export type PublicEnv = Cloudflare.InferEnv<typeof publicEnvBase> & {
   readonly CORE: { fetch(request: Request): Promise<Response> };
 };

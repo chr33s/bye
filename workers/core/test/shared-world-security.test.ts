@@ -6,7 +6,7 @@ import { PublicGateway } from "../src/gateway.ts";
 import { handleInbound } from "../src/inbound.ts";
 import { sendSystemEmail, SystemMailRefused } from "../src/publishing.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, inboundMessage, makeHarness, rfc822 } from "./harness.ts";
+import { type Harness, inboundMessage, makeHarness, rfc822, executionContext } from "./harness.ts";
 
 // Security regressions for shared spaces, World publishing and system mail: the organization
 // binding on public links and shares, streaming body caps and storage bounds on World uploads,
@@ -18,10 +18,7 @@ import { type Harness, inboundMessage, makeHarness, rfc822 } from "./harness.ts"
   }
 };
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 interface Account {
   readonly userId: string;
@@ -34,11 +31,13 @@ const signup = async (h: Harness, address: string): Promise<Account> => {
   const account = await new ControlDirectory(h.env.DIRECTORY, kernelClock).provisionPersonalAccount(
     { address, displayName: address.split("@")[0]! },
   );
+
   const session = await new ControlAuth(
     h.env.DIRECTORY,
     kernelClock,
     await authConfig(h.env),
   ).issueSession(account.userId, "test", true);
+
   return { ...account, cookie: `__Host-session=${session.token}` };
 };
 
@@ -49,22 +48,31 @@ const request = async (
   path: string,
   init: { json?: unknown; body?: BodyInit; headers?: Record<string, string> } = {},
 ) => {
+  const hdrs = new Headers({ cookie: a.cookie });
+
+  if (method !== "GET") hdrs.set("origin", h.env.APP_ORIGIN);
+
+  if (init.json !== undefined) hdrs.set("content-type", "application/json");
+
+  for (const [k, v] of Object.entries(init.headers ?? {})) hdrs.set(k, v);
+
+  const requestInit: RequestInit = { method, headers: hdrs };
+
+  if (init.json !== undefined) requestInit.body = JSON.stringify(init.json);
+
+  if (init.body !== undefined) {
+    requestInit.body = init.body;
+    Object.assign(requestInit, { duplex: "half" });
+  }
+
   const response = await handleFetch(
-    new Request(`${h.env.APP_ORIGIN}${path}`, {
-      method,
-      headers: {
-        cookie: a.cookie,
-        ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-        ...(init.json !== undefined ? { "content-type": "application/json" } : {}),
-        ...init.headers,
-      },
-      ...(init.json !== undefined ? { body: JSON.stringify(init.json) } : {}),
-      ...(init.body !== undefined ? { body: init.body, duplex: "half" } : {}),
-    } as RequestInit),
+    new Request(`${h.env.APP_ORIGIN}${path}`, requestInit),
     h.env,
     ctx,
   );
+
   const text = await response.text();
+
   return {
     status: response.status,
     body:
@@ -78,6 +86,7 @@ const request = async (
 const countingStream = (total: number, chunk = 64 * 1024) => {
   const state = { pulled: 0 };
   let sent = 0;
+
   const stream = new ReadableStream<Uint8Array>({
     pull(controller) {
       if (sent >= total) return controller.close();
@@ -87,12 +96,14 @@ const countingStream = (total: number, chunk = 64 * 1024) => {
       controller.enqueue(new Uint8Array(n).fill(0x61));
     },
   });
+
   return { stream, state };
 };
 
 const png = (fill: number) => {
   const bytes = new Uint8Array(64).fill(fill);
   bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
   return bytes;
 };
 
@@ -139,17 +150,21 @@ describe("shared spaces, World and system mail hardening", () => {
       h.env,
     );
     await h.drain();
+
     const thread = (await request(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`)).body
       .items[0];
+
     const detail = await request(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${thread.threadId}`,
     );
+
     const spaceId = (
       await request(h, ana, "POST", "/v1/spaces", { json: { organizationId: ana.organizationId } })
     ).body.spaceId as string;
+
     const share = {
       spaceId,
       mailboxId: ana.mailboxId,
@@ -158,12 +173,15 @@ describe("shared spaces, World and system mail hardening", () => {
       grantees: [],
       includeFuture: false,
     };
+
     const shared = await request(h, ana, "POST", "/v1/shared-threads", { json: share });
     expect(shared.status).toBe(201);
     const sharedThreadId = shared.body as string;
+
     const link = await request(h, ana, "POST", "/v1/public-links", {
       json: { spaceId, threadId: sharedThreadId, includeFuture: false },
     });
+
     expect(link.status).toBe(201);
     const [, token] = new URL(link.body.url).pathname.split("/").slice(2);
     const gateway = new PublicGateway({} as never, h.env);
@@ -177,9 +195,11 @@ describe("shared spaces, World and system mail hardening", () => {
       .run();
 
     expect(await gateway.resolveShareLink(spaceId, token!)).toBeNull();
+
     const again = await request(h, ana, "POST", "/v1/public-links", {
       json: { spaceId, threadId: sharedThreadId, includeFuture: false },
     });
+
     expect([403, 404]).toContain(again.status);
     expect(again.body?.url).toBeUndefined();
     const reshare = await request(h, ana, "POST", "/v1/shared-threads", { json: share });
@@ -197,10 +217,12 @@ describe("shared spaces, World and system mail hardening", () => {
   it("[P01] World media upload caps a chunked body while streaming and bounds stored media", async () => {
     const ana = await signup(h, "ana@bye.test");
     const { stream, state } = countingStream(20 * 1024 * 1024);
+
     const big = await request(h, ana, "PUT", "/v1/world/media?name=big.png", {
       body: stream,
       headers: { "content-type": "image/png" },
     });
+
     expect(big.status).toBe(413);
     expect(state.pulled).toBeLessThanOrEqual(10 * 1024 * 1024 + 4 * 64 * 1024);
 
@@ -208,32 +230,39 @@ describe("shared spaces, World and system mail hardening", () => {
       body: png(1),
       headers: { "content-type": "image/png" },
     });
+
     expect(ok.status).toBe(201);
 
     for (let i = 0; i < 1000; i++)
       await h.buckets.PARTS.put(`t/${ana.userId}/world-media/fill-${i}`, new Uint8Array(1));
+
     const full = await request(h, ana, "PUT", "/v1/world/media?name=pic.png", {
       body: png(2),
       headers: { "content-type": "image/png" },
     });
+
     expect(full.status).toBe(413);
   });
 
   it("[P02] subscriber import caps the body while streaming and the address count", async () => {
     const ana = await signup(h, "ana@bye.test");
     const { stream, state } = countingStream(4 * 1024 * 1024);
+
     const big = await request(h, ana, "POST", "/v1/world/subscribers/import", {
       body: stream,
       headers: { "content-type": "text/csv" },
     });
+
     expect(big.status).toBe(413);
     expect(state.pulled).toBeLessThanOrEqual(1024 * 1024 + 4 * 64 * 1024);
 
     const csv = Array.from({ length: 1001 }, (_, i) => `r${i}@example.invalid`).join("\n");
+
     const many = await request(h, ana, "POST", "/v1/world/subscribers/import", {
       body: csv,
       headers: { "content-type": "text/csv" },
     });
+
     expect(many.status).toBe(400);
     expect(h.sent).toEqual([]);
   });
@@ -243,10 +272,12 @@ describe("shared spaces, World and system mail hardening", () => {
     await h.env.DIRECTORY.prepare(
       "INSERT INTO suppressions (address, reason, source, created_at) VALUES ('gone@example.invalid', 'complaint', 'test', 0)",
     ).run();
+
     const first = await request(h, ana, "POST", "/v1/world/subscribers/import", {
       body: "email\nok@example.invalid\ngone@example.invalid\n",
       headers: { "content-type": "text/csv" },
     });
+
     expect(first.status).toBe(200);
     expect(recipients(h)).toEqual(["ok@example.invalid"]);
     expect(first.body.confirmationsSent).toBe(1);
@@ -254,10 +285,12 @@ describe("shared spaces, World and system mail hardening", () => {
     // New-account ramp: 50 recipients per day in total, one already used.
     h.sent.length = 0;
     const csv = Array.from({ length: 80 }, (_, i) => `r${i}@example.invalid`).join("\n");
+
     const second = await request(h, ana, "POST", "/v1/world/subscribers/import", {
       body: csv,
       headers: { "content-type": "text/csv" },
     });
+
     expect(second.status).toBe(200);
     expect(second.body.invited).toBe(80);
     expect(h.sent.length).toBe(49);
@@ -271,10 +304,12 @@ describe("shared spaces, World and system mail hardening", () => {
     )
       .bind(ana.userId)
       .run();
+
     const third = await request(h, ana, "POST", "/v1/world/subscribers/import", {
       body: "s1@example.invalid\ns2@example.invalid\n",
       headers: { "content-type": "text/csv" },
     });
+
     expect(third.status).toBe(200);
     expect(h.sent).toEqual([]);
   });
@@ -293,11 +328,13 @@ describe("shared spaces, World and system mail hardening", () => {
     ).rejects.toBeInstanceOf(SystemMailRefused);
     await sendSystemEmail(h.env, mail("ok@example.invalid"), { actorUserId: ana.userId });
     expect(recipients(h)).toEqual(["ok@example.invalid"]);
+
     const used = await h.env.DIRECTORY.prepare(
       "SELECT COALESCE(SUM(sent), 0) AS n FROM sending_counters WHERE scope = 'user' AND key = ?",
     )
       .bind(ana.userId)
       .first<{ n: number }>();
+
     expect(Number(used?.n)).toBe(1);
 
     await h.env.DIRECTORY.prepare(
@@ -313,6 +350,7 @@ describe("shared spaces, World and system mail hardening", () => {
 
   it("[P01] republishing removes superseded public media and unpublishing removes the rest", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const upload = async (name: string, fill: number) =>
       (
         await request(h, ana, "PUT", `/v1/world/media?name=${name}`, {
@@ -320,12 +358,14 @@ describe("shared spaces, World and system mail hardening", () => {
           headers: { "content-type": "image/png" },
         })
       ).body as { contentKey: string; name: string; contentType: string };
+
     const media = () =>
       [...h.buckets.PUBLISHED.objects.keys()].filter((k) => k.startsWith("site/ana/media/"));
 
     const draft = await request(h, ana, "POST", "/v1/world/drafts", {
       json: { title: "Pics", html: "<p>x</p>", text: "x", media: [await upload("one.png", 1)] },
     });
+
     expect(draft.status).toBe(201);
     const postId = draft.body.postId as string;
     expect((await request(h, ana, "POST", `/v1/world/posts/${postId}/publish`)).status).toBe(200);
@@ -334,6 +374,7 @@ describe("shared spaces, World and system mail hardening", () => {
     const edited = await request(h, ana, "PUT", `/v1/world/posts/${postId}`, {
       json: { title: "Pics", html: "<p>x</p>", text: "x", media: [await upload("two.png", 2)] },
     });
+
     expect(edited.status).toBe(200);
     expect((await request(h, ana, "POST", `/v1/world/posts/${postId}/publish`)).status).toBe(200);
     expect(media()).toEqual(["site/ana/media/pics-r2-two.png"]);

@@ -3,6 +3,7 @@
 // session that started it, and only before it expires. Tokens never leave this module's callers
 // except sealed at rest (seal.ts); errors carry provider error codes, never token material.
 import { createHash, randomBytes } from "node:crypto";
+import { Predicate } from "effect";
 import { forbiddenScopes, requestedScopes } from "./scopes.ts";
 import { encode } from "./seal.ts";
 
@@ -30,13 +31,11 @@ export const cloudflareOAuthConfig = (
   clientId: string,
   redirectUri: string,
   clientSecret?: string,
-): OAuthConfig => ({
-  clientId,
-  redirectUri,
-  ...(clientSecret ? { clientSecret } : {}),
-  ...CLOUDFLARE_OAUTH,
-  scopes: requestedScopes(),
-});
+): OAuthConfig => {
+  const secret = clientSecret ? { clientSecret } : undefined;
+
+  return { clientId, redirectUri, ...secret, ...CLOUDFLARE_OAUTH, scopes: requestedScopes() };
+};
 
 /** Ten minutes from redirect to callback. */
 export const PENDING_TTL_MS = 10 * 60_000;
@@ -68,12 +67,17 @@ export class OAuthError extends Error {
 
 const b64url = (b: Buffer) => encode(b, "base64url");
 
+export interface AuthorizationStart {
+  readonly url: string;
+  readonly pending: PendingAuthorization;
+}
+
 export const beginAuthorization = (
   config: OAuthConfig,
   binding: { readonly sessionId: string; readonly installationId: string },
   now: number,
   random: (n: number) => Buffer = randomBytes,
-): { readonly url: string; readonly pending: PendingAuthorization } => {
+): AuthorizationStart => {
   const state = b64url(random(32));
   const verifier = b64url(random(32));
   const challenge = b64url(createHash("sha256").update(verifier).digest());
@@ -85,6 +89,7 @@ export const beginAuthorization = (
   url.searchParams.set("state", state);
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
+
   return {
     url: url.toString(),
     pending: {
@@ -112,17 +117,22 @@ export const checkCallback = (
   now: number,
 ): CallbackCheck => {
   if (pending === null) return { ok: false, reason: "unknown or already used authorization state" };
+
   if (pending.sessionId !== sessionId)
     return { ok: false, reason: "authorization was started in a different session" };
+
   if (now > pending.expiresAt) return { ok: false, reason: "authorization expired; start again" };
   const error = params.get("error");
+
   if (error !== null)
     return {
       ok: false,
       reason: error === "access_denied" ? "consent was withheld" : `provider error ${error}`,
     };
   const code = params.get("code");
+
   if (!code) return { ok: false, reason: "callback carried no authorization code" };
+
   return { ok: true, code, pending };
 };
 
@@ -132,8 +142,10 @@ const tokenRequest = async (
   fetcher: Fetch,
 ): Promise<TokenSet> => {
   const form = new URLSearchParams({ ...body, client_id: config.clientId });
+
   if (config.clientSecret) form.set("client_secret", config.clientSecret);
   let response: Response;
+
   try {
     response = await fetcher(config.tokenUrl, {
       method: "POST",
@@ -144,6 +156,7 @@ const tokenRequest = async (
   } catch {
     throw new OAuthError("unreachable", "the Cloudflare token endpoint could not be reached");
   }
+
   const json = (await response.json().catch(() => ({}))) as {
     access_token?: unknown;
     refresh_token?: unknown;
@@ -151,22 +164,28 @@ const tokenRequest = async (
     scope?: unknown;
     error?: unknown;
   };
-  if (!response.ok || typeof json.access_token !== "string") {
-    const code = typeof json.error === "string" ? json.error : `http_${response.status}`;
+
+  if (!response.ok || !Predicate.isString(json.access_token)) {
+    const code = Predicate.isString(json.error) ? json.error : `http_${response.status}`;
     throw new OAuthError(code, `token request failed (${code})`);
   }
-  const scopes =
-    typeof json.scope === "string" ? json.scope.split(/\s+/).filter(Boolean) : [...config.scopes];
+
+  const scopes = Predicate.isString(json.scope)
+    ? json.scope.split(/\s+/).filter(Boolean)
+    : [...config.scopes];
+
   const forbidden = forbiddenScopes(scopes);
+
   if (forbidden.length > 0)
     throw new OAuthError(
       "forbidden_scope",
       `authorization includes out-of-scope permissions (${forbidden.join(", ")})`,
     );
+
   return {
     accessToken: json.access_token,
-    refreshToken: typeof json.refresh_token === "string" ? json.refresh_token : null,
-    expiresAt: typeof json.expires_in === "number" ? Date.now() + json.expires_in * 1000 : null,
+    refreshToken: Predicate.isString(json.refresh_token) ? json.refresh_token : null,
+    expiresAt: Predicate.isNumber(json.expires_in) ? Date.now() + json.expires_in * 1000 : null,
     scopes,
   };
 };
@@ -198,6 +217,7 @@ export const refreshTokens = async (
     { grant_type: "refresh_token", refresh_token: refreshToken },
     fetcher,
   );
+
   // Providers that don't rotate refresh tokens omit a new one.
   return next.refreshToken === null ? { ...next, refreshToken } : next;
 };
@@ -211,7 +231,9 @@ export const revokeToken = async (
 ): Promise<{ readonly ok: boolean; readonly detail: string }> => {
   if (!config.revokeUrl) return { ok: false, detail: "provider revocation is not supported" };
   const form = new URLSearchParams({ token, token_type_hint: hint, client_id: config.clientId });
+
   if (config.clientSecret) form.set("client_secret", config.clientSecret);
+
   try {
     const r = await fetcher(config.revokeUrl, {
       method: "POST",
@@ -219,6 +241,7 @@ export const revokeToken = async (
       body: form.toString(),
       signal: AbortSignal.timeout(15_000),
     });
+
     return { ok: r.ok, detail: r.ok ? "revoked" : `revocation returned ${r.status}` };
   } catch {
     return { ok: false, detail: "revocation endpoint unreachable" };

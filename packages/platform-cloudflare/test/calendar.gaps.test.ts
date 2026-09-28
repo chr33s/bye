@@ -25,25 +25,31 @@ const dt = (s: string) => {
   const [d, t = "00:00"] = s.split("T");
   const [year, month, day] = d!.split("-").map(Number);
   const [hour, minute] = t.split(":").map(Number);
+
   return { year: year!, month: month!, day: day!, hour: hour!, minute: minute!, second: 0 };
 };
+
 const utc = (s: string) => Date.parse(`${s}Z`);
+
 const GUEST = "usr_guest0000000000000000";
 
 const setup = (start = utc("2026-09-25T12:00:00"), zone = "UTC") => {
   const ctx = makeTestCalendarStore({ defaultZone: zone }, start);
+
   const { calendarId } = ctx.store.createCalendar({
     commandId: ctx.cmd(),
     actor: ctx.owner,
     name: "Personal",
     color: "#f00",
   });
+
   return { ...ctx, calendarId };
 };
 
 describe("calendar time zone (P0 #8, C03)", () => {
   it("[C03] all-day reminders follow the account zone and are rescheduled when it changes", () => {
     const { store, cmd, owner, calendarId } = setup();
+
     const { eventId } = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -55,6 +61,7 @@ describe("calendar time zone (P0 #8, C03)", () => {
       },
       alarms: [0],
     });
+
     // Provisioned zone is UTC: the reminder fires at UTC midnight.
     expect(store.kernel.job("reminder", eventId)!.dueAt).toBe(utc("2026-10-01T00:00:00"));
     store.setPreferences({
@@ -79,6 +86,7 @@ describe("calendar time zone (P0 #8, C03)", () => {
       utc("2026-03-01T00:00:00"),
       "America/New_York",
     );
+
     const spring = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -91,7 +99,9 @@ describe("calendar time zone (P0 #8, C03)", () => {
       },
       alarms: [30],
     });
+
     expect(store.kernel.job("reminder", spring.eventId)!.dueAt).toBe(utc("2026-03-08T07:00:00"));
+
     const fall = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -104,7 +114,9 @@ describe("calendar time zone (P0 #8, C03)", () => {
       },
       alarms: [15],
     });
+
     expect(store.kernel.job("reminder", fall.eventId)!.dueAt).toBe(utc("2026-11-01T05:15:00"));
+
     const daily = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -118,14 +130,17 @@ describe("calendar time zone (P0 #8, C03)", () => {
       },
       alarms: [10],
     });
+
     expect(store.kernel.job("reminder", daily.eventId)!.dueAt).toBe(utc("2026-03-07T13:50:00"));
     const fired = store.kernel.job("reminder", daily.eventId)!;
     clock.advance(fired.dueAt - clock.now() + 1);
     store.runDueJobs();
     // Next occurrence is 8 March 09:00 EDT = 13:00Z, reminder 12:50Z.
     expect(store.kernel.job("reminder", daily.eventId)!.dueAt).toBe(utc("2026-03-08T12:50:00"));
+
     const notify = store.kernel.pendingOutbox(100).find((e) => e.topic === "calendar.notify")!
       .payload as { title: string; startMs: number };
+
     expect(notify).toMatchObject({ title: "Standup", startMs: utc("2026-03-07T14:00:00") });
   });
 });
@@ -169,6 +184,7 @@ describe("calendar read models (C01, C06–C08)", () => {
       from: calParseDate("20261001"),
       days: 7,
     }) as Array<{ date: string; occurrences: Array<{ data: { summary: string } }> }>;
+
     expect(agenda.map((d) => [d.date, d.occurrences.map((o) => o.data.summary)])).toEqual([
       ["2026-10-01", ["A", "Late"]],
       ["2026-10-02", ["Trip"]],
@@ -181,12 +197,14 @@ describe("calendar read models (C01, C06–C08)", () => {
       body: "offsite notes",
       expectedRevision: 0,
     });
+
     const day = calendarRead(store, owner, { type: "Day", date: calParseDate("20261001") }) as {
       nightHoursBusy: boolean;
       nightHoursCollapsed: boolean;
       occurrences: Array<unknown>;
       context: unknown;
     };
+
     expect(day.occurrences).toHaveLength(2);
     expect(day.nightHoursBusy).toBe(true);
     expect(day.nightHoursCollapsed).toBe(false);
@@ -202,9 +220,11 @@ describe("calendar read models (C01, C06–C08)", () => {
       ],
       highlights: [],
     });
+
     const quiet = calendarRead(store, owner, { type: "Day", date: calParseDate("20261005") }) as {
       nightHoursCollapsed: boolean;
     };
+
     expect(quiet.nightHoursCollapsed).toBe(true);
     expect(calendarRead(store, owner, { type: "Month", year: 2026, month: 10 })).toMatchObject({
       year: 2026,
@@ -248,12 +268,14 @@ describe("calendar read models (C01, C06–C08)", () => {
       firstWeekday: 1,
       title: "Taxes",
     });
+
     const { habitId } = store.createHabit({
       commandId: cmd(),
       actor: owner,
       name: "Run",
       weekdays: [1, 3],
     });
+
     store.setHabitCompletion({
       commandId: cmd(),
       actor: owner,
@@ -305,10 +327,9 @@ describe("calendar read models (C01, C06–C08)", () => {
     expect(
       calendarRead(store, owner, { type: "DayContext", date: calParseDate("20260925") }),
     ).toMatchObject({ label: "Launch", journal: { body: "Good day", revision: 1 } });
-    const changes = calendarRead(store, owner, { type: "Changes", cursor: 0 }) as {
-      changes: Array<unknown>;
-      cursor: number;
-    };
+
+    const changes = store.changes(owner, 0);
+
     expect(changes.changes.length).toBeGreaterThan(3);
     store.archiveHabit({ commandId: cmd(), actor: owner, habitId });
     expect(
@@ -326,6 +347,7 @@ describe("calendar read models (C01, C06–C08)", () => {
       grantee: GUEST,
       role: "read",
     });
+
     for (const q of [
       { type: "WeekTasks", date: calParseDate("20261001") },
       { type: "Habits", from: calParseDate("20260921"), to: calParseDate("20260930") },
@@ -335,6 +357,7 @@ describe("calendar read models (C01, C06–C08)", () => {
     ] as const) {
       expect(() => calendarRead(store, GUEST, q), q.type).toThrow(/owner-only/);
     }
+
     // The grantee still sees the shared event calendar and its day view, without private context.
     expect(
       (calendarRead(store, GUEST, { type: "Calendars" }) as Array<{ id: string }>).map((c) => c.id),
@@ -389,10 +412,12 @@ describe("calendar sharing and feeds (C05)", () => {
       role: "read",
     });
     store.deleteCalendar({ commandId: cmd(), actor: owner, calendarId });
+
     const grants = store.kernel
       .pendingOutbox(100)
       .filter((e) => e.topic === "calendar.grant")
       .map((e) => [e.target, (e.payload as { role: string | null }).role]);
+
     expect(grants).toEqual([
       [GUEST, "write"],
       [GUEST, null],
@@ -410,11 +435,13 @@ describe("calendar sharing and feeds (C05)", () => {
       calendarIds: [calendarId],
       label: "Phone",
     });
+
     const [token] = calendarRead(store, owner, { type: "FeedTokens" }) as Array<{
       tokenHash: string;
       label: string;
       revokedAt?: number;
     }>;
+
     expect(token).toMatchObject({ tokenHash: "a".repeat(64), label: "Phone" });
     clock.advance(60_000);
     store.revokeFeedToken({ commandId: cmd(), actor: owner, tokenHash: token!.tokenHash });
@@ -431,20 +458,26 @@ describe("calendar sharing and feeds (C05)", () => {
         const url = new URL(input instanceof Request ? input.url : String(input));
         const name = url.searchParams.get("name")!;
         const type = url.searchParams.get("type");
+
         const data = (answers[name] ?? []).filter((ip) =>
           type === "AAAA" ? ip.includes(":") : !ip.includes(":"),
         );
+
         return Response.json({
           Answer: data.map((d) => ({ type: d.includes(":") ? 28 : 1, data: d })),
         });
       }) as typeof fetch;
+
     const requested: Array<string> = [];
+
     const origin = (async (input: Parameters<typeof fetch>[0]) => {
       requested.push(input instanceof Request ? input.url : String(input));
+
       return new Response("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", {
         headers: { "content-type": "text/calendar" },
       });
     }) as typeof fetch;
+
     const guarded = calendarResolvingFetch(
       origin,
       doh({
@@ -453,10 +486,12 @@ describe("calendar sharing and feeds (C05)", () => {
         "good.example": ["93.184.216.34"],
       }),
     );
+
     const run = (url: string) =>
       Effect.runPromiseExit(
         Effect.gen(function* () {
           const fetcher = yield* CalendarFeedFetcher;
+
           return yield* fetcher.fetch({
             url,
             etag: undefined,
@@ -465,11 +500,13 @@ describe("calendar sharing and feeds (C05)", () => {
           });
         }).pipe(Effect.provide(calendarFeedFetcherLive(guarded))),
       );
+
     for (const host of ["evil.example", "mixed.example", "unresolvable.example"]) {
       const exit = await run(`https://${host}/cal.ics`);
       expect(Exit.isFailure(exit), host).toBe(true);
       expect(JSON.stringify(exit), host).toContain("blocked");
     }
+
     expect(requested).toEqual([]);
     const ok = await run("https://good.example/cal.ics");
     expect(Exit.isSuccess(ok)).toBe(true);
@@ -480,6 +517,7 @@ describe("calendar sharing and feeds (C05)", () => {
 describe("series split mapping for invitations (§9)", () => {
   it("[C04] replies addressed to the original UID reach the split tail; isOrganizerOf follows links", () => {
     const { store, cmd, owner, calendarId } = setup();
+
     const { eventId, uid } = store.createEvent({
       commandId: cmd(),
       actor: owner,
@@ -492,7 +530,9 @@ describe("series split mapping for invitations (§9)", () => {
       },
       attendees: [{ address: "ann@example.com" }],
     });
+
     const rev = store.getEvent(owner, eventId).revision;
+
     const split = store.updateEvent({
       commandId: cmd(),
       actor: owner,
@@ -502,6 +542,7 @@ describe("series split mapping for invitations (§9)", () => {
       occurrenceKey: "20261010T100000",
       changes: { data: { summary: "Sync v2" } },
     });
+
     const tailId = split.splitEventId!;
     expect(store.isOrganizerOf(uid)).toBe(true);
     expect(store.isOrganizerOf(store.getEvent(owner, tailId).uid)).toBe(true);
@@ -509,6 +550,7 @@ describe("series split mapping for invitations (§9)", () => {
 
     // Ann replies to the series under the ORIGINAL UID: both head and tail record her answer.
     const head = store.getEvent(owner, eventId);
+
     const asIcs: CalIcsEvent = {
       uid,
       sequence: head.sequence,
@@ -518,11 +560,13 @@ describe("series split mapping for invitations (§9)", () => {
       attendees: head.attendees,
       alarms: [],
     };
+
     const result = store.receiveInvitation({
       ingestionId: "ing_split_reply",
       ics: calBuildReply(asIcs, "ann@example.com", "ACCEPTED", utc("2026-09-26T00:00:00")).ics,
       sender: "ann@example.com",
     });
+
     expect(result[0]).toMatchObject({ _tag: "Apply", action: "reply" });
     expect(store.getEvent(owner, eventId).attendees[0]!.partstat).toBe("ACCEPTED");
     expect(store.getEvent(owner, tailId).attendees[0]!.partstat).toBe("ACCEPTED");
@@ -532,8 +576,10 @@ describe("series split mapping for invitations (§9)", () => {
 describe("location autocomplete adapter (C10)", () => {
   it("[C10] maps geocoder results and returns nothing without a configured key", async () => {
     let called = "";
+
     const fetchFn = (async (input: Parameters<typeof fetch>[0]) => {
       called = input instanceof Request ? input.url : String(input);
+
       return Response.json({
         features: [
           {
@@ -547,6 +593,7 @@ describe("location autocomplete adapter (C10)", () => {
         ],
       });
     }) as typeof fetch;
+
     const search = (key: string | undefined) =>
       Effect.runPromise(
         Effect.gen(function* () {
@@ -557,6 +604,7 @@ describe("location autocomplete adapter (C10)", () => {
           });
         }).pipe(Effect.provide(calendarLocationSearchLive(key, fetchFn))),
       );
+
     expect(await search("k_test")).toEqual([
       {
         label: "Blue Bottle",
@@ -580,6 +628,7 @@ describe("calendar access table (§3.2)", () => {
       readonly fields: { readonly type: { readonly literal: unknown } };
     }>;
   }) => union.members.map((m) => String(m.fields.type.literal));
+
   const INTERNAL = [
     "CreateEventFromMessage",
     "CreateFeedToken",
@@ -595,9 +644,11 @@ describe("calendar access table (§3.2)", () => {
       ...typesOf(CalendarReadQuery),
       ...INTERNAL,
     ].sort();
+
     expect(Object.keys(CALENDAR_ACCESS).sort()).toEqual(expected);
     expect(CALENDAR_ACCESS).not.toHaveProperty("IsOrganizerOf");
     expect(CALENDAR_ACCESS.Changes).toBe("readable");
+
     for (const t of INTERNAL.filter(
       (t) => t !== "CreateEventFromMessage" && t !== "CreateFeedToken",
     ))

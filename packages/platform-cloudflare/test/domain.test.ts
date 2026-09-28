@@ -20,6 +20,7 @@ describe("custom domains", () => {
       { type: "TXT", name: "_dmarc.acme.test", content: "v=DMARC1; p=reject" },
       { type: "TXT", name: "acme.test", content: "google-site-verification=abc" },
     ];
+
     const plan = planMailDns("acme.test", existing, profile, "tok");
     expect(plan.filter((o) => o.op === "conflict" && o.purpose === "inbound")).toHaveLength(3);
     const spf = plan.find((o) => o.purpose === "spf");
@@ -41,6 +42,7 @@ describe("custom domains", () => {
         .map((o) => o.purpose)
         .sort(),
     ).toEqual(["dkim", "dmarc", "inbound", "inbound", "inbound", "ownership", "spf"]);
+
     const multi = planMailDns(
       "x.test",
       [
@@ -50,6 +52,7 @@ describe("custom domains", () => {
       profile,
       "t",
     );
+
     expect(multi.find((o) => o.purpose.startsWith("spf"))?.op).toBe("conflict");
   });
 
@@ -59,26 +62,31 @@ describe("custom domains", () => {
     const dir = new ControlDirectory(d1, clock);
     const orgs = new ControlOrganizations(d1, clock);
     const domains = new ControlDomains(d1, clock);
+
     const admin = await dir.provisionPersonalAccount({
       address: "dana@bye.test",
       displayName: "A",
     });
+
     const orgId = await orgs.createOrganization(admin.userId, {
       name: "Acme",
       kind: "domain",
       seatLimit: 5,
     });
+
     const d = await domains.request(orgId, admin.userId, "Acme.Test.");
     expect(d.name).toBe("acme.test");
     await expect(domains.request(orgId, admin.userId, "bad_domain")).rejects.toThrow("invalid");
 
     await expect(dir.addAlias(admin.mailboxId, "sales@acme.test")).rejects.toThrow("not active");
     await expect(domains.proveOwnership(d.id, admin.userId, [])).rejects.toThrow("ownership");
+
     const txt: DnsRecord = {
       type: "TXT",
       name: "_bye-verification.acme.test",
       content: `bye-verification=${d.verification_token}`,
     };
+
     await domains.proveOwnership(d.id, admin.userId, [txt]);
     // Re-entrant: repeating a completed step is a no-op.
     expect((await domains.proveOwnership(d.id, admin.userId, [txt])).state).toBe(
@@ -102,6 +110,7 @@ describe("custom domains", () => {
       { type: "TXT", name: "bye1._domainkey.acme.test", content: "v=DKIM1; k=rsa; p=MIIBKEY" },
       { type: "TXT", name: "_dmarc.acme.test", content: "v=DMARC1; p=none" },
     ];
+
     expect(
       diagnoseMailDns("acme.test", answers, profile, d.verification_token).find(
         (x) => x.check === "dmarc",
@@ -155,15 +164,18 @@ describe("domain re-request", () => {
   it("[O01] a removed domain can be requested again; the old row keeps its history", async () => {
     const d1 = MemoryD1.migrated();
     const clock = new TestClock();
+
     const admin = await new ControlDirectory(d1, clock).provisionPersonalAccount({
       address: "dana@bye.test",
       displayName: "D",
     });
+
     const orgId = await new ControlOrganizations(d1, clock).createOrganization(admin.userId, {
       name: "Acme",
       kind: "domain",
       seatLimit: 5,
     });
+
     const domains = new ControlDomains(d1, clock);
     const first = await domains.request(orgId, admin.userId, "acme.test");
     await domains.remove(first.id, admin.userId);

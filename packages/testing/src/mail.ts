@@ -24,9 +24,11 @@ export const makeTestMailbox = (mailboxId = "mbx_test0000000000000000000") => {
   const storage = new MemoryDurableStorage();
   const clock = new TestClock();
   const store = openTestMailbox(storage, mailboxId, clock);
+
   const identityId = store.ctx.cmd("setup-identity", "AddIdentity", () =>
     store.identities.addIdentity({ address: "me@bye.test", name: "Me", kind: "hosted" }),
   );
+
   return { storage, clock, store, identityId, mailboxId };
 };
 
@@ -38,6 +40,7 @@ export const summaryFixture = (
   overrides: Partial<MessageSummary> & { readonly fromAddress?: string } = {},
 ): MessageSummary => {
   const { fromAddress, ...rest } = overrides;
+
   return {
     from: { name: undefined, address: fromAddress ?? "alice@example.com" },
     to: [{ name: undefined, address: "me@bye.test" }],
@@ -65,6 +68,7 @@ export const deliveryFixture = (
   overrides: Partial<MailboxDeliveryInput> & { readonly safety?: SafetyVerdict } = {},
 ): MailboxDeliveryInput => {
   const id = `ing_${(++ingestCounter).toString().padStart(20, "0")}`;
+
   return {
     ingestionId: id,
     recipient: "me@bye.test",
@@ -78,5 +82,6 @@ export const deliveryFixture = (
 };
 
 let commandCounter = 0;
+
 /** Fresh command ID for each mutation in a test. */
 export const cmd = (label = "c"): string => `${label}_${++commandCounter}`;

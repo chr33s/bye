@@ -43,6 +43,7 @@ export class ControlSharedRegistry {
       "SELECT org_id, kind FROM spaces WHERE id = ?",
       spaceId,
     ).first<{ org_id: string; kind: string }>();
+
     return r ? { orgId: r.org_id, kind: r.kind } : null;
   }
 
@@ -52,10 +53,12 @@ export class ControlSharedRegistry {
     ReadonlyArray<{ readonly id: string; readonly orgId: string; readonly kind: string }>
   > {
     if (orgIds.length === 0) return [];
+
     // D1 binds at most 100 parameters per statement: bounded IN lists, merged back in order.
     const parts: Array<{
       results: Array<{ id: string; org_id: string; kind: string; created_at: number }>;
     }> = [];
+
     for (const chunk of inListChunks([...new Set(orgIds)]))
       parts.push(
         await q(
@@ -64,6 +67,7 @@ export class ControlSharedRegistry {
           ...chunk,
         ).all<{ id: string; org_id: string; kind: string; created_at: number }>(),
       );
+
     return parts
       .flatMap((p) => p.results)
       .sort((a, b) => Number(a.created_at) - Number(b.created_at))
@@ -98,6 +102,7 @@ export class ControlSharedRegistry {
       mailboxId,
       mailboxId,
     ).all<{ space_id: string }>();
+
     return rows.results.map((r) => r.space_id);
   }
 
@@ -112,6 +117,7 @@ export class ControlSharedRegistry {
       mailboxId,
       threadId,
     ).all<{ space_id: string; shared_thread_id: string; include_future: number }>();
+
     return rows.results.map((r) => ({
       spaceId: r.space_id,
       sharedThreadId: r.shared_thread_id,
@@ -138,6 +144,7 @@ export class ControlSharedRegistry {
       "SELECT space_id, address FROM extension_spaces WHERE mailbox_id = ?",
       mailboxId,
     ).first<{ space_id: string; address: string }>();
+
     return r ? { spaceId: r.space_id, address: r.address } : null;
   }
 }

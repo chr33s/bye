@@ -87,12 +87,14 @@ export const IMPORT_MAX_ADDRESSES = 1000;
 
 const mediaSegment = (name: string): string => {
   const dot = name.lastIndexOf(".");
+
   const base =
     (dot > 0 ? name.slice(0, dot) : name)
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 60) || "file";
+
   const ext =
     dot > 0
       ? name
@@ -101,6 +103,7 @@ const mediaSegment = (name: string): string => {
           .replace(/[^a-z0-9]/g, "")
           .slice(0, 8)
       : "";
+
   return ext ? `${base}.${ext}` : base;
 };
 
@@ -216,8 +219,10 @@ export class WorldStore {
       const existing = this.sql.one<{ value: string }>(
         "SELECT value FROM world_meta WHERE key = 'author_id'",
       )?.value;
+
       if (existing !== undefined && existing !== input.authorId)
         fail("forbidden", "handle belongs to another author");
+
       for (const [k, v] of Object.entries({
         author_id: input.authorId,
         handle: input.handle,
@@ -250,7 +255,9 @@ export class WorldStore {
   erase(authorId: string | null): boolean {
     return this.sql.tx(() => {
       const owner = this.ownerId();
+
       if (owner !== null && owner !== authorId) return false;
+
       for (const table of [
         "fanout",
         "consent_log",
@@ -266,6 +273,7 @@ export class WorldStore {
         "world_meta",
       ])
         this.sql.run(`DELETE FROM ${table}`);
+
       return true;
     });
   }
@@ -279,7 +287,9 @@ export class WorldStore {
 
   private requireAuthor(userId: string | undefined): string {
     const author = this.meta("author_id");
+
     if (userId !== author) fail("forbidden", "not the author");
+
     return author;
   }
 
@@ -293,6 +303,7 @@ export class WorldStore {
   ): PublishPlan | { readonly postId: string; readonly revision: number } {
     if (op.origin !== "internal-send")
       return fail("forbidden", "publishing requires an authenticated internal send");
+
     // Queue-driven publishes (`world.publish` topic) replay by event ID without a duplicate post.
     if (eventId)
       return this.sql.tx(
@@ -300,22 +311,27 @@ export class WorldStore {
       );
     this.requireAuthor(op.authenticatedUserId);
     const addresses = json<Array<string>>(this.meta("addresses"), []);
+
     if (!addresses.includes(normalizeAddress(op.fromAddress)))
       fail("forbidden", "sender identity is not the author's");
+
     const { postId, revision } = this.createDraft(op.authenticatedUserId!, {
       title: op.title,
       html: op.html,
       text: op.text,
       media: op.media,
     });
+
     return op.publish ? this.publish(op.authenticatedUserId!, postId) : { postId, revision };
   }
 
   createDraft(userId: string, input: PostContent): { postId: string; revision: number } {
     this.requireAuthor(userId);
+
     return this.sql.tx(() => {
       const id = this.clock.id("pst");
       let slug = worldSlug(input.title);
+
       for (let n = 2; this.sql.one("SELECT 1 AS s FROM posts WHERE slug = ?", slug); n++)
         slug = `${worldSlug(input.title)}-${n}`;
       const now = this.clock.now();
@@ -327,6 +343,7 @@ export class WorldStore {
         now,
       );
       this.insertRevision(id, 1, input);
+
       return { postId: id, revision: 1 };
     });
   }
@@ -347,12 +364,14 @@ export class WorldStore {
   /** Edit creates a new revision; a published post keeps serving the old revision until republished. */
   edit(userId: string, postId: string, input: PostContent): number {
     this.requireAuthor(userId);
+
     return this.sql.tx(() => {
       const p =
         this.sql.one<{ current_revision: number }>(
           "SELECT current_revision FROM posts WHERE id = ?",
           postId,
         ) ?? fail("not_found", "post");
+
       const next = Number(p.current_revision) + 1;
       this.insertRevision(postId, next, input);
       this.sql.run(
@@ -361,6 +380,7 @@ export class WorldStore {
         this.clock.now(),
         postId,
       );
+
       return next;
     });
   }
@@ -374,13 +394,16 @@ export class WorldStore {
         published_at: number | null;
       }>("SELECT id, slug, status, published_at FROM posts WHERE id = ?", postId) ??
       fail("not_found", "post");
+
     const r =
       this.sql.one<{ title: string; html: string; text: string; media: string }>(
         "SELECT title, html, text, media FROM post_revisions WHERE post_id = ? AND revision = ?",
         postId,
         revision,
       ) ?? fail("not_found", "revision");
+
     const handle = this.meta("handle");
+
     return {
       id: p.id,
       slug: p.slug,
@@ -401,22 +424,26 @@ export class WorldStore {
   /** Author-only preview of the latest revision, including unpublished drafts. */
   preview(userId: string, postId: string): PostView {
     this.requireAuthor(userId);
+
     const p =
       this.sql.one<{ current_revision: number }>(
         "SELECT current_revision FROM posts WHERE id = ?",
         postId,
       ) ?? fail("not_found", "post");
+
     return this.view(postId, Number(p.current_revision));
   }
 
   publish(userId: string, postId: string): PublishPlan {
     this.requireAuthor(userId);
+
     return this.sql.tx(() => {
       const p =
         this.sql.one<{ slug: string; current_revision: number; published_at: number | null }>(
           "SELECT slug, current_revision, published_at FROM posts WHERE id = ?",
           postId,
         ) ?? fail("not_found", "post");
+
       const revision = Number(p.current_revision);
       const now = this.clock.now();
       this.sql.run(
@@ -426,6 +453,7 @@ export class WorldStore {
         now,
         postId,
       );
+
       const media = json<PublishOperation["media"]>(
         this.sql.one<{ media: string }>(
           "SELECT media FROM post_revisions WHERE post_id = ? AND revision = ?",
@@ -434,8 +462,10 @@ export class WorldStore {
         )?.media,
         [],
       );
+
       this.kernel.change("post", "published", { postId, revision });
       const handle = this.meta("handle");
+
       return {
         postId,
         revision,
@@ -449,18 +479,21 @@ export class WorldStore {
 
   unpublish(userId: string, postId: string): PublishPlan {
     this.requireAuthor(userId);
+
     return this.sql.tx(() => {
       const p =
         this.sql.one<{ slug: string; published_revision: number | null }>(
           "SELECT slug, published_revision FROM posts WHERE id = ?",
           postId,
         ) ?? fail("not_found", "post");
+
       this.sql.run(
         "UPDATE posts SET status = 'unpublished', updated_at = ? WHERE id = ?",
         this.clock.now(),
         postId,
       );
       this.kernel.change("post", "unpublished", { postId });
+
       return { postId, revision: Number(p.published_revision ?? 0), copies: [] };
     });
   }
@@ -471,6 +504,7 @@ export class WorldStore {
       "SELECT id, published_revision FROM posts WHERE slug = ? AND status = 'published'",
       slug,
     );
+
     return p ? this.view(p.id, Number(p.published_revision)) : undefined;
   }
 
@@ -486,13 +520,16 @@ export class WorldStore {
   rss(baseUrl: string): string {
     const handle = this.meta("handle");
     const title = this.meta("title");
+
     const items = this.publicPosts(50)
       .map((p) => {
         const link = `${baseUrl}/@${handle}/${p.slug}`;
+
         // Plain-text description: the feed never carries author HTML that skipped public sanitization.
         return `<item><title>${rssEscape(p.title)}</title><link>${rssEscape(link)}</link><guid isPermaLink="true">${rssEscape(link)}</guid><pubDate>${new Date(p.publishedAt ?? 0).toUTCString()}</pubDate><description>${rssEscape(p.text)}</description></item>`;
       })
       .join("");
+
     return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>${rssEscape(title)}</title><link>${rssEscape(`${baseUrl}/@${handle}`)}</link><description>${rssEscape(title)}</description>${items}</channel></rss>`;
   }
 
@@ -504,11 +541,13 @@ export class WorldStore {
     source: "form" | "import" = "form",
   ): Promise<{ confirmToken: string | undefined }> {
     const a = normalizeAddress(address);
+
     if (!ADDRESS.test(a)) fail("bad_request", "invalid address");
     // An uninitialized World has no subscribe form: never create subscriber state for it.
     this.meta("handle");
     const token = randomToken();
     const hash = await sha256Hex(token);
+
     return this.sql.tx(() => ({
       confirmToken: this.invite(a, source, hash, this.clock.now()) ? token : undefined,
     }));
@@ -524,9 +563,12 @@ export class WorldStore {
       "SELECT status, invited_at FROM subscribers WHERE address = ?",
       a,
     );
+
     // Restricted (bounced/complained) addresses are not re-invited; re-consent never clears them.
     if (s?.status === "confirmed" || this.newsletter.restrictions(a).length > 0) return false;
+
     if (s && source === "import" && s.status === "unsubscribed") return false;
+
     // Still-unconfirmed invitation inside the window: no new mail. (Leaving `unsubscribed` needs the
     // recipient's own HMAC token, so a re-subscribe after it is the recipient acting, not a bomb.)
     if (
@@ -544,6 +586,7 @@ export class WorldStore {
       now,
       now,
     );
+
     return true;
   }
 
@@ -553,12 +596,15 @@ export class WorldStore {
    */
   async confirm(token: string): Promise<boolean> {
     const hash = await sha256Hex(token);
+
     return this.sql.tx(() => {
       const s = this.sql.one<{ address: string }>(
         "SELECT address FROM subscribers WHERE confirm_hash = ? AND status = 'pending'",
         hash,
       );
+
       if (!s) return false;
+
       return this.newsletter.recordConsent(
         s.address,
         { _tag: "Confirm", evidence: `double-opt-in:${hash.slice(0, 16)}`, at: this.clock.now() },
@@ -586,6 +632,7 @@ export class WorldStore {
   private async validUnsubscribeToken(address: string, token: string): Promise<boolean> {
     for (const version of ringVersions(this.unsubscribeSecrets))
       if (timingSafeEqual(await this.unsubscribeMac(version, address), token)) return true;
+
     return false;
   }
 
@@ -605,6 +652,7 @@ export class WorldStore {
         null,
       );
     });
+
     return true;
   }
 
@@ -624,19 +672,25 @@ export class WorldStore {
     const skipped: Array<string> = [];
     const seen = new Set<string>();
     const accepted: Array<string> = [];
+
     for (const line of csv.split(/\r?\n/)) {
       const cell = line.split(",")[0]?.trim().replace(/^"|"$/g, "") ?? "";
+
       if (!cell || cell.toLowerCase() === "email") continue;
       const a = normalizeAddress(cell);
+
       if (seen.has(a) || !ADDRESS.test(a)) {
         skipped.push(cell);
         continue;
       }
+
       seen.add(a);
       accepted.push(a);
+
       if (accepted.length > IMPORT_MAX_ADDRESSES)
         fail("bad_request", `at most ${IMPORT_MAX_ADDRESSES} addresses per import`);
     }
+
     // Chunked: tokens are hashed concurrently per chunk and each chunk commits in one transaction,
     // instead of one await + one transaction per row.
     for (let i = 0; i < accepted.length; i += IMPORT_CHUNK) {
@@ -653,14 +707,17 @@ export class WorldStore {
         }),
       );
     }
+
     return { invitations, skipped };
   }
 
   exportSubscribers(userId: string): string {
     this.requireAuthor(userId);
+
     const rows = this.sql.all<{ address: string; confirmed_at: number }>(
       "SELECT address, confirmed_at FROM subscribers WHERE status = 'confirmed' ORDER BY address",
     );
+
     return (
       [
         "email,confirmed_at",
@@ -693,6 +750,7 @@ export class WorldStore {
     readonly updatedAt: number;
   }> {
     this.requireAuthor(userId);
+
     return this.sql
       .all<{
         id: string;
@@ -719,10 +777,12 @@ export class WorldStore {
   /** Subscription status; `suppressed` when a bounce/complaint restriction applies (kept separately). */
   subscriberStatus(address: string): string | undefined {
     const a = normalizeAddress(address);
+
     const status = this.sql.one<{ status: string }>(
       "SELECT status FROM subscribers WHERE address = ?",
       a,
     )?.status;
+
     return status && this.newsletter.restrictions(a).length > 0 ? "suppressed" : status;
   }
 
@@ -730,12 +790,14 @@ export class WorldStore {
   newsletterStatus(userId: string, postId: string, revision: number) {
     this.requireAuthor(userId);
     const p = this.newsletter.publicationFor(postId, revision) ?? fail("not_found", "publication");
+
     return this.newsletter.status(p.id);
   }
 
   cancelNewsletter(userId: string, postId: string, revision: number) {
     this.requireAuthor(userId);
     const p = this.newsletter.publicationFor(postId, revision) ?? fail("not_found", "publication");
+
     return this.newsletter.requestCancel(p.id);
   }
 
@@ -745,6 +807,7 @@ export class WorldStore {
       "SELECT status, published_revision FROM posts WHERE id = ?",
       postId,
     );
+
     return p?.status === "published" && Number(p.published_revision) === revision;
   }
 }

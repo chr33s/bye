@@ -40,6 +40,7 @@ export const cloudflareReader = (fetcher: Fetch, base = CLOUDFLARE_API): Cloudfl
     path: string,
   ): Promise<{ status: number; result: T | null }> => {
     let r: Response;
+
     try {
       r = await fetcher(`${base}${path}`, {
         headers: { authorization: `Bearer ${token}`, accept: "application/json" },
@@ -48,9 +49,12 @@ export const cloudflareReader = (fetcher: Fetch, base = CLOUDFLARE_API): Cloudfl
     } catch {
       throw new CloudflareApiError(0, "the Cloudflare API could not be reached");
     }
+
     const body = (await r.json().catch(() => ({}))) as { result?: T };
+
     return { status: r.status, result: r.ok ? (body.result ?? null) : null };
   };
+
   const fail = (status: number, what: string) =>
     new CloudflareApiError(
       status,
@@ -58,6 +62,7 @@ export const cloudflareReader = (fetcher: Fetch, base = CLOUDFLARE_API): Cloudfl
         ? `Cloudflare refused ${what}; reconnect and grant the requested access`
         : `Cloudflare returned ${status} for ${what}`,
     );
+
   return {
     async accounts(token) {
       // User-scoped OAuth tokens see an empty GET /accounts; memberships are the authoritative
@@ -65,6 +70,7 @@ export const cloudflareReader = (fetcher: Fetch, base = CLOUDFLARE_API): Cloudfl
       const m = await get<
         Array<{ status?: string; account?: { id: string; name: string } | null }>
       >(token, "/memberships?per_page=50");
+
       const viaMemberships =
         m.status === 200 && m.result
           ? m.result.flatMap((x) =>
@@ -73,9 +79,12 @@ export const cloudflareReader = (fetcher: Fetch, base = CLOUDFLARE_API): Cloudfl
                 : [],
             )
           : [];
+
       if (viaMemberships.length > 0) return viaMemberships;
       const r = await get<Array<{ id: string; name: string }>>(token, "/accounts?per_page=50");
+
       if (r.status !== 200 || !r.result) throw fail(r.status, "the account list");
+
       return r.result.map((a) => ({ id: a.id, name: a.name }));
     },
     async workersSubdomain(token, accountId) {
@@ -83,8 +92,11 @@ export const cloudflareReader = (fetcher: Fetch, base = CLOUDFLARE_API): Cloudfl
         token,
         `/accounts/${encodeURIComponent(accountId)}/workers/subdomain`,
       );
+
       if (r.status === 404) return null;
+
       if (r.status !== 200) throw fail(r.status, "the workers.dev subdomain");
+
       return r.result?.subdomain || null;
     },
     async workerNames(token, accountId) {
@@ -92,23 +104,30 @@ export const cloudflareReader = (fetcher: Fetch, base = CLOUDFLARE_API): Cloudfl
         token,
         `/accounts/${encodeURIComponent(accountId)}/workers/scripts`,
       );
+
       if (r.status !== 200 || !r.result) throw fail(r.status, "the Worker list");
+
       return r.result.map((w) => w.id);
     },
     async zones(token, accountId) {
       const out: Array<Zone> = [];
+
       // Bounded: 10 pages of 50 zones. The account filter is applied again client-side, so a zone
       // from another account is never offered even if the API ignored the filter.
       for (let page = 1; page <= 10; page++) {
         const r = await get<
           Array<{ id: string; name: string; status: string; account?: { id?: string } }>
         >(token, `/zones?account.id=${encodeURIComponent(accountId)}&per_page=50&page=${page}`);
+
         if (r.status !== 200 || !r.result) throw fail(r.status, "the zone list");
+
         for (const z of r.result)
           if (z.account?.id === accountId)
             out.push({ id: z.id, name: z.name.toLowerCase(), status: z.status });
+
         if (r.result.length < 50) break;
       }
+
       return out;
     },
   };

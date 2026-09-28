@@ -2,6 +2,7 @@
 // normalized plan against stage rules, the required inventory, and approved decommission
 // records. Alchemy has no universal protect option we rely on; this check, restricted
 // credentials, and operator approval enforce the requirement together.
+import { Match, Predicate } from "effect";
 import { INVENTORY, PROTECTED_TYPES, type ResourceType } from "../resources/inventory.ts";
 import { classifyStage, type StageInfo } from "../resources/stage.ts";
 
@@ -69,6 +70,7 @@ export interface PolicyResult {
 }
 
 export const PUBLIC_WORKER = "PublicSite";
+
 export const CORE_WORKER = "MailCore";
 
 const requiredCoreBindings = (): ReadonlyArray<string> =>
@@ -85,13 +87,16 @@ export const evaluatePlan = ({
 }: PolicyInput): PolicyResult => {
   const violations: Array<Violation> = [];
   const classified = classifyStage(plan.stage);
-  if (classified._tag === "Invalid") {
+
+  if (Predicate.isTagged(classified, "Invalid")) {
     return {
       ok: false,
       violations: [{ _tag: "InvalidStage", stage: plan.stage, reason: classified.reason }],
     };
   }
+
   const stage: StageInfo = classified.stage;
+
   const approved = (e: PlanEntry) =>
     decommissions.some(
       (d) =>
@@ -111,11 +116,13 @@ export const evaluatePlan = ({
         ownerStage: entry.stage,
       });
     }
+
     for (const ref of entry.references ?? []) {
       if (ref.stage !== plan.stage && (!stage.persistent || ref.stage === "prod")) {
         violations.push({ _tag: "CrossStageReference", logicalId: entry.logicalId, target: ref });
       }
     }
+
     if (
       isDestructive(entry.action) &&
       PROTECTED_TYPES.has(entry.type as ResourceType) &&
@@ -129,6 +136,7 @@ export const evaluatePlan = ({
         action: entry.action,
       });
     }
+
     if (entry.type === "Cloudflare.Worker" && entry.logicalId === PUBLIC_WORKER) {
       for (const binding of entry.bindings ?? []) {
         if (privateBindings.includes(binding)) {
@@ -136,18 +144,22 @@ export const evaluatePlan = ({
         }
       }
     }
+
     if (
       entry.type === "Cloudflare.Worker" &&
       entry.logicalId === CORE_WORKER &&
       entry.action !== "delete"
     ) {
       const present = new Set(entry.bindings ?? []);
+
       for (const binding of requiredCoreBindings()) {
         if (!present.has(binding))
           violations.push({ _tag: "MissingBinding", worker: entry.logicalId, binding });
       }
     }
+
     const declared = INVENTORY.find((i) => i.logicalId === entry.logicalId);
+
     if (declared !== undefined && declared.type !== entry.type) {
       violations.push({
         _tag: "UnexpectedResourceType",
@@ -156,24 +168,21 @@ export const evaluatePlan = ({
       });
     }
   }
+
   return { ok: violations.length === 0, violations };
 };
 
 export const formatViolation = (v: Violation): string => {
-  switch (v._tag) {
-    case "InvalidStage":
-      return `invalid stage ${v.stage}: ${v.reason}`;
-    case "UnapprovedDestruction":
-      return `${v.action} of protected ${v.type} ${v.logicalId} requires an approved decommission record`;
-    case "CrossStageMutation":
-      return `${v.logicalId} belongs to stage ${v.ownerStage}; this plan may not mutate it`;
-    case "CrossStageReference":
-      return `${v.logicalId} references ${v.target.stage}/${v.target.logicalId}`;
-    case "MissingBinding":
-      return `${v.worker} is missing required binding ${v.binding}`;
-    case "PrivateBindingOnPublic":
-      return `${v.worker} must not receive private binding ${v.binding}`;
-    case "UnexpectedResourceType":
-      return `${v.logicalId} changed type to ${v.type}; identities are compatibility-sensitive`;
-  }
+  return Match.valueTags(v, {
+    InvalidStage: (v) => `invalid stage ${v.stage}: ${v.reason}`,
+    UnapprovedDestruction: (v) =>
+      `${v.action} of protected ${v.type} ${v.logicalId} requires an approved decommission record`,
+    CrossStageMutation: (v) =>
+      `${v.logicalId} belongs to stage ${v.ownerStage}; this plan may not mutate it`,
+    CrossStageReference: (v) => `${v.logicalId} references ${v.target.stage}/${v.target.logicalId}`,
+    MissingBinding: (v) => `${v.worker} is missing required binding ${v.binding}`,
+    PrivateBindingOnPublic: (v) => `${v.worker} must not receive private binding ${v.binding}`,
+    UnexpectedResourceType: (v) =>
+      `${v.logicalId} changed type to ${v.type}; identities are compatibility-sensitive`,
+  });
 };

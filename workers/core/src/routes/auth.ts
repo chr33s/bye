@@ -1,4 +1,5 @@
 // Unauthenticated / differently-authenticated routes: sign-up, passkeys, step-up, recovery, OAuth device sign-in.
+import { Match } from "effect";
 import {
   ChallengeRequest,
   PasskeyAssertionRequest,
@@ -79,13 +80,16 @@ const signInRedirect = (url: URL) =>
 /** Step-up elevates the session, so the cookie token is rotated (fixation defense, A03). */
 const rotatedCookie = async (request: Request, env: CoreEnv): Promise<Record<string, string>> => {
   const token = readCookie(request.headers.get("cookie"), SESSION_COOKIE);
+
   if (!token) return {};
   const { auth } = await controlAdapters(env);
   const next = await auth.rotateSession(token).catch(() => null);
+
   if (!next) return {};
   // The old session is revoked by rotation: sockets it opened close too (the client reconnects
   // with the new cookie), so a later logout can't leave them behind.
   await closeLiveSockets(env, next.session.user_id, next.previousId);
+
   return { "set-cookie": sessionCookie(next.token) };
 };
 
@@ -110,16 +114,20 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     if (!(await allowedForIp(env, request, "auth")))
       return errorResponse("rate_limited", "slow down");
     const body = decodeAs(ChallengeRequest, await readJson(request));
+
     if (!body) return errorResponse("bad_request", "invalid request body");
     const { auth } = await controlAdapters(env);
     const purpose = body.purpose ?? "authenticate";
+
     return json(await auth.beginChallenge(purpose));
   }),
   route("POST", "/auth/signup", async (request, _p, env) => {
     const ip = request.headers.get("cf-connecting-ip") ?? "anon";
     const limited = await env.AUTH_RATE_LIMIT.limit({ key: `signup:${ip}` });
+
     if (!limited.success) return errorResponse("rate_limited", "slow down");
     const body = decodeAs(SignupRequest, await readJson(request));
+
     if (!body) return errorResponse("bad_request", "invalid request body");
     const address = body.address.trim().toLowerCase();
     // The first account of an onboarding installation proves itself with the bootstrap token.
@@ -129,6 +137,7 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     // in onboarding (BOOTSTRAP_ADDRESS_DOMAIN), enforced here; the setup link's fragment is display
     // input only.
     const addressDomain = bootstrap ? bootstrapAddressDomain(env) : serviceDomain(env);
+
     if (address.split("@")[1] !== addressDomain)
       return errorResponse(
         "bad_request",
@@ -136,25 +145,31 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
           ? `choose an address on ${addressDomain}`
           : "choose an address on the service domain",
       );
+
     if (body.timeZone !== undefined && !validTimeZone(body.timeZone))
       return errorResponse("bad_request", "invalid time zone");
+
     if (bootstrap) {
       if (!(await claimBootstrap(env, body.bootstrap!, Date.now())))
         return errorResponse("forbidden", "this setup link is invalid or was already used");
     } else if (!(await verifyTurnstile(env, body.turnstile ?? "", ip)))
       return errorResponse("forbidden", "verification failed");
     const { directory, auth, commerce } = await controlAdapters(env);
+
     // Short addresses are a paid product (A02): only a completed short-address checkout unlocks one.
     if (
       isShortAddress(address) &&
       !(await commerce.shortAddressPaid(address, body.checkoutSessionId))
     ) {
       if (bootstrap) await releaseBootstrap(env);
+
       return errorResponse("forbidden", "short addresses require purchase", undefined, {
         checkout: "short-address",
       });
     }
+
     let account;
+
     try {
       account = await directory.provisionPersonalAccount({
         address,
@@ -163,28 +178,33 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     } catch (e) {
       if (bootstrap) await releaseBootstrap(env);
       const code = (e as { code?: string }).code;
+
       return errorResponse(
-        code === "conflict"
-          ? "conflict"
-          : code === "forbidden"
-            ? "forbidden"
-            : code === "bad_request"
-              ? "bad_request"
-              : "unavailable",
+        Match.value(code).pipe(
+          Match.when("conflict", () => "conflict" as const),
+          Match.when("forbidden", () => "forbidden" as const),
+          Match.when("bad_request", () => "bad_request" as const),
+          Match.orElse(() => "unavailable" as const),
+        ),
         "signup failed",
       );
     }
+
     if (bootstrap) await completeBootstrap(env, account.userId);
     await provisionCalendar(env, account, validTimeZone(body.timeZone)).catch(() => undefined); // retried at passkey registration
+
     if (body.referralCode)
       await commerce.redeemReferral(account.userId, body.referralCode).catch(() => false);
+
     if (isShortAddress(address)) {
       // The paid short address survives plan changes and closure (A02/A04).
       await env.DIRECTORY.prepare("UPDATE entitlements SET short_address = 1 WHERE org_id = ?")
         .bind(account.organizationId)
         .run();
     }
+
     const challenge = await auth.beginChallenge("register", account.userId);
+
     return json(
       {
         userId: account.userId,
@@ -199,40 +219,52 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     if (!(await allowedForIp(env, request, "signup-challenge")))
       return errorResponse("rate_limited", "slow down");
     const body = decodeAs(SignupRetryRequest, await readJson(request));
+
     if (!body) return errorResponse("unauthenticated", "signup expired");
     const userId = body.userId;
+
     if (!(await verifySignupToken(env, userId, body.signupToken, Date.now())))
       return errorResponse("unauthenticated", "signup expired");
+
     const existing = await env.DIRECTORY.withSession("first-primary")
       .prepare("SELECT 1 AS k FROM passkeys WHERE user_id = ? LIMIT 1")
       .bind(userId)
       .first();
+
     if (existing) return errorResponse("conflict", "account already has a passkey");
     const { auth } = await controlAdapters(env);
+
     return json(await auth.beginChallenge("register", userId));
   }),
   route("POST", "/auth/passkey/register", async (request, _p, env) => {
     if (!sameOriginJson(request, env)) return crossOrigin();
+
     if (!(await allowedForIp(env, request, "register")))
       return errorResponse("rate_limited", "slow down");
     const body = decodeAs(PasskeyRegistrationRequest, await readJson(request));
+
     if (!body) return errorResponse("bad_request", "invalid request body");
     const { auth } = await controlAdapters(env);
+
     try {
       await auth.registerPasskey(body.userId, body.challengeId, body.response);
+
       const account = await env.DIRECTORY.withSession("first-primary")
         .prepare(
           "SELECT u.id AS userId, u.primary_address AS address, c.id AS calendarId FROM users u JOIN calendars c ON c.owner_user_id = u.id WHERE u.id = ? LIMIT 1",
         )
         .bind(body.userId)
         .first<{ userId: string; address: string; calendarId: string }>();
+
       // Provisioning is first-write-wins, so the zone chosen at signup is kept.
       if (account) await provisionCalendar(env, account, validTimeZone(body.timeZone));
+
       const session = await auth.issueSession(
         body.userId,
         request.headers.get("user-agent")?.slice(0, 120) ?? "",
         true,
       );
+
       return json({ ok: true }, 201, { "set-cookie": sessionCookie(session.token) });
     } catch {
       return errorResponse("unauthenticated", "registration failed");
@@ -241,18 +273,24 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
   // Step-up for consequential actions (§10): fresh passkey assertion or TOTP on the current session.
   route("POST", "/auth/step-up/challenge", async (request, _p, env) => {
     const session = await currentSession(request, env);
+
     if (!session) return errorResponse("unauthenticated", "unauthenticated");
     const { auth } = await controlAdapters(env);
+
     return json(await auth.beginChallenge("step-up", session.user_id));
   }),
   route("POST", "/auth/step-up/passkey", async (request, _p, env) => {
     const session = await currentSession(request, env);
+
     if (!session) return errorResponse("unauthenticated", "unauthenticated");
     const body = decodeAs(PasskeyAssertionRequest, await readJson(request));
+
     if (!body) return errorResponse("bad_request", "invalid request body");
     const { auth } = await controlAdapters(env);
+
     try {
       await auth.stepUpWithPasskey(session.id, body.challengeId, body.response);
+
       return json({ ok: true }, 200, await rotatedCookie(request, env));
     } catch {
       return errorResponse("unauthenticated", "step-up failed");
@@ -260,14 +298,19 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
   }),
   route("POST", "/auth/step-up/totp", async (request, _p, env) => {
     const session = await currentSession(request, env);
+
     if (!session) return errorResponse("unauthenticated", "unauthenticated");
     const limited = await env.AUTH_RATE_LIMIT.limit({ key: `stepup:${session.id}` });
+
     if (!limited.success) return errorResponse("rate_limited", "slow down");
     const body = decodeAs(TotpCodeRequest, await readJson(request));
+
     if (!body) return errorResponse("unauthenticated", "step-up failed");
     const { auth } = await controlAdapters(env);
+
     try {
       await auth.stepUpWithTotp(session.id, body.code);
+
       return json({ ok: true }, 200, await rotatedCookie(request, env));
     } catch (e) {
       // Per-user lockout (control/auth.ts): after TOTP_MAX_FAILURES wrong codes the user's TOTP
@@ -280,6 +323,7 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
           userId: session.user_id,
         }),
       );
+
       return locked
         ? errorResponse("rate_limited", "too many attempts; try again later")
         : errorResponse("unauthenticated", "step-up failed");
@@ -287,17 +331,21 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
   }),
   route("POST", "/auth/passkey/login", async (request, _p, env) => {
     if (!sameOriginJson(request, env)) return crossOrigin();
+
     if (!(await allowedForIp(env, request, "login")))
       return errorResponse("rate_limited", "slow down");
     const body = decodeAs(PasskeyAssertionRequest, await readJson(request));
+
     if (!body) return errorResponse("bad_request", "invalid request body");
     const { auth } = await controlAdapters(env);
+
     try {
       const session = await auth.authenticatePasskey(
         body.challengeId,
         body.response,
         request.headers.get("user-agent")?.slice(0, 120) ?? "",
       );
+
       return json({ ok: true }, 200, { "set-cookie": sessionCookie(session.token) });
     } catch {
       return errorResponse("unauthenticated", "sign-in failed");
@@ -305,11 +353,14 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
   }),
   route("POST", "/auth/recover", async (request, _p, env) => {
     if (!sameOriginJson(request, env)) return crossOrigin();
+
     if (!(await allowedForIp(env, request, "recover")))
       return errorResponse("rate_limited", "slow down");
     const body = decodeAs(RecoveryRequest, await readJson(request));
+
     if (!body) return errorResponse("unauthenticated", "recovery failed");
     const { auth } = await controlAdapters(env);
+
     try {
       // Recovery is independent of the locked mailbox (A03).
       const session = await auth.recoverWithCode(
@@ -317,7 +368,9 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
         body.code,
         request.headers.get("user-agent")?.slice(0, 120) ?? "",
       );
+
       await closeLiveSockets(env, session.session.user_id, null);
+
       return json({ ok: true }, 200, { "set-cookie": sessionCookie(session.token) });
     } catch (e) {
       // A code hashed under a retired SESSION_KEY version is an operator error, not a bad code.
@@ -325,19 +378,23 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
         console.error(
           JSON.stringify({ level: "error", op: "auth.recover.key-version", version: e.version }),
         );
+
       return errorResponse("unauthenticated", "recovery failed");
     }
   }),
   route("POST", "/auth/logout", async (request, _p, env) => {
     const token = readCookie(request.headers.get("cookie"), SESSION_COOKIE);
+
     if (token) {
       const { auth } = await controlAdapters(env);
       const cred = await auth.authenticate(token).catch(() => null);
+
       if (cred?.kind === "session") {
         await auth.revokeSession(cred.session.user_id, cred.session.id);
         await closeLiveSockets(env, cred.session.user_id, cred.session.id);
       }
     }
+
     return json({ ok: true }, 200, { "set-cookie": clearSessionCookie() });
   }),
   // Short-address purchase before signup (A02): the signed return lets the browser poll status and
@@ -346,11 +403,14 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     if (!(await allowedForIp(env, request, "checkout")))
       return errorResponse("rate_limited", "slow down");
     const body = decodeAs(ShortAddressCheckoutRequest, await readJson(request));
+
     if (!body) return errorResponse("bad_request", "invalid request body");
     const address = body.address.trim().toLowerCase();
+
     if (address.split("@")[1] !== serviceDomain(env) || !isShortAddress(address))
       return errorResponse("bad_request", "not a short address on the service domain");
     const { commerce } = await controlAdapters(env);
+
     try {
       const r = await commerce.createCheckout({
         purpose: "short-address",
@@ -362,6 +422,7 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
         address,
         returnUrl: `${env.APP_ORIGIN}/signup`,
       });
+
       return json(r, 201);
     } catch (e) {
       // Unauthenticated callers get a generic message; provider/processor detail is logged only.
@@ -374,16 +435,18 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
           detail: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300),
         }),
       );
-      return code === "conflict"
-        ? errorResponse("conflict", "address unavailable")
-        : code === "bad_request"
-          ? errorResponse("bad_request", "invalid checkout request")
-          : errorResponse("unavailable", "checkout unavailable");
+
+      return Match.value(code).pipe(
+        Match.when("conflict", () => errorResponse("conflict", "address unavailable")),
+        Match.when("bad_request", () => errorResponse("bad_request", "invalid checkout request")),
+        Match.orElse(() => errorResponse("unavailable", "checkout unavailable")),
+      );
     }
   }),
   route("GET", "/auth/checkout/status", async (request, _p, env) => {
     const url = new URL(request.url);
     const { commerce } = await controlAdapters(env);
+
     try {
       return json(
         await commerce.checkoutStatus(
@@ -399,11 +462,13 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
   route("GET", "/auth/forwarding/confirm", async (request, _p, env) => {
     const url = new URL(request.url);
     const { lifecycle } = await controlAdapters(env);
+
     try {
       await lifecycle.confirmForwarding(
         url.searchParams.get("address") ?? "",
         url.searchParams.get("token") ?? "",
       );
+
       return consentPage(
         "Forwarding confirmed",
         "<p>Mail to your former address will be forwarded here until the forwarding period ends.</p>",
@@ -421,6 +486,7 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     const url = new URL(request.url);
     const params = authorizeParams(url.searchParams);
     const devices = deviceAuth(env);
+
     try {
       devices.validateAuthorize(params);
     } catch (e) {
@@ -431,15 +497,23 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
         400,
       );
     }
+
     const session = await currentSession(request, env);
+
     if (!session) return signInRedirect(url);
+
     // Only the authorization-request parameters are carried: an attacker-supplied `decision` (or
     // anything else) in the link must never ride along into the consent POST.
     const hidden = [...url.searchParams]
-      .filter(([k]) => AUTHORIZE_PARAMS.has(k))
-      .map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`)
+      .flatMap(([k, v]) =>
+        AUTHORIZE_PARAMS.has(k)
+          ? [`<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`]
+          : [],
+      )
       .join("");
+
     const device = params.deviceName ? escapeHtml(params.deviceName) : "the bye desktop app";
+
     return consentPage(
       "Allow desktop sign-in?",
       `<p>Allow <strong>${device}</strong> to access your mail and calendar on this device? You can revoke it anytime under Devices.</p>
@@ -451,12 +525,14 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
   }),
   route("POST", "/oauth/authorize", async (request, _p, env) => {
     const session = await currentSession(request, env);
+
     if (!session)
       return consentPage("Session expired", "<p>Sign in again from the desktop app.</p>", 401);
     // An oversized body reads as an empty form, which validateAuthorize rejects.
     const form = new URLSearchParams((await readTextCapped(request, 8192)) ?? "");
     const params = authorizeParams(form);
     const devices = deviceAuth(env);
+
     try {
       devices.validateAuthorize(params);
     } catch (e) {
@@ -466,17 +542,21 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
         400,
       );
     }
+
     const target = new URL(params.redirectUri);
+
     // The clicked button is the submitter, appended last; never trust an earlier field.
     if (form.getAll("decision").at(-1) !== "allow") {
       target.searchParams.set("error", "access_denied");
     } else {
       target.searchParams.set("code", await devices.issueCode(session.user_id, params));
     }
+
     target.searchParams.set("state", params.state);
     // RFC 9207: name the issuer so a client talking to several instances redeems the code only at
     // the instance that issued it (mix-up defense).
     target.searchParams.set("iss", issuerOf(env));
+
     return new Response(null, {
       status: 303,
       headers: {
@@ -491,8 +571,10 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
       return oauthError("invalid_request", "slow down", 429);
     const form = await oauthForm(request);
     const devices = deviceAuth(env);
+
     try {
       const grant = form.get("grant_type");
+
       const tokens =
         grant === "authorization_code"
           ? await devices.exchangeCode({
@@ -514,6 +596,7 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
               : await Promise.reject(
                   new DeviceAuthError("unsupported_grant_type", "unsupported grant_type"),
                 );
+
       return json(tokens, 200, { pragma: "no-cache" });
     } catch (e) {
       if (e instanceof DeviceAuthError)
@@ -526,12 +609,15 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
     if (!(await allowedForIp(env, request, "devauth")))
       return oauthError("slow_down", "slow down", 429);
     const form = await oauthForm(request);
+
     try {
       const started = await deviceAuth(env).startDeviceAuthorization({
         clientId: form.get("client_id") ?? "",
         deviceName: form.get("device_name") ?? "",
       });
+
       const verificationUri = `${env.APP_ORIGIN}/device`;
+
       return json(
         {
           ...started,
@@ -550,8 +636,10 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
   route("GET", "/device", async (request, _p, env) => {
     const url = new URL(request.url);
     const session = await currentSession(request, env);
+
     if (!session) return signInRedirect(url);
     const entered = url.searchParams.get("user_code") ?? "";
+
     // Code lookups are rate-limited per session: user codes are short, so unthrottled probing
     // could find (and deny) other people's pending sign-ins.
     if (entered && !(await env.AUTH_RATE_LIMIT.limit({ key: `device:${session.id}` })).success) {
@@ -561,7 +649,9 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
         429,
       );
     }
+
     const pending = entered ? await deviceAuth(env).pendingUserCode(entered) : null;
+
     if (!pending) {
       return consentPage(
         "Connect a device",
@@ -571,9 +661,11 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
         entered ? 400 : 200,
       );
     }
+
     const device = pending.deviceName
       ? escapeHtml(pending.deviceName)
       : escapeHtml(pending.clientId);
+
     return consentPage(
       "Allow this device?",
       `<p>Allow <strong>${device}</strong> (code <strong>${escapeHtml(formatUserCode(normalizeUserCode(entered)))}</strong>) to access your mail and calendar? Only continue if you started this sign-in yourself. You can revoke it anytime under Devices.</p>
@@ -586,8 +678,10 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
   route("POST", "/device", async (request, _p, env) => {
     // currentSession enforces the same-origin CSRF check for cookie-authenticated posts.
     const session = await currentSession(request, env);
+
     if (!session)
       return consentPage("Session expired", "<p>Sign in again, then re-enter the code.</p>", 401);
+
     if (!(await env.AUTH_RATE_LIMIT.limit({ key: `device:${session.id}` })).success) {
       return consentPage(
         "Slow down",
@@ -595,20 +689,24 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
         429,
       );
     }
+
     // An oversized body reads as an empty form: no user code, so nothing is decided.
     const form = new URLSearchParams((await readTextCapped(request, 4096)) ?? "");
     const allow = form.getAll("decision").at(-1) === "allow";
+
     const ok = await deviceAuth(env).decideUserCode(
       session.user_id,
       form.get("user_code") ?? "",
       allow,
     );
+
     if (!ok)
       return consentPage(
         "Code expired",
         "<p>That code is invalid or has expired. Start again on your device.</p>",
         400,
       );
+
     return consentPage(
       allow ? "Device connected" : "Request denied",
       allow ? "<p>You can return to your device.</p>" : "<p>The device was not given access.</p>",
@@ -617,7 +715,9 @@ export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
   route("POST", "/oauth/revoke", async (request, _p, env) => {
     const form = await oauthForm(request);
     const token = form.get("token");
+
     if (token) await deviceAuth(env).revokeToken(token);
+
     return json({}, 200);
   }),
 ];

@@ -25,6 +25,7 @@ const env = {
   STATE_BACKEND: "http",
   BYE_STATE_URL: "https://state",
 };
+
 const inputs = { commit: "abc123", lockfile: "lock-v1", env };
 
 describe("release manifest binds the reviewed plan to the deploy (§15.6/§15.10)", () => {
@@ -62,6 +63,7 @@ describe("release manifest binds the reviewed plan to the deploy (§15.6/§15.10
       { name: "APP_ORIGIN", secret: false, optional: false },
       { name: "SESSION_KEY", secret: true, optional: false },
     ];
+
     expect(configHash({ ...env, SESSION_KEY: "rotated" }, names)).toBe(configHash(env, names));
     expect(configHash({ ...env, SESSION_KEY: undefined }, names)).not.toBe(configHash(env, names));
     expect(JSON.stringify(buildManifest(plan(), inputs))).not.toContain("s3cret-value");
@@ -80,6 +82,7 @@ describe("stage config presence (§15.5)", () => {
       { name: "C", secret: false, optional: true },
     ]);
     const required = requiredConfig().map((c) => c.name);
+
     for (const name of ["APP_ORIGIN", "SESSION_KEY", "PROXY_SIGNING_KEY"])
       expect(required).toContain(name);
   });

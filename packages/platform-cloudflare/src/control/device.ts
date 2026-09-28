@@ -28,12 +28,18 @@ export const DEVICE_CLIENTS: ReadonlyArray<DeviceClient> = [
 export const DEVICE_GRANT_CLIENTS: ReadonlyArray<string> = ["bye-cli", "bye-desktop", "bye-mobile"];
 
 export const DEVICE_CODE_TTL_MS = 2 * 60_000;
+
 export const DEVICE_ACCESS_TTL_MS = 15 * 60_000;
+
 export const DEVICE_IDLE_TTL_MS = 30 * 24 * 3600_000;
+
 export const DEVICE_ABSOLUTE_TTL_MS = 180 * 24 * 3600_000;
+
 /** RFC 8628: device code lifetime and minimum polling interval. */
 export const DEVICE_AUTHORIZATION_TTL_MS = 10 * 60_000;
+
 export const DEVICE_POLL_INTERVAL_S = 5;
+
 /** RFC 8628 §6.1: consonants only (no vowels, no ambiguous characters), shown as XXXX-XXXX. */
 const USER_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ";
 
@@ -46,6 +52,11 @@ export type DeviceTokenError =
   | "slow_down"
   | "access_denied"
   | "expired_token";
+
+/** A validated authorization request's resolved client. */
+export interface AuthorizeValidation {
+  readonly client: DeviceClient;
+}
 
 export class DeviceAuthError extends Error {
   override readonly name = "DeviceAuthError";
@@ -88,6 +99,7 @@ export interface DeviceSessionView {
 }
 
 const B64URL_43_128 = /^[A-Za-z0-9_-]{43,128}$/;
+
 const VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
 
 /** RFC 7636 §4.6: BASE64URL(SHA256(ASCII(code_verifier))). */
@@ -103,11 +115,13 @@ export const normalizeUserCode = (input: string): string =>
 /** Eight unbiased draws from the 20-letter alphabet (rejection sampling). */
 const newUserCode = (): string => {
   let out = "";
+
   while (out.length < 8) {
     for (const b of crypto.getRandomValues(new Uint8Array(16))) {
       if (b < 240 && out.length < 8) out += USER_CODE_ALPHABET[b % USER_CODE_ALPHABET.length];
     }
   }
+
   return out;
 };
 
@@ -123,13 +137,16 @@ export interface DeviceAuthorization {
 /** Exact match, or a loopback IP literal with any port and the registered path (never "localhost"). */
 export const redirectAllowed = (client: DeviceClient, redirectUri: string): boolean => {
   if (client.redirects.includes(redirectUri)) return true;
+
   if (!client.loopbackPath) return false;
   let url: URL;
+
   try {
     url = new URL(redirectUri);
   } catch {
     return false;
   }
+
   return (
     url.protocol === "http:" &&
     (url.hostname === "127.0.0.1" || url.hostname === "[::1]") &&
@@ -153,14 +170,19 @@ export class ControlDeviceAuth {
    * Validate an authorization request before anything is shown to the user. Invalid client or
    * redirect errors must be displayed, never redirected (RFC 6749 §4.1.2.1).
    */
-  validateAuthorize(p: AuthorizeParams): { readonly client: DeviceClient } {
+  validateAuthorize(p: AuthorizeParams): AuthorizeValidation {
     const client = clientFor(p.clientId) ?? fail("invalid_client", "unknown client");
+
     if (!redirectAllowed(client, p.redirectUri))
       fail("invalid_request", "redirect_uri not registered");
+
     if (p.responseType !== "code") fail("invalid_request", "response_type must be code");
+
     if (p.codeChallengeMethod !== "S256" || !B64URL_43_128.test(p.codeChallenge))
       fail("invalid_request", "PKCE S256 challenge required");
+
     if (p.state.length < 16 || p.state.length > 256) fail("invalid_request", "state required");
+
     return { client };
   }
 
@@ -184,6 +206,7 @@ export class ControlDeviceAuth {
         now + DEVICE_CODE_TTL_MS,
       ).run(),
     );
+
     return code;
   }
 
@@ -203,6 +226,7 @@ export class ControlDeviceAuth {
     const guard = chained ? " AND changes() > 0" : "";
     const access = `bda_${randomToken(32)}`;
     const refresh = `bdr_${randomToken(32)}`;
+
     return {
       tokens: {
         access_token: access,
@@ -245,9 +269,11 @@ export class ControlDeviceAuth {
     readonly clientId: string;
   }): Promise<DeviceTokens> {
     if (!clientFor(input.clientId)) fail("invalid_client", "unknown client");
+
     if (!VERIFIER.test(input.codeVerifier)) fail("invalid_request", "invalid code_verifier");
     const hash = await sha256Hex(input.code);
     const now = this.clock.now();
+
     const row = await guardD1("oauth-code", () =>
       q(
         primary(this.db),
@@ -264,12 +290,16 @@ export class ControlDeviceAuth {
         session_id: string | null;
       }>(),
     );
+
     if (!row) return fail("invalid_grant", "unknown code");
+
     if (row.consumed_at !== null) {
       // Replayed code: revoke anything it issued (RFC 6749 §4.1.2).
       if (row.session_id) await this.revokeSession(row.session_id, "code-replay");
+
       return fail("invalid_grant", "code already used");
     }
+
     // Atomically consume before any further checks so concurrent redemptions cannot both succeed.
     const consumed = await q(
       this.db,
@@ -277,17 +307,23 @@ export class ControlDeviceAuth {
       now,
       hash,
     ).run();
+
     if (consumed.meta.changes !== 1) return fail("invalid_grant", "code already used");
+
     if (row.expires_at < now) return fail("invalid_grant", "code expired");
+
     if (row.client_id !== input.clientId || row.redirect_uri !== input.redirectUri)
       return fail("invalid_grant", "code not issued for this client or redirect");
+
     if ((await pkceChallenge(input.codeVerifier)) !== row.code_challenge)
       return fail("invalid_grant", "PKCE verification failed");
+
     const active = await q(
       primary(this.db),
       "SELECT 1 AS ok FROM users WHERE id = ? AND status = 'active'",
       row.user_id,
     ).first();
+
     if (!active) return fail("invalid_grant", "account unavailable");
 
     return this.createSession(row.user_id, row.client_id, row.device_name, (sessionId) => [
@@ -327,6 +363,7 @@ export class ControlDeviceAuth {
         detail: { clientId, device: deviceName },
       }),
     ]);
+
     return tokens;
   }
 
@@ -340,9 +377,11 @@ export class ControlDeviceAuth {
     if (!DEVICE_GRANT_CLIENTS.includes(input.clientId))
       fail("invalid_client", "client may not use the device grant");
     const now = this.clock.now();
+
     for (let attempt = 0; attempt < 5; attempt++) {
       const deviceCode = randomToken(32);
       const userCode = newUserCode();
+
       try {
         await q(
           this.db,
@@ -355,6 +394,7 @@ export class ControlDeviceAuth {
           now,
           now + DEVICE_AUTHORIZATION_TTL_MS,
         ).run();
+
         return {
           device_code: deviceCode,
           user_code: formatUserCode(userCode),
@@ -366,6 +406,7 @@ export class ControlDeviceAuth {
         if (!String(e).includes("UNIQUE")) throw e;
       }
     }
+
     return fail("invalid_request", "could not allocate a user code");
   }
 
@@ -374,20 +415,26 @@ export class ControlDeviceAuth {
     userCode: string,
   ): Promise<{ readonly clientId: string; readonly deviceName: string } | null> {
     const code = normalizeUserCode(userCode);
+
     if (code.length !== 8) return null;
+
     const row = await q(
       primary(this.db),
       "SELECT client_id, device_name, status, expires_at FROM device_codes WHERE user_code_hash = ?",
       await sha256Hex(code),
     ).first<{ client_id: string; device_name: string; status: string; expires_at: number }>();
+
     if (!row || row.status !== "pending" || row.expires_at < this.clock.now()) return null;
+
     return { clientId: row.client_id, deviceName: row.device_name };
   }
 
   /** Approve or deny a pending user code as the signed-in user. False when unknown, used or expired. */
   async decideUserCode(userId: string, userCode: string, allow: boolean): Promise<boolean> {
     const code = normalizeUserCode(userCode);
+
     if (code.length !== 8) return false;
+
     const { meta } = await q(
       this.db,
       "UPDATE device_codes SET status = ?, user_id = ? WHERE user_code_hash = ? AND status = 'pending' AND expires_at >= ?",
@@ -396,6 +443,7 @@ export class ControlDeviceAuth {
       await sha256Hex(code),
       this.clock.now(),
     ).run();
+
     return meta.changes === 1;
   }
 
@@ -411,6 +459,7 @@ export class ControlDeviceAuth {
     if (!clientFor(input.clientId)) fail("invalid_client", "unknown client");
     const hash = await sha256Hex(input.deviceCode);
     const now = this.clock.now();
+
     const row = await guardD1("device-code", () =>
       q(
         primary(this.db),
@@ -426,15 +475,21 @@ export class ControlDeviceAuth {
         expires_at: number;
       }>(),
     );
+
     if (!row) return fail("invalid_grant", "unknown device code");
+
     if (row.client_id !== input.clientId)
       return fail("invalid_grant", "device code not issued for this client");
+
     if (row.expires_at < now || row.status === "consumed")
       return fail("expired_token", "device code expired");
+
     if (row.status === "denied") return fail("access_denied", "the user denied the request");
+
     if (row.status === "pending") {
       const tooSoon =
         row.last_polled_at !== null && now - row.last_polled_at < row.interval_s * 1000;
+
       await q(
         this.db,
         "UPDATE device_codes SET last_polled_at = ?, interval_s = interval_s + ? WHERE device_code_hash = ?",
@@ -442,25 +497,31 @@ export class ControlDeviceAuth {
         tooSoon ? 5 : 0,
         hash,
       ).run();
+
       return fail(
         tooSoon ? "slow_down" : "authorization_pending",
         tooSoon ? "polling too fast" : "waiting for the user",
       );
     }
+
     // Approved: consume atomically so two concurrent polls can't both mint a session.
     const consumed = await q(
       this.db,
       "UPDATE device_codes SET status = 'consumed' WHERE device_code_hash = ? AND status = 'approved'",
       hash,
     ).run();
+
     if (consumed.meta.changes !== 1 || !row.user_id)
       return fail("expired_token", "device code already redeemed");
+
     const active = await q(
       primary(this.db),
       "SELECT 1 AS ok FROM users WHERE id = ? AND status = 'active'",
       row.user_id,
     ).first();
+
     if (!active) return fail("access_denied", "account unavailable");
+
     return this.createSession(row.user_id, row.client_id, row.device_name, (sessionId) => [
       q(
         this.db,
@@ -479,6 +540,7 @@ export class ControlDeviceAuth {
     if (!clientFor(input.clientId)) fail("invalid_client", "unknown client");
     const hash = await sha256Hex(input.refreshToken);
     const now = this.clock.now();
+
     const row = await guardD1("refresh", () =>
       q(
         primary(this.db),
@@ -495,20 +557,27 @@ export class ControlDeviceAuth {
         user_status: string;
       }>(),
     );
+
     if (!row) return fail("invalid_grant", "unknown refresh token");
+
     if (row.client_id !== input.clientId) return fail("invalid_grant", "client mismatch");
+
     if (row.rotated_at !== null) {
       await this.revokeSession(row.session_id, "refresh-reuse");
+
       return fail("invalid_grant", "refresh token reused; session revoked");
     }
+
     if (row.revoked_at !== null || row.user_status !== "active")
       return fail("invalid_grant", "session revoked");
+
     if (row.idle_expires_at < now || row.absolute_expires_at < now)
       return fail("invalid_grant", "session expired");
     // One batch: the compare-and-set on the presented credential (which also re-checks that the
     // session is still live) gates the new credentials, so a lost race or a concurrent revocation
     // issues nothing.
     const { tokens, statements } = await this.newTokens(row.session_id, true);
+
     const results = await this.db.batch([
       q(
         this.db,
@@ -519,10 +588,13 @@ export class ControlDeviceAuth {
       ),
       ...statements,
     ]);
+
     if (changesOf(results[0]) !== 1) {
       await this.revokeSession(row.session_id, "refresh-race");
+
       return fail("invalid_grant", "refresh token reused; session revoked");
     }
+
     return tokens;
   }
 
@@ -530,11 +602,13 @@ export class ControlDeviceAuth {
   async revokeToken(token: string): Promise<void> {
     const hash = await sha256Hex(token);
     const db = primary(this.db);
+
     const r = await q(
       db,
       "SELECT session_id FROM device_refresh_tokens WHERE token_hash = ?",
       hash,
     ).first<{ session_id: string }>();
+
     const a = r
       ? null
       : await q(
@@ -542,7 +616,9 @@ export class ControlDeviceAuth {
           "SELECT session_id FROM device_access_tokens WHERE token_hash = ?",
           hash,
         ).first<{ session_id: string }>();
+
     const sessionId = r?.session_id ?? a?.session_id;
+
     if (sessionId) await this.revokeSession(sessionId, "client-logout");
   }
 
@@ -558,12 +634,14 @@ export class ControlDeviceAuth {
       ),
       q(this.db, "DELETE FROM device_access_tokens WHERE session_id = ?", sessionId),
     ]);
+
     if (this.onRevoked) {
       const owner = await q(
         primary(this.db),
         "SELECT user_id FROM device_sessions WHERE id = ?",
         sessionId,
       ).first<{ user_id: string }>();
+
       if (owner) await this.onRevoked(owner.user_id, sessionId).catch(() => undefined);
     }
   }
@@ -574,6 +652,7 @@ export class ControlDeviceAuth {
   ): Promise<{ readonly sessionId: string; readonly userId: string } | null> {
     const now = this.clock.now();
     const hash = await sha256Hex(token);
+
     const found = await guardD1("device-access", () =>
       q(
         primary(this.db),
@@ -584,6 +663,7 @@ export class ControlDeviceAuth {
         now,
       ).first<{ id: string; user_id: string }>(),
     );
+
     return found ? { sessionId: found.id, userId: found.user_id } : null;
   }
 
@@ -600,6 +680,7 @@ export class ControlDeviceAuth {
       created_at: number;
       last_used_at: number;
     }>();
+
     return rows.results.map((r) => ({
       id: r.id,
       clientId: r.client_id,
@@ -616,8 +697,10 @@ export class ControlDeviceAuth {
       sessionId,
       userId,
     ).first();
+
     if (!s) return false;
     await this.revokeSession(sessionId, "user-revoked");
+
     return true;
   }
 }

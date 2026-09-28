@@ -13,12 +13,13 @@ import {
 
 // The one rejection → RPC envelope → public error path every authority uses (durable/rpc.ts).
 
-const caught = (f: () => unknown): unknown => {
+const caught = (f: () => void): Error => {
   try {
     f();
   } catch (e) {
-    return e;
+    return e as Error;
   }
+
   throw new Error("expected a throw");
 };
 
@@ -59,9 +60,11 @@ describe("RPC envelope", () => {
 
   it("unwrapRpc returns the value or re-raises the same rejection on the caller's side", () => {
     expect(unwrapRpc({ ok: true, value: 1 })).toBe(1);
+
     const e = caught(() =>
       unwrapRpc({ ok: false, code: "forbidden", message: "no", details: { why: "x" } }),
     );
+
     expect(e).toBeInstanceOf(Rejection);
     expect(e).toMatchObject({ code: "forbidden", message: "no", details: { why: "x" } });
   });
@@ -96,6 +99,7 @@ describe("publicError", () => {
 
   it("passes every other rejection code through unchanged, keeping details only when present", () => {
     const special = new Set(["gone", "read_only", "step_up_required"]);
+
     for (const code of REJECTION_CODES.filter((c) => !special.has(c))) {
       expect(publicError(code)).toEqual({ code });
       expect(publicError(code, { k: 1 })).toEqual({ code, details: { k: 1 } });

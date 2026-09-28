@@ -9,6 +9,7 @@ export class TestClock implements KernelClock {
     `${prefix}_${(++this.counter).toString(36).padStart(20, "0")}`;
   advance(ms: number): number {
     this.current += ms;
+
     return this.current;
   }
 }

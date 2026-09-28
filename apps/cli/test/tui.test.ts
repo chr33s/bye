@@ -1,5 +1,7 @@
+import { Predicate } from "effect";
 import { describe, expect, it } from "vitest";
-import { EXIT, type FetchLike, makeCliApi, runCli } from "@bye/cli";
+import { EXIT, type FetchLike, cliApiLayer, runCli } from "@bye/cli";
+import type { JsonInput } from "@bye/native-shared/json";
 import { createTui, decodeKeys, parseWhen, sanitize } from "../src/tui.ts";
 
 // Interactive acceptance for the TUI (X02, P1.3): keys in, frames and API requests out, against a
@@ -7,6 +9,7 @@ import { createTui, decodeKeys, parseWhen, sanitize } from "../src/tui.ts";
 // controls, since mail and calendar content is attacker-controlled.
 
 const NOW = Date.parse("2026-09-28T08:00:00Z");
+
 const ESC = "\u001b";
 
 interface Call {
@@ -16,7 +19,7 @@ interface Call {
   readonly body: any;
 }
 
-type Route = (call: Call) => unknown;
+type Route = (call: Call) => JsonInput;
 
 const thread1 = {
   threadId: "thr_1",
@@ -26,6 +29,7 @@ const thread1 = {
   seenRevision: 1,
   attention: { replyLater: true, setAside: false, bubble: { _tag: "None" } },
 };
+
 const hostile = {
   threadId: "thr_2",
   subject: `${ESC}]0;pwned${"\u0007"}Invoice ${ESC}[31mdue\u202Efdp.exe`,
@@ -33,6 +37,7 @@ const hostile = {
   revision: 1,
   seenRevision: 1,
 };
+
 const deliveries = [
   {
     deliveryId: "dlv_1",
@@ -60,10 +65,14 @@ const deliveries = [
     renderUrl: "https://mail.test/render/t2",
   },
 ];
-const DOCUMENTS: Record<string, string> = {
+
+const DOCUMENT_SOURCES = {
   "https://mail.test/render/t1": `<!doctype html><body><pre style="white-space:pre-wrap">Hi,\n\nLine two &amp; three\n${ESC}]52;c;cHduZWQ=${"\u0007"}Clipboard${ESC}[2J safe\n\nAlice</pre></body>`,
   "https://mail.test/render/t2": `<body><style>p{}</style><p>Thanks <b>Alice</b>!</p><p>See <a href="https://x.test/doc">the doc</a></p></body>`,
 };
+
+const DOCUMENTS = new Map<string, string>(Object.entries(DOCUMENT_SOURCES));
+
 const standup = {
   eventId: "evt_1",
   calendarId: "calx",
@@ -89,6 +98,7 @@ const standup = {
   revision: 2,
   data: { summary: "Standup", location: "Room 1", description: `Agenda\n${ESC}[31mred${ESC}[0m` },
 };
+
 const oneOnOne = {
   ...standup,
   eventId: "evt_2",
@@ -106,7 +116,7 @@ const oneOnOne = {
   },
 };
 
-const ROUTES: Record<string, Route> = {
+const ROUTE_SOURCES = {
   "GET /v1/mailboxes/mbx_1/views/imbox": () => ({ items: [thread1, hostile], nextCursor: null }),
   "GET /v1/mailboxes/mbx_1/views/screener": () => ({
     items: [{ threadId: "thr_3", subject: "Hello", sender: "Carol <carol@example.com>" }],
@@ -114,7 +124,7 @@ const ROUTES: Record<string, Route> = {
   "GET /v1/mailboxes/mbx_1/views/trash": () => ({ items: [] }),
   "GET /v1/mailboxes/mbx_1/threads/thr_1": () => ({ thread: thread1, deliveries }),
   "POST /v1/mailboxes/mbx_1/commands": (call) =>
-    call.body._tag === "CreateReplyDraft" ? { draftId: "drf_1" } : { ok: true },
+    Predicate.isTagged(call.body, "CreateReplyDraft") ? { draftId: "drf_1" } : { ok: true },
   "GET /v1/mailboxes/mbx_1/drafts/drf_1": () => ({
     draftId: "drf_1",
     revision: 1,
@@ -173,69 +183,87 @@ const ROUTES: Record<string, Route> = {
   "GET /v1/calendars/cal_1/day/2026-09-29": () => ({ date: "2026-09-29", occurrences: [] }),
   "GET /v1/calendars/cal_1/calendars": () => ({ items: [{ id: "calx", name: "Personal" }] }),
   "POST /v1/calendars/cal_1/commands": () => ({ eventId: "evt_9", revision: 1 }),
-};
+} satisfies Record<string, Route>;
+
+const ROUTES = new Map<string, Route>(Object.entries(ROUTE_SOURCES));
 
 const harness = (
   overrides: Record<string, (call: Call) => { status: number; body: unknown }> = {},
 ) => {
   const calls: Array<Call> = [];
+
   const fetchImpl: FetchLike = async (url, init) => {
     const u = new URL(url);
+
     const call = {
       method: init.method,
       path: u.pathname,
       query: u.searchParams,
       body: init.body === undefined ? undefined : JSON.parse(init.body as string),
     };
+
     calls.push(call);
     const key = `${call.method} ${call.path}`;
     const override = overrides[key]?.(call);
-    const route = ROUTES[key];
+    const route = ROUTES.get(key);
     const status = override?.status ?? (route ? 200 : 404);
+
     const body = override
       ? override.body
       : route
         ? route(call)
         : { error: { code: "not_found", message: key } };
+
     return {
       status,
       headers: { get: () => "application/json" },
       text: async () => JSON.stringify(body),
     };
   };
+
   let n = 0;
+
   const tui = createTui({
-    api: makeCliApi(
+    api: cliApiLayer(
       { apiUrl: "https://api.test", token: "tok", mailboxId: "mbx_1", calendarId: "cal_1" },
       fetchImpl,
     ),
     newCommandId: () => `cmd_${++n}`,
     fetchText: async (url) => {
-      const doc = DOCUMENTS[url];
+      const doc = DOCUMENTS.get(url);
+
       if (doc === undefined) throw new Error("expired");
+
       return doc;
     },
     now: () => NOW,
     timeZone: "UTC",
   });
+
   /** The current frame, checked for size and terminal safety. */
   const frame = () => {
     const lines = tui.frame();
     expect(lines).toHaveLength(24);
+
     for (const line of lines) {
       expect(Array.from(line).length).toBeLessThanOrEqual(80);
       // oxlint-disable-next-line no-control-regex -- intentional control-char match
       expect(line).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202E\u2066-\u2069]/);
     }
+
     return lines.join("\n");
   };
+
   const keys = async (...pressed: Array<string>) => {
     for (const key of pressed) await tui.press(key);
     await tui.settled();
+
     return frame();
   };
+
   const commands = () =>
-    calls.filter((c) => c.path.endsWith("/commands")).map((c) => c.body.command ?? c.body);
+    calls.flatMap((c) => (c.path.endsWith("/commands") ? [c.body.command ?? c.body] : []));
+
   return { tui, calls, frame, keys, commands, type: (text: string) => tui.type(text) };
 };
 
@@ -247,6 +275,7 @@ describe("TUI", () => {
         body: { deliveryId: "dlv_1", text: "Plain body from the server", source: "text" },
       }),
     });
+
     await h.tui.start();
     const opened = await h.keys("enter");
     expect(opened).toContain("Plain body from the server");
@@ -290,6 +319,7 @@ describe("TUI", () => {
         body: { thread: thread1, deliveries: [{ ...deliveries[0], renderUrl: "https://gone" }] },
       }),
     });
+
     await h.tui.start();
     const opened = await h.keys("enter");
     expect(opened).toContain("Numbers attached");
@@ -502,6 +532,7 @@ describe("TUI", () => {
         body: { _tag: "Queued", sendJobIds: ["sj_2", "sj_1"], dueAt: NOW + 10_000 },
       }),
     });
+
     await h.tui.start();
     await h.keys("enter", "r");
     await h.type("ok\u0013");
@@ -611,12 +642,14 @@ describe("TUI", () => {
         body: { error: { code: "forbidden", message: `missing scope ${ESC}[31mwrite` } },
       }),
     });
+
     await h.tui.start();
     expect(await h.keys("d")).toContain(
       "error: Trash failed — forbidden (HTTP 403): missing scope write",
     );
+
     const offline = createTui({
-      api: makeCliApi(
+      api: cliApiLayer(
         { apiUrl: "https://api.test", token: "tok", mailboxId: "mbx_1", calendarId: "cal_1" },
         async () => {
           throw new Error("connect ECONNREFUSED");
@@ -624,6 +657,7 @@ describe("TUI", () => {
       ),
       newCommandId: () => "cmd_1",
     });
+
     await offline.start();
     expect(offline.frame().join("\n")).toContain(
       "error: Loading failed — unavailable (network): Error: connect ECONNREFUSED",
@@ -646,18 +680,21 @@ describe("TUI", () => {
     expect(help).toContain("Everywhere: ? help");
     await h.keys("j", "q");
     expect(h.tui.state().screen).toBe("mail");
+
     // Narrow terminals still fit.
     const narrow = createTui({
-      api: makeCliApi(
+      api: cliApiLayer(
         { apiUrl: "https://api.test", token: "t", mailboxId: "mbx_1", calendarId: "cal_1" },
         async () => ({ status: 200, text: async () => JSON.stringify({ items: [hostile] }) }),
       ),
       newCommandId: () => "cmd_1",
       size: () => ({ columns: 40, rows: 12 }),
     });
+
     await narrow.start();
     const lines = narrow.frame();
     expect(lines).toHaveLength(12);
+
     for (const line of lines) expect(Array.from(line).length).toBeLessThanOrEqual(40);
   });
 
@@ -715,28 +752,35 @@ describe("TUI input and content safety", () => {
 describe("CLI commands behind the TUI", () => {
   it("[X02] reply drafts, draft save merge, bubble pop, day view, invitations and edits", async () => {
     const calls: Array<Call> = [];
+
     const fetchImpl: FetchLike = async (url, init) => {
       const u = new URL(url);
+
       const call = {
         method: init.method,
         path: u.pathname,
         query: u.searchParams,
         body: init.body === undefined ? undefined : JSON.parse(init.body as string),
       };
+
       calls.push(call);
-      const route = ROUTES[`${call.method} ${call.path}`];
+      const route = ROUTES.get(`${call.method} ${call.path}`);
+
       return { status: 200, text: async () => JSON.stringify(route ? route(call) : {}) };
     };
+
     const err: Array<string> = [];
+
     const run = (argv: Array<string>) =>
       runCli(
         argv,
-        makeCliApi(
+        cliApiLayer(
           { apiUrl: "https://api.test", token: "t", mailboxId: "mbx_1", calendarId: "cal_1" },
           fetchImpl,
         ),
         { stdout: () => {}, stderr: (t) => err.push(t), newCommandId: () => "cmd_1" },
       );
+
     expect(await run(["draft", "reply", "thr_1", "--mode", "reply-all"])).toBe(EXIT.ok);
     expect(await run(["draft", "reply", "thr_1", "--mode", "sideways"])).toBe(EXIT.usage);
     expect(await run(["draft", "save", "drf_1", "--subject", "New", "--cc", "c@example.com"])).toBe(
@@ -761,7 +805,7 @@ describe("CLI commands behind the TUI", () => {
         "UTC",
       ]),
     ).toBe(EXIT.ok);
-    const writes = calls.filter((c) => c.method !== "GET").map((c) => c.body.command ?? c.body);
+    const writes = calls.flatMap((c) => (c.method !== "GET" ? [c.body.command ?? c.body] : []));
     expect(writes[0]).toMatchObject({ _tag: "CreateReplyDraft", mode: "reply-all" });
     // draft save keeps what it wasn't asked to change.
     expect(writes[1]).toMatchObject({
@@ -793,7 +837,7 @@ describe("CLI commands behind the TUI", () => {
     expect(
       await run(["draft", "send", "drf_1", "--revision", "2", "--after", "later", "--yes"]),
     ).toBe(EXIT.usage);
-    const e09 = calls.filter((c) => c.method !== "GET").map((c) => c.body.command ?? c.body);
+    const e09 = calls.flatMap((c) => (c.method !== "GET" ? [c.body.command ?? c.body] : []));
     expect(e09[0]).toMatchObject({ _tag: "BubbleUp", condition: "if-no-reply" });
     expect(e09[1]).toMatchObject({ afterSend: { _tag: "ClearBubble" } });
     expect(e09).toHaveLength(2);

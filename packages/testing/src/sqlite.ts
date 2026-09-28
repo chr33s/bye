@@ -47,15 +47,21 @@ export class MemoryDurableStorage implements TransactionalStorage {
     exec: (query: string, ...bindings: Array<SqlValue>): SqlCursorLike => {
       if (bindings.length === 0 && hasMultipleStatements(query)) {
         this.db.exec(query);
+
         return { toArray: () => [], rowsWritten: 0 };
       }
+
       const statement = this.db.prepare(query);
       const params = bindings.map((b) => (b instanceof ArrayBuffer ? new Uint8Array(b) : b));
+
       if (statement.columns().length > 0) {
         const rows = statement.all(...(params as Array<never>)) as Array<SqlRow>;
+
         return { toArray: () => rows.map((r) => ({ ...r })), rowsWritten: 0 };
       }
+
       const result = statement.run(...(params as Array<never>));
+
       return { toArray: () => [], rowsWritten: Number(result.changes) };
     },
   };
@@ -64,12 +70,15 @@ export class MemoryDurableStorage implements TransactionalStorage {
     const name = `sp${this.depth}`;
     this.db.exec(this.depth === 0 ? "BEGIN" : `SAVEPOINT ${name}`);
     this.depth++;
+
     try {
       const result = fn();
+
       if (result instanceof Promise)
         throw new Error("transactionSync callback must be synchronous");
       this.depth--;
       this.db.exec(this.depth === 0 ? "COMMIT" : `RELEASE ${name}`);
+
       return result;
     } catch (error) {
       this.depth--;

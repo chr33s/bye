@@ -1,3 +1,4 @@
+import { Match, type Types } from "effect";
 import {
   type ErrorCode,
   isRejection,
@@ -14,6 +15,9 @@ export { isRejection, reject, REJECTION_CODES, Rejection, type RejectionCode };
 // `RpcResult` via `toRpc()`; callers unwrap with `unwrapRpc()`; HTTP maps with `publicError()`.
 // Defects (anything that isn't a Rejection) are never converted: they stay defects.
 
+/** Structured context a rejection carries to the client (owned by the contracts schema). */
+export type RejectionDetails = NonNullable<Rejection["details"]>;
+
 /** A Durable Object method's result over RPC. Rejections cross as data; defects still throw. */
 export type RpcResult<A> =
   | { readonly ok: true; readonly value: A }
@@ -21,20 +25,26 @@ export type RpcResult<A> =
       readonly ok: false;
       readonly code: RejectionCode;
       readonly message: string;
-      readonly details?: Readonly<Record<string, unknown>>;
+      readonly details?: RejectionDetails;
     };
+
+const rejectedResult = (e: Rejection): RpcResult<never> => {
+  const result: Types.Mutable<Extract<RpcResult<never>, { ok: false }>> = {
+    ok: false,
+    code: e.code,
+    message: e.message,
+  };
+
+  if (e.details) result.details = e.details;
+
+  return result;
+};
 
 export const toRpc = async <A>(f: () => A | Promise<A>): Promise<RpcResult<A>> => {
   try {
     return { ok: true, value: await f() };
   } catch (e) {
-    if (isRejection(e))
-      return {
-        ok: false,
-        code: e.code,
-        message: e.message,
-        ...(e.details ? { details: e.details } : {}),
-      };
+    if (isRejection(e)) return rejectedResult(e);
     throw e;
   }
 };
@@ -44,13 +54,7 @@ export const toRpcSync = <A>(f: () => A): RpcResult<A> => {
   try {
     return { ok: true, value: f() };
   } catch (e) {
-    if (isRejection(e))
-      return {
-        ok: false,
-        code: e.code,
-        message: e.message,
-        ...(e.details ? { details: e.details } : {}),
-      };
+    if (isRejection(e)) return rejectedResult(e);
     throw e;
   }
 };
@@ -64,20 +68,26 @@ export const valueOr = <A>(r: RpcResult<A>, ...codes: ReadonlyArray<RejectionCod
   r.ok ? r.value : codes.includes(r.code) ? null : reject(r.code, r.message, r.details);
 
 /** The single rejection → public error mapping (§7.3). */
-export const publicError = (
-  code: RejectionCode,
-  details?: Readonly<Record<string, unknown>>,
-): { readonly code: ErrorCode; readonly details?: Readonly<Record<string, unknown>> } => {
-  switch (code) {
-    case "gone":
-      return { code: "not_found", ...(details ? { details } : {}) };
-    case "read_only":
-      return { code: "forbidden", ...(details ? { details } : {}) };
-    case "step_up_required":
-      return { code: "forbidden", details: { ...details, stepUp: true } };
-    default:
-      return { code, ...(details ? { details } : {}) };
-  }
+export interface PublicError {
+  readonly code: ErrorCode;
+  readonly details?: RejectionDetails;
+}
+
+export const publicError = (code: RejectionCode, details?: RejectionDetails): PublicError => {
+  if (code === "step_up_required")
+    return { code: "forbidden", details: { ...details, stepUp: true } };
+
+  const mapped: ErrorCode = Match.value(code).pipe(
+    Match.when("gone", () => "not_found" as const),
+    Match.when("read_only", () => "forbidden" as const),
+    Match.orElse((other) => other),
+  );
+
+  const result: Types.Mutable<PublicError> = { code: mapped };
+
+  if (details) result.details = details;
+
+  return result;
 };
 
 /**
@@ -87,7 +97,7 @@ export const publicError = (
  */
 export type RpcSurface<T> = {
   readonly [
-    K in keyof T as T[K] extends (...args: ReadonlyArray<never>) => unknown ? K : never
+    K in keyof T as T[K] extends (...args: ReadonlyArray<never>) => infer _R ? K : never
   ]: T[K] extends (...args: infer A) => infer R
     ? (...args: A) => Promise<RpcResult<Awaited<R>>>
     : never;

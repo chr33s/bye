@@ -1,4 +1,5 @@
-import { Effect, type Layer, Schema } from "effect";
+import { Effect, type Layer, Predicate, Schema } from "effect";
+import type { WorkflowStepConfig } from "cloudflare:workers";
 
 // Cloudflare Workflows for checkpointed multi-step operations (§6). Each step runs a fresh, fully
 // provided Effect and persists only its Schema-encoded result; no fibers, streams, or cursors cross
@@ -6,6 +7,7 @@ import { Effect, type Layer, Schema } from "effect";
 // renamed step re-runs for instances that were in flight when the new code deployed.
 
 export const enc = new TextEncoder();
+
 export const PART_BYTES = 8 * 1024 * 1024;
 
 /** Thrown for parameters no deployed code version can run; Workflows must not retry it. */
@@ -26,15 +28,14 @@ export class WorkflowParamsError extends Error {
  */
 export const decodeParams =
   <S extends Schema.Codec<{ readonly v: number }, unknown>>(schema: S) =>
-  (payload: unknown): S["Type"] => {
+  <P>(payload: P): S["Type"] => {
     const versioned =
-      typeof payload === "object" && payload !== null && !("v" in payload)
-        ? { ...(payload as object), v: 1 }
+      Predicate.isObjectOrArray(payload) && !("v" in payload)
+        ? Object.assign({}, payload, { v: 1 })
         : payload;
+
     try {
-      return (Schema.decodeUnknownSync(schema as never) as (u: unknown) => unknown)(
-        versioned,
-      ) as S["Type"];
+      return Schema.decodeUnknownSync(schema as never)(versioned) as S["Type"];
     } catch (error) {
       const v = (versioned as { v?: unknown } | null)?.v;
       throw new WorkflowParamsError(
@@ -45,7 +46,8 @@ export const decodeParams =
 
 /** Structural subset of `WorkflowStep` used here (keeps this module testable in Node). */
 export interface StepRunner {
-  do(name: string, ...args: ReadonlyArray<unknown>): Promise<unknown>;
+  do<T>(name: string, run: () => Promise<T>): Promise<T>;
+  do<T>(name: string, config: WorkflowStepConfig, run: () => Promise<T>): Promise<T>;
 }
 
 /**
@@ -61,21 +63,25 @@ export const effectStep = async <A, I, E, R>(
   options: {
     readonly schema: Schema.Codec<A, I, never, never>;
     readonly layer?: Layer.Layer<R>;
-    readonly config?: unknown;
+    readonly config?: WorkflowStepConfig;
   },
 ): Promise<A> => {
   const encode = Schema.encodeSync(options.schema);
   const decode = Schema.decodeUnknownSync(options.schema);
+
   const run = async (): Promise<I> => {
     const provided = (
       options.layer ? program.pipe(Effect.provide(options.layer)) : program
     ) as Effect.Effect<A, E, never>;
+
     return encode(await Effect.runPromise(provided));
   };
+
   const encoded =
     options.config === undefined
       ? await step.do(name, run)
       : await step.do(name, options.config, run);
+
   return decode(encoded);
 };
 
@@ -92,9 +98,11 @@ export const promiseStep = <A, I>(
   name: string,
   schema: Schema.Codec<A, I>,
   f: () => Promise<A>,
-  config?: unknown,
-): Promise<A> =>
-  effectStep(step, name, attemptStep(name.replace(/^v\d+:/, "").split(":")[0]!, f), {
-    schema,
-    ...(config === undefined ? {} : { config }),
-  });
+  config?: WorkflowStepConfig,
+): Promise<A> => {
+  const effect = attemptStep(name.replace(/^v\d+:/, "").split(":")[0]!, f);
+
+  return config !== undefined
+    ? effectStep(step, name, effect, { schema, config })
+    : effectStep(step, name, effect, { schema });
+};

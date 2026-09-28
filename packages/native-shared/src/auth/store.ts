@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { normalizeOrigin } from "./url.ts";
 
 // OS secure storage for the desktop refresh credential (macOS Keychain, Windows Credential Manager).
@@ -46,6 +47,7 @@ export interface StoredSession {
 export const sessionKey = (instanceKey: string): string => {
   if (!/^https:\/\/[^|\s]+\|https:\/\/[^|\s]+$/.test(instanceKey))
     throw new Error("invalid instance key");
+
   return `email.bye.session.v2|${instanceKey}`;
 };
 
@@ -53,20 +55,33 @@ export const sessionKey = (instanceKey: string): string => {
 export const legacySessionKey = (origin: string): string =>
   `email.bye.desktop.session.v1|${normalizeOrigin(origin)}`;
 
-export const toSecureStoreError = (error: unknown): SecureStoreError => {
-  if (error instanceof SecureStoreError) return error;
-  const code = (error as { code?: unknown } | null)?.code;
+const SECURE_STORE_ERROR_KINDS: ReadonlyArray<string> = [
+  "MissingCredential",
+  "StorageUnavailable",
+  "StorageDenied",
+  "CorruptCredential",
+];
+
+export const toSecureStoreError = (cause: unknown): SecureStoreError => {
+  if (cause instanceof SecureStoreError) return cause;
+  const object = Predicate.isObjectKeyword(cause) ? cause : null;
+  const code = object !== null && "code" in object ? object.code : undefined;
+  const direct = object !== null && "nativeCode" in object ? object.nativeCode : undefined;
+  const info = object !== null && "userInfo" in object ? object.userInfo : undefined;
+
+  const nested =
+    Predicate.isObjectKeyword(info) && "nativeCode" in info ? info.nativeCode : undefined;
+
+  const nativeCode = direct ?? nested;
+
   const kind =
-    typeof code === "string" &&
-    ["MissingCredential", "StorageUnavailable", "StorageDenied", "CorruptCredential"].includes(code)
+    Predicate.isString(code) && SECURE_STORE_ERROR_KINDS.includes(code)
       ? (code as SecureStoreErrorKind)
       : "StorageUnavailable";
-  const nativeCode =
-    (error as { userInfo?: { nativeCode?: unknown }; nativeCode?: unknown } | null)?.nativeCode ??
-    (error as { userInfo?: { nativeCode?: unknown } } | null)?.userInfo?.nativeCode;
+
   return new SecureStoreError(
     kind,
-    typeof nativeCode === "string" || typeof nativeCode === "number"
+    Predicate.isString(nativeCode) || Predicate.isNumber(nativeCode)
       ? String(nativeCode)
       : undefined,
   );
@@ -77,23 +92,29 @@ export const encodeSession = (s: StoredSession): string => JSON.stringify(s);
 export const decodeSession = (raw: string): StoredSession => {
   try {
     const s = JSON.parse(raw) as Partial<StoredSession>;
+
     if (
       s.v === 1 &&
-      typeof s.refreshToken === "string" &&
+      Predicate.isString(s.refreshToken) &&
       s.refreshToken.length >= 16 &&
-      typeof s.savedAt === "number"
+      Predicate.isNumber(s.savedAt)
     ) {
+      const pending: PendingRevokeFields = {};
+
+      if (s.pendingRevoke) pending.pendingRevoke = true;
+
       return {
         v: 1,
         refreshToken: s.refreshToken,
-        scope: typeof s.scope === "string" ? s.scope : "",
+        scope: Predicate.isString(s.scope) ? s.scope : "",
         savedAt: s.savedAt,
-        ...(s.pendingRevoke ? { pendingRevoke: true } : {}),
+        ...pending,
       };
     }
   } catch {
     // fall through
   }
+
   throw new SecureStoreError("CorruptCredential");
 };
 
@@ -103,8 +124,14 @@ export const nativeSecureStore = (module: {
   write(key: string, value: string): Promise<void>;
   remove(key: string): Promise<void>;
 }): SecureSessionStore => ({
-  read: (key) => module.read(key).catch((e: unknown) => Promise.reject(toSecureStoreError(e))),
+  read: (key) =>
+    module.read(key).catch((cause: unknown) => Promise.reject(toSecureStoreError(cause))),
   write: (key, value) =>
-    module.write(key, value).catch((e: unknown) => Promise.reject(toSecureStoreError(e))),
-  remove: (key) => module.remove(key).catch((e: unknown) => Promise.reject(toSecureStoreError(e))),
+    module.write(key, value).catch((cause: unknown) => Promise.reject(toSecureStoreError(cause))),
+  remove: (key) =>
+    module.remove(key).catch((cause: unknown) => Promise.reject(toSecureStoreError(cause))),
 });
+
+interface PendingRevokeFields {
+  pendingRevoke?: true;
+}

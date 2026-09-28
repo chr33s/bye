@@ -9,6 +9,7 @@ import {
 // commerce.ts entitlementState: every status branch and the grace boundaries.
 
 const NOW = Date.UTC(2026, 8, 25, 12, 0, 0);
+
 const G = ENTITLEMENT_GRACE_MS;
 
 const row = (over: Partial<EntitlementRecord>): EntitlementRecord => ({

@@ -11,14 +11,15 @@ export interface SendJobView {
 }
 
 const TERMINAL = new Set(["accepted", "rejected", "cancelled", "unknown"]);
-const OUTCOME_LABEL: Readonly<Record<string, string>> = {
-  pending: "waiting for the provider",
-  delivered: "delivered to the recipient's server",
-  deferred: "delayed — the provider is retrying",
-  bounced: "bounced",
-  rejected: "rejected",
-  complained: "reported as spam",
-};
+
+const OUTCOME_LABEL = new Map<string, string>([
+  ["pending", "waiting for the provider"],
+  ["delivered", "delivered to the recipient's server"],
+  ["deferred", "delayed — the provider is retrying"],
+  ["bounced", "bounced"],
+  ["rejected", "rejected"],
+  ["complained", "reported as spam"],
+]);
 
 export const sendJobsSettled = (jobs: ReadonlyArray<SendJobView>): boolean =>
   jobs.every((j) => TERMINAL.has(j.state));
@@ -28,14 +29,19 @@ export const describeSendJobs = (jobs: ReadonlyArray<SendJobView>): ReadonlyArra
   jobs.flatMap((job) => {
     if (job.state === "unknown")
       return ["Status unknown — the provider may have accepted it. Check before resending."];
+
     if (job.state === "rejected")
       return [`Not sent: ${job.failure?.detail ?? "rejected by the provider"}`];
+
     if (job.state === "cancelled") return ["Cancelled before sending"];
+
     if (!TERMINAL.has(job.state)) return ["Sending…"];
     const outcomes = job.outcomes ?? [];
+
     if (outcomes.length === 0) return ["Accepted by the provider (not proof of inbox delivery)"];
+
     return outcomes.map(
       (o) =>
-        `${o.address}: ${OUTCOME_LABEL[o.outcome] ?? o.outcome}${o.detail ? ` (${o.detail})` : ""}`,
+        `${o.address}: ${OUTCOME_LABEL.get(o.outcome) ?? o.outcome}${o.detail ? ` (${o.detail})` : ""}`,
     );
   });

@@ -11,12 +11,14 @@ export type ScanVerdict =
   | { readonly verdict: "error"; readonly reason: string };
 
 export const INSTREAM_COMMAND = Buffer.from("zINSTREAM\0", "latin1");
+
 /** clamd's default StreamMaxLength chunking is irrelevant to framing; keep chunks bounded. */
 export const MAX_CHUNK = 64 * 1024;
 
 export const frameChunk = (chunk: Uint8Array): Buffer => {
   const header = Buffer.alloc(4);
   header.writeUInt32BE(chunk.byteLength, 0);
+
   return Buffer.concat([header, Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)]);
 };
 
@@ -32,8 +34,11 @@ export function* frames(chunk: Uint8Array): Generator<Buffer> {
 export const parseReply = (raw: string): ScanVerdict => {
   const line = raw.replace(/\0+$/, "").trim();
   const found = /^(?:stream|\S+):\s*(.+)\s+FOUND$/.exec(line);
+
   if (found) return { verdict: "infected", signature: found[1]!.trim() };
+
   if (/^(?:stream|\S+):\s*OK$/.test(line)) return { verdict: "clean" };
+
   return { verdict: "error", reason: line.replace(/\s*ERROR$/, "") || "empty reply" };
 };
 
@@ -49,7 +54,7 @@ export class ScanLimitExceeded extends Error {
 }
 
 const connectTo = (target: ScanOptions["socket"]): Socket =>
-  typeof target === "string" ? connect(target) : connect(target.port, target.host);
+  target instanceof Object ? connect(target.port, target.host) : connect(target);
 
 /** Stream `body` to clamd and return its verdict. Timeouts and limits produce `error`, never `clean`. */
 export const scanStream = async (
@@ -58,10 +63,12 @@ export const scanStream = async (
 ): Promise<ScanVerdict> => {
   const socket = connectTo(options.socket);
   let reply = "";
+
   const done = new Promise<ScanVerdict>((resolve) => {
     socket.setEncoding("latin1");
     socket.on("data", (data: string) => {
       reply += data;
+
       if (reply.includes("\0")) {
         resolve(parseReply(reply));
         socket.end();
@@ -71,14 +78,17 @@ export const scanStream = async (
     socket.on("close", () => resolve({ verdict: "error", reason: "connection closed" }));
     socket.on("error", (error) => resolve({ verdict: "error", reason: `clamd: ${error.message}` }));
   });
+
   const timer = setTimeout(() => {
     socket.destroy(new Error("timeout"));
   }, options.timeoutMs);
+
   const write = (buffer: Buffer) =>
     new Promise<void>((resolve, reject) => {
       if (socket.destroyed) return reject(new Error("socket closed"));
       socket.write(buffer, (error) => (error ? reject(error) : resolve()));
     });
+
   try {
     await new Promise<void>((resolve, reject) => {
       socket.once("connect", resolve);
@@ -86,17 +96,23 @@ export const scanStream = async (
     });
     await write(INSTREAM_COMMAND);
     let total = 0;
+
     for await (const chunk of body) {
       total += chunk.byteLength;
+
       if (total > options.maxBytes)
         throw new ScanLimitExceeded(`body exceeds ${options.maxBytes} bytes`);
+
       for (const frame of frames(chunk)) await write(frame);
     }
+
     await write(END_FRAME);
+
     // The timer destroys the socket on timeout, which resolves `done` with an error verdict.
     return await done;
   } catch (error) {
     socket.destroy();
+
     return { verdict: "error", reason: error instanceof Error ? error.message : String(error) };
   } finally {
     clearTimeout(timer);
@@ -112,6 +128,7 @@ export const ping = (socketPath: ScanOptions["socket"], timeoutMs = 2000): Promi
     socket.on("connect", () => socket.write("zPING\0"));
     socket.on("data", (d) => {
       reply += d.toString("latin1");
+
       if (reply.includes("\0")) {
         clearTimeout(timer);
         socket.end();

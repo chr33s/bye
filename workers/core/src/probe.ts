@@ -12,6 +12,7 @@ import type { CoreEnv } from "./env.ts";
 // PROBE_TOKEN operator secret (routes/probe.ts); results live in the probe's own storage/KV.
 
 export const PROBE_TTL_SECONDS = 3600;
+
 export const probeKey = (kind: "queue" | "alarm" | "workflow", id: string) => `probe:${kind}:${id}`;
 
 /** Durable Object whose only job is to prove alarms fire after a deploy. */
@@ -22,6 +23,7 @@ export class ProbeDO extends DurableObject<CoreEnv> {
     await this.ctx.storage.put("armedAt", armedAt);
     await this.ctx.storage.delete("firedAt");
     await this.ctx.storage.setAlarm(dueAt);
+
     return { armedAt, dueAt };
   }
 
@@ -55,6 +57,7 @@ export class ProbeWorkflow extends WorkflowEntrypoint<CoreEnv, ProbeParams> {
       JSON.stringify(second),
       { expirationTtl: PROBE_TTL_SECONDS },
     );
+
     return { v: 1, first: first.at, second: second.at };
   }
 }

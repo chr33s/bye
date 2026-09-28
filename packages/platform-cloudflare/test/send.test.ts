@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Predicate } from "effect";
 import { dispatch, MailTransport, TransportFailure, type Submission } from "@bye/application";
 import {
   applyMailboxCommand,
@@ -8,18 +8,21 @@ import {
   type MailboxSendResult,
 } from "@bye/platform-cloudflare";
 import { cmd, deliveryFixture, makeTestMailbox, summaryFixture } from "@bye/testing";
-import { Rejection } from "@bye/platform-cloudflare";
+import { type MailboxDraftContent, Rejection } from "@bye/platform-cloudflare";
 
 const setup = () => {
   const m = makeTestMailbox();
+
   const deliver = (
     over: Parameters<typeof summaryFixture>[0] = {},
     extra: Parameters<typeof deliveryFixture>[2] = {},
   ) => {
     m.clock.advance(1000);
+
     return m.store.ingest.commitDelivery(deliveryFixture(m.clock, summaryFixture(over), extra));
   };
-  const draft = (to = "bob@example.com", extra: Record<string, unknown> = {}) =>
+
+  const draft = (to = "bob@example.com", extra: Partial<MailboxDraftContent> = {}) =>
     m.store.drafts.createDraft({
       content: {
         to: [{ name: undefined, address: to }],
@@ -31,15 +34,20 @@ const setup = () => {
         ...extra,
       },
     });
+
   const queued = (r: MailboxSendResult) => {
-    if (r._tag !== "Queued") throw new Error(`expected Queued, got ${r._tag}`);
+    if (!Predicate.isTagged(r, "Queued")) throw new Error(`expected Queued, got ${r._tag}`);
+
     return r;
   };
+
   const ready = (ids: ReadonlyArray<string>) => {
     m.clock.advance(60_000);
     m.store.runDueJobs(m.clock.now());
+
     return ids;
   };
+
   return { ...m, deliver, draft, queued, ready };
 };
 
@@ -58,10 +66,12 @@ describe("drafts and composer", () => {
       _tag: "Saved",
       revision: 2,
     });
+
     const stale = m.store.drafts.saveDraft(draftId, 1, {
       ...content,
       text: "device B offline edit",
     });
+
     expect(stale._tag).toBe("Conflict");
     expect(m.store.drafts.draft(draftId)!.content.text).toBe("device A");
   });
@@ -69,6 +79,7 @@ describe("drafts and composer", () => {
   it("[E17] reply, reply-all and forward drafts carry recipients, threading headers and identity", () => {
     const m = setup();
     m.store.screener.screen([{ sender: "alice@example.com", decision: "allow" }]);
+
     const t = m.deliver({
       messageIdHeader: "orig@x",
       cc: [
@@ -76,22 +87,29 @@ describe("drafts and composer", () => {
         { name: "Me", address: "me@bye.test" },
       ],
     });
+
     const deliveries = m.store.views.getThread(t.threadId).deliveries;
+
     const reply = m.store.drafts.draft(
       m.store.drafts.createReplyDraft(t.threadId, "reply", deliveries),
     )!;
+
     expect(reply.content).toMatchObject({
       subject: "Re: Hello",
       inReplyTo: "orig@x",
       references: ["orig@x"],
     });
+
     const all = m.store.drafts.draft(
       m.store.drafts.createReplyDraft(t.threadId, "reply-all", deliveries),
     )!;
+
     expect(all.content.cc.map((a) => a.address)).toEqual(["carol@example.com"]);
+
     const fwd = m.store.drafts.draft(
       m.store.drafts.createReplyDraft(t.threadId, "forward", deliveries),
     )!;
+
     expect(fwd.content).toMatchObject({
       subject: "Fwd: Hello",
       to: [],
@@ -133,6 +151,7 @@ describe("send intents", () => {
     const { draftId } = m.draft();
     const at = m.clock.now() + 86_400_000;
     const key = cmd();
+
     const send = (commandId: string) =>
       m.queued(
         applyMailboxCommand(m.store, {
@@ -143,6 +162,7 @@ describe("send intents", () => {
           sendAt: at,
         }) as MailboxSendResult,
       );
+
     const a = send(key);
     const b = send(key);
     const c = send(cmd());
@@ -165,6 +185,7 @@ describe("send intents", () => {
 
   it("[E18] same-reply-to-many creates independent messages; per-recipient outcomes tolerate event reordering", () => {
     const m = setup();
+
     const { draftId } = m.store.drafts.createDraft({
       content: {
         to: [
@@ -178,9 +199,11 @@ describe("send intents", () => {
         attachments: [],
       },
     });
+
     const ids = m.queued(
       m.store.sends.send(draftId, { expectedRevision: 1, individually: true }),
     ).sendJobIds;
+
     expect(ids).toHaveLength(3);
     expect(ids.map((id) => m.store.sends.job(id)!.recipients)).toEqual([
       ["a@x.test"],
@@ -201,6 +224,7 @@ describe("send intents", () => {
 
   it("[E18] partial recipient failure is explicit per recipient", () => {
     const m = setup();
+
     const { draftId } = m.store.drafts.createDraft({
       content: {
         to: [
@@ -214,6 +238,7 @@ describe("send intents", () => {
         attachments: [],
       },
     });
+
     const [id] = m.ready(m.queued(m.store.sends.send(draftId, { expectedRevision: 1 })).sendJobIds);
     m.store.sends.claim(id!);
     m.store.sends.accepted(id!, { providerId: "p" });
@@ -228,9 +253,11 @@ describe("send intents", () => {
 
   it("[E18] acceptance records the sent message with visible recipients only (Bcc private) and approves recipients", () => {
     const m = setup();
+
     const { draftId } = m.draft("bob@example.com", {
       bcc: [{ name: undefined, address: "secret@example.com" }],
     });
+
     const [id] = m.ready(m.queued(m.store.sends.send(draftId, { expectedRevision: 1 })).sendJobIds);
     expect(m.store.sends.claim(id!)!.envelopeRecipients).toEqual([
       "bob@example.com",
@@ -255,6 +282,7 @@ describe("send intents", () => {
       bundle: false,
       notify: false,
     });
+
     const { draftId } = m.store.drafts.createDraft({
       content: {
         to: [
@@ -268,6 +296,7 @@ describe("send intents", () => {
         attachments: [],
       },
     });
+
     const [id] = m.ready(m.queued(m.store.sends.send(draftId, { expectedRevision: 1 })).sendJobIds);
     m.store.sends.claim(id!);
     m.store.sends.accepted(id!, { providerId: "p" });
@@ -309,12 +338,14 @@ describe("recipient caps", () => {
 
   it("[E18] a send over the Cloudflare adapter's 50 combined recipients is refused up front with a clear error", () => {
     const m = setup();
+
     // The contract allows up to 100 across to/cc/bcc, so these drafts are valid.
     const { draftId } = m.draft("first@example.com", {
       to: many(20),
       cc: many(20).map((a) => ({ ...a, address: `c${a.address}` })),
       bcc: many(11).map((a) => ({ ...a, address: `b${a.address}` })),
     });
+
     const err = (() => {
       try {
         m.store.sends.send(draftId, { expectedRevision: 1 });
@@ -322,6 +353,7 @@ describe("recipient caps", () => {
         return e;
       }
     })();
+
     expect(err).toMatchObject({
       code: "bad_request",
       message: /too many recipients for transport/,
@@ -337,8 +369,10 @@ describe("recipient caps", () => {
 
   it("[E18] exactly 50 is accepted; 100 hits the same refusal; individually splits past the cap", () => {
     const m = setup();
-    const at = (n: number, extra: Record<string, unknown> = {}) =>
+
+    const at = (n: number, extra: Partial<MailboxDraftContent> = {}) =>
       m.draft("x@example.com", { to: many(n), ...extra });
+
     expect(m.store.sends.send(at(50).draftId, { expectedRevision: 1 })._tag).toBe("Queued");
     expect(() => m.store.sends.send(at(100).draftId, { expectedRevision: 1 })).toThrow(
       /too many recipients for transport/,
@@ -373,11 +407,13 @@ describe("dispatch through Effect v4 layers", () => {
     const { draftId } = m.draft();
     const [id] = m.ready(m.queued(m.store.sends.send(draftId, { expectedRevision: 1 })).sendJobIds);
     let calls = 0;
+
     const t = transportLayer(() =>
       Effect.suspend(
         () => (calls++, Effect.fail(new TransportFailure({ kind: "Unknown", detail: "timeout" }))),
       ),
     );
+
     await run(m, id!, t);
     await run(m, id!, t);
     expect(calls).toBe(1);
@@ -434,11 +470,13 @@ describe("dispatch through Effect v4 layers", () => {
     const { draftId } = m.draft();
     const [id] = m.ready(m.queued(m.store.sends.send(draftId, { expectedRevision: 1 })).sendJobIds);
     const defect = transportLayer(() => Effect.die(new Error("bug in adapter")));
+
     const exit = await Effect.runPromiseExit(
       dispatch(id!).pipe(
         Effect.provide(Layer.mergeAll(MailboxJobStoreLive(m.store.sends), defect)),
       ),
     );
+
     expect(exit._tag).toBe("Failure");
     // The claimed job stays Submitting for reconciliation; it was not marked accepted or failed.
     expect(m.store.sends.job(id!)!.state).toBe("submitting");
@@ -452,17 +490,21 @@ describe("identities, attachments, automation", () => {
     expect(() => m.store.identities.setDefaultIdentity(ext)).toThrow(Rejection);
     const { draftId } = m.draft("x@y.test", { identityId: ext });
     expect(() => m.store.sends.send(draftId, { expectedRevision: 1 })).toThrow(/not verified/);
+
     // A challenge code was mailed to the external address over the transactional class.
     const challenge = m.store.sends
       .jobs("ready")
       .find((j) => j.recipients.includes("me@gmail.example"));
+
     expect(challenge?.trafficClass).toBe("transactional");
     expect(m.store.identities.verifyIdentity(ext, "wrong-code").verified).toBe(false);
+
     const code = (
       m.storage.sql
         .exec("SELECT challenge_token FROM identities WHERE identity_id = ?", ext)
         .toArray()[0] as { challenge_token: string }
     ).challenge_token;
+
     expect(m.store.identities.verifyIdentity(ext, code).verified).toBe(true);
     m.store.identities.setDefaultIdentity(ext);
     expect(m.store.identities.identities()[0]).toMatchObject({ identityId: ext, isDefault: true });
@@ -476,6 +518,7 @@ describe("identities, attachments, automation", () => {
     const t = m.deliver({});
     const deliveryId = m.store.views.getThread(t.threadId).deliveries[0]!.deliveryId;
     const key = cmd();
+
     const redeliver = () =>
       applyMailboxCommand(m.store, {
         _tag: "Redeliver",
@@ -484,6 +527,7 @@ describe("identities, attachments, automation", () => {
         targetMailboxId: "mbx_other",
         mode: "copy",
       }) as { transferId: string };
+
     const x1 = redeliver();
     const x2 = redeliver();
     expect(x1).toEqual(x2);
@@ -493,11 +537,13 @@ describe("identities, attachments, automation", () => {
 
     // Target side: authorized transfer bypasses the Screener exactly once.
     const target = makeTestMailbox("mbx_other");
+
     const input = deliveryFixture(
       target.clock,
       summaryFixture({ fromAddress: "alice@example.com" }),
       { ingestionId: x1.transferId, authorizedTransfer: true },
     );
+
     expect(target.store.ingest.commitDelivery(input)).toMatchObject({
       disposition: "active",
       decidedBy: "transfer",
@@ -515,11 +561,13 @@ describe("identities, attachments, automation", () => {
         declaredSize: 20_000,
       }),
     ).toThrow(/quota/);
+
     const u = m.store.uploads.reserveUpload({
       filename: "a.pdf",
       contentType: "application/pdf",
       declaredSize: 5000,
     });
+
     m.store.uploads.recordUploadPart(u.uploadId, 1, 3000, "e1");
     m.store.uploads.recordUploadPart(u.uploadId, 2, 2000, "e2");
     expect(m.store.uploads.completeUpload(u.uploadId, 5000).state).toBe("complete");
@@ -544,6 +592,7 @@ describe("identities, attachments, automation", () => {
       contentType: "text/plain",
       declaredSize: 100,
     });
+
     expect(m.store.uploads.completeUpload(liar.uploadId, 101).state).toBe("failed");
   });
 
@@ -610,6 +659,7 @@ describe("identities, attachments, automation", () => {
       bundle: false,
       notify: false,
     });
+
     const autoJobs = () =>
       m.store.sends
         .jobs()
@@ -618,6 +668,7 @@ describe("identities, attachments, automation", () => {
             m.store.sends.frozenContent(j.sendJobId)!.content.headers?.["Auto-Submitted"] ===
             "auto-replied",
         );
+
     m.deliver({});
     m.deliver({});
     expect(autoJobs()).toHaveLength(1);
@@ -644,11 +695,13 @@ describe("identities, attachments, automation", () => {
       trafficClass: "transactional",
       recipients: ["me@elsewhere.test"],
     });
+
     const token = (
       m.storage.sql
         .exec("SELECT token FROM forwarding_destinations WHERE address = ?", "me@elsewhere.test")
         .toArray()[0] as { token: string }
     ).token;
+
     expect(m.store.sends.frozenContent(sendJobId)!.content.text).toContain(token);
     expect(m.store.automation.verifyForwardingDestination("me@elsewhere.test", "wrong")).toBe(
       false,
@@ -672,6 +725,7 @@ describe("identities, attachments, automation", () => {
     const m = setup();
     const { sendJobId } = m.store.automation.addForwardingDestination("victim@elsewhere.test");
     const ext = m.store.identities.addIdentity({ address: "me@gmail.example", kind: "external" });
+
     const token = (
       m.storage.sql
         .exec(
@@ -680,28 +734,34 @@ describe("identities, attachments, automation", () => {
         )
         .toArray()[0] as { token: string }
     ).token;
+
     const challenge = (
       m.storage.sql
         .exec("SELECT challenge_token FROM identities WHERE identity_id = ?", ext)
         .toArray()[0] as { challenge_token: string }
     ).challenge_token;
+
     const raw = m.store.sends.jobs().filter((j) => j.trafficClass === "transactional");
     expect(raw).toHaveLength(2);
+
     // The send-job reads expose no draft handle; the draft reads refuse the system drafts.
     const listed = (
       applyMailboxRead(m.store, { _tag: "SendJobs" }) as {
         items: ReadonlyArray<{ trafficClass: string; draftId: string; contentKey: string }>;
       }
     ).items.filter((j) => j.trafficClass === "transactional");
+
     expect(listed.map((j) => j.draftId)).toEqual(["", ""]);
     expect(listed.map((j) => j.contentKey)).toEqual(["", ""]);
     expect(
       (applyMailboxRead(m.store, { _tag: "SendJob", sendJobId }) as { draftId: string }).draftId,
     ).toBe("");
+
     for (const j of raw) {
       expect(m.store.drafts.draft(j.draftId)).toBeUndefined();
       expect(() => m.store.sends.send(j.draftId, { expectedRevision: 1 })).toThrow(/draft/);
     }
+
     // A cancelled challenge settles back to 'open' but still never lists as a user draft.
     m.store.sends.cancelSend(sendJobId);
     expect(JSON.stringify(m.store.drafts.drafts())).not.toContain(token);
@@ -721,8 +781,10 @@ describe("identities, attachments, automation", () => {
       { sender: "alice@example.com", decision: "allow" },
       { sender: "bob@example.com", decision: "allow" },
     ]);
+
     const notifies = () =>
       m.store.kernel.pendingOutbox(1000).filter((e) => e.topic === "notify").length;
+
     m.deliver({});
     expect(notifies()).toBe(0);
     m.store.automation.setNotifyOptIn("contact", "alice@example.com", true);

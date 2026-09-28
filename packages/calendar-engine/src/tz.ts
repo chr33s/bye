@@ -20,10 +20,12 @@ export interface CalLocalDateTime extends CalLocalDate {
 }
 
 const DAY_MS = 86_400_000;
+
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
 const formatter = (timeZone: string): Intl.DateTimeFormat => {
   let f = formatters.get(timeZone);
+
   if (!f) {
     f = new Intl.DateTimeFormat("en-US", {
       timeZone,
@@ -38,12 +40,14 @@ const formatter = (timeZone: string): Intl.DateTimeFormat => {
     });
     formatters.set(timeZone, f);
   }
+
   return f;
 };
 
 export const calIsValidTimeZone = (timeZone: string): boolean => {
   try {
     formatter(timeZone);
+
     return true;
   } catch {
     return false;
@@ -56,6 +60,7 @@ export const calWallClock = (instant: number, timeZone: string): CalLocalDateTim
   const get = (type: string): number => Number(parts.find((p) => p.type === type)?.value ?? 0);
   const era = parts.find((p) => p.type === "era")?.value;
   const rawYear = get("year");
+
   return {
     year: era === "BC" || era === "B" ? 1 - rawYear : rawYear,
     month: get("month"),
@@ -70,12 +75,14 @@ export const calLocalAsUtc = (local: CalLocalDateTime): number => {
   const d = new Date(0);
   d.setUTCFullYear(local.year, local.month - 1, local.day);
   d.setUTCHours(local.hour, local.minute, local.second, 0);
+
   return d.getTime();
 };
 
 /** UTC offset in milliseconds (local − UTC) at an instant. */
 export const calOffsetAt = (instant: number, timeZone: string): number => {
   const floored = Math.floor(instant / 1000) * 1000;
+
   return calLocalAsUtc(calWallClock(floored, timeZone)) - floored;
 };
 
@@ -89,24 +96,34 @@ const sameWall = (a: CalLocalDateTime, b: CalLocalDateTime): boolean =>
 
 export type CalResolution = "exact" | "gap-shifted" | "fold-earlier";
 
+export interface CalZonedInstant {
+  readonly instant: number;
+  readonly resolution: CalResolution;
+}
+
 /** Convert a wall-clock time in a zone to an instant, with documented gap/fold handling. */
 export const calZonedToInstantDetailed = (
   local: CalLocalDateTime,
   timeZone: string,
-): { readonly instant: number; readonly resolution: CalResolution } => {
+): CalZonedInstant => {
   const asUtc = calLocalAsUtc(local);
   const before = calOffsetAt(asUtc - DAY_MS, timeZone);
   const after = calOffsetAt(asUtc + DAY_MS, timeZone);
   const candidates = [...new Set([asUtc - before, asUtc - after])].sort((a, b) => a - b);
   const valid = candidates.filter((c) => sameWall(calWallClock(c, timeZone), local));
+
   if (valid.length === 0) {
     // Also try the offset exactly at asUtc in case of transitions > 1 day apart from the probe points.
     const direct = asUtc - calOffsetAt(asUtc, timeZone);
+
     if (sameWall(calWallClock(direct, timeZone), local))
       return { instant: direct, resolution: "exact" };
+
     return { instant: asUtc - before, resolution: "gap-shifted" };
   }
+
   if (valid.length > 1) return { instant: valid[0]!, resolution: "fold-earlier" };
+
   return { instant: valid[0]!, resolution: "exact" };
 };
 
@@ -120,6 +137,7 @@ export const calDateToDays = (d: CalLocalDate): number =>
 
 export const calDaysToDate = (days: number): CalLocalDate => {
   const d = new Date(days * DAY_MS);
+
   return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
 };
 
@@ -129,12 +147,14 @@ export const calAddDays = (d: CalLocalDate, n: number): CalLocalDate =>
 /** 0 = Sunday … 6 = Saturday. */
 export const calWeekday = (d: CalLocalDate): number => {
   const days = calDateToDays(d);
+
   return (((days + 4) % 7) + 7) % 7; // 1970-01-01 was a Thursday
 };
 
 export const calDaysInMonth = (year: number, month: number): number => {
   const d = new Date(0);
   d.setUTCFullYear(year, month, 0);
+
   return d.getUTCDate();
 };
 
@@ -168,10 +188,13 @@ export const calFormatDate = (d: CalLocalDate): string =>
 
 export const calParseDate = (s: string): CalLocalDate => {
   const m = /^(\d{4})-?(\d{2})-?(\d{2})$/.exec(s.trim());
+
   if (!m) throw new Error(`invalid date: ${s}`);
   const d = { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
+
   if (d.month < 1 || d.month > 12 || d.day < 1 || d.day > calDaysInMonth(d.year, d.month))
     throw new Error(`invalid date: ${s}`);
+
   return d;
 };
 
@@ -181,12 +204,15 @@ export const calFormatDateTime = (d: CalLocalDateTime): string =>
 
 export const calParseDateTime = (s: string): CalLocalDateTime => {
   const m = /^(\d{4})-?(\d{2})-?(\d{2})T(\d{2}):?(\d{2}):?(\d{2})?$/.exec(s.trim());
+
   if (!m) throw new Error(`invalid date-time: ${s}`);
   const d = calParseDate(`${m[1]}-${m[2]}-${m[3]}`);
   const hour = Number(m[4]);
   const minute = Number(m[5]);
   const second = Number(m[6] ?? 0);
+
   if (hour > 23 || minute > 59 || second > 60) throw new Error(`invalid date-time: ${s}`);
+
   return { ...d, hour, minute, second: Math.min(second, 59) };
 };
 

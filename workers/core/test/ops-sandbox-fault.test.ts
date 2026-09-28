@@ -5,7 +5,7 @@ import { kernelClock } from "../src/durable-host.ts";
 import type { CoreEnv } from "../src/env.ts";
 import { handleInbound, ingressFault } from "../src/inbound.ts";
 import { buildTransportAdapters } from "../src/transports.ts";
-import { inboundMessage, makeHarness, rfc822 } from "./harness.ts";
+import { inboundMessage, makeHarness, rfc822, mockAs } from "./harness.ts";
 
 (globalThis as { FixedLengthStream?: unknown }).FixedLengthStream ??= class extends (
   TransformStream
@@ -30,7 +30,8 @@ describe("preview mail sandbox wiring (§15.8)", () => {
   const envWith = (sandbox: string) => {
     const sent: Array<string> = [];
     const fetched: Array<string> = [];
-    const env = {
+
+    const env: CoreEnv = mockAs({
       MAIL_SANDBOX_DOMAINS: sandbox,
       TRANSACTIONAL_EMAIL: {
         send: async (m: { to: string }) => (sent.push(m.to), { messageId: "cf-1" }),
@@ -43,11 +44,14 @@ describe("preview mail sandbox wiring (§15.8)", () => {
       FORWARDING_DOMAIN: "fwd.bye.test",
       NEWSLETTER_API_KEY: "",
       EXTERNAL_IDENTITY_SEAL_KEY: "",
-    } as unknown as CoreEnv;
+    });
+
     const fetchFn = (async (url: string | URL | Request) => {
       fetched.push(String(url instanceof Request ? url.url : url));
+
       return Response.json({ id: "provider-1" }, { status: 202 });
     }) as typeof fetch;
+
     return { env, sent, fetched, fetchFn };
   };
 
@@ -56,17 +60,22 @@ describe("preview mail sandbox wiring (§15.8)", () => {
     const adapters = await buildTransportAdapters(env, "mbx_1", fetchFn);
     // Transactional, personal (Cloudflare) and sealed-forwarding transports are all configured.
     expect(adapters.map((a) => a.capabilities.name)).toHaveLength(3);
+
     for (const a of adapters) {
       expect(a.capabilities.name).toMatch(/^sandbox\(/);
+
       const outside = await Effect.runPromiseExit(
         a.submit(submission(["qa@preview-7.bye.test", "someone@gmail.com"])),
       );
+
       expect(Exit.isFailure(outside)).toBe(true);
       expect(JSON.stringify(outside)).toMatch(/sandbox: 1 recipient\(s\) outside/);
     }
+
     // No provider saw any of the refused submissions.
     expect(sent).toEqual([]);
     expect(fetched).toEqual([]);
+
     // Allowed recipients pass the sandbox and reach each inner transport.
     for (const a of adapters) {
       const before = sent.length + fetched.length;
@@ -74,6 +83,7 @@ describe("preview mail sandbox wiring (§15.8)", () => {
       expect(JSON.stringify(inside)).not.toMatch(/sandbox:/);
       expect(sent.length + fetched.length, a.capabilities.name).toBeGreaterThan(before);
     }
+
     // Transactional and personal both reach the Cloudflare binding.
     expect(sent).toEqual(["qa@preview-7.bye.test", "qa@preview-7.bye.test"]);
   });
@@ -82,14 +92,18 @@ describe("preview mail sandbox wiring (§15.8)", () => {
     const { env, fetchFn } = envWith("");
     const adapters = await buildTransportAdapters(env, "mbx_1", fetchFn);
     expect(adapters).toHaveLength(3);
+
     for (const a of adapters) expect(a.capabilities.name).not.toMatch(/^sandbox\(/);
   });
 
   it("personal mail uses the Cloudflare binding only when the stage enables the class", async () => {
     const { env, fetchFn } = envWith("");
+
     const names = async () =>
       (await buildTransportAdapters(env, "mbx_1", fetchFn)).map((a) => a.capabilities.name);
+
     expect(await names()).toContain("cloudflare-personal");
+
     for (const classes of ["", "transactional", "transactional,forwarding"]) {
       (env as { MAIL_TRAFFIC_CLASSES: string }).MAIL_TRAFFIC_CLASSES = classes;
       expect(await names(), classes).not.toContain("cloudflare-personal");
@@ -111,6 +125,7 @@ describe("staging-only ingress fault injection (§14.2 evidence)", () => {
       address: "ana@bye.test",
       displayName: "Ana",
     });
+
   const mail = (to: string) =>
     inboundMessage(
       "x@example.net",

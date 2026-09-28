@@ -121,6 +121,7 @@ describe("[E21] search", () => {
   it("chunks long bodies below row limits and paginates with stable date order", () => {
     const s = makeTestSearchShard();
     s.upsert(doc("1", { body: `${"lorem ".repeat(10_000)} needle` }));
+
     for (let i = 2; i <= 6; i++) s.upsert(doc(String(i), { body: "needle" }));
     expect(
       s.sql.one<{ n: number }>("SELECT COUNT(*) AS n FROM search_fts WHERE doc_id = 'delivery:1'")!
@@ -146,11 +147,13 @@ describe("[E21] search", () => {
     a.setWatermark(10);
     b.setWatermark(7);
     const revoked = new Set(["shared:2"]);
+
     const out = await authorizeSearchResults(
       [a.candidates("secret"), b.candidates("secret")],
       async (cands) => cands.map((c) => (revoked.has(c.docId) ? undefined : { id: c.refId })),
       10,
     );
+
     expect(out.results).toEqual([{ id: "1" }]);
     expect(out.watermark).toBe(7);
   });
@@ -167,10 +170,13 @@ describe("[E21] search", () => {
     const m = makeTestMailbox();
     m.store.screener.screen([{ sender: "alice@example.com", decision: "allow" }]);
     m.clock.advance(1000);
+
     const t = m.store.ingest.commitDelivery(
       deliveryFixture(m.clock, summaryFixture({ subject: "invoice" })),
     );
+
     const d = m.store.views.getThread(t.threadId).deliveries[0]!;
+
     const views = [
       "imbox",
       "reply-later",
@@ -179,6 +185,7 @@ describe("[E21] search", () => {
       "everything",
       "screener",
     ] as const;
+
     const agree = () => {
       for (const view of views) {
         const shown = m.store.views.listView({ view }).items.some((x) => x.threadId === t.threadId);
@@ -191,6 +198,7 @@ describe("[E21] search", () => {
         ]).toEqual([view, shown]);
       }
     };
+
     agree();
     // Seen and moved to Reply Later: it leaves the Imbox, so `in:imbox` must drop it too.
     m.store.views.markSeen(t.threadId, m.store.views.getThread(t.threadId).thread.revision);

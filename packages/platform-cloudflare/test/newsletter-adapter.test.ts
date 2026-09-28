@@ -28,6 +28,7 @@ const submission = (trafficClass: "transactional" | "personal" | "subscription")
 
 describe("traffic-class routing", () => {
   let called = 0;
+
   const adapter: TransportAdapter = {
     capabilities: {
       ...CLOUDFLARE_TRANSACTIONAL_CAPABILITIES,
@@ -35,6 +36,7 @@ describe("traffic-class routing", () => {
     },
     submit: () => {
       called++;
+
       return Effect.succeed({ providerId: "p" });
     },
   };
@@ -87,12 +89,14 @@ describe("Resend adapter", () => {
     expect(classifyResendStatus(429, "")._tag).toBe("NotAccepted");
     expect(classifyResendStatus(502, "")._tag).toBe("Unknown");
     expect(classifyResendStatus(422, "")).toMatchObject({ _tag: "NotAccepted", retryable: false });
+
     const provider = makeResendNewsletterProvider(
       { apiKey: "k", webhookSecret: "whsec_AA==", account: "a" },
       async () => {
         throw new Error("reset");
       },
     );
+
     expect(await Effect.runPromise(provider.sendBroadcast("bc_1", "op", null))).toEqual({
       _tag: "Unknown",
       detail: "Error",
@@ -146,17 +150,22 @@ describe("verifySvix", () => {
   const B64 = btoa(String.fromCharCode(...KEY));
   const NOW = Date.UTC(2026, 8, 25, 12, 0, 0);
   const BODY = '{"type":"email.delivered"}';
+
   const sign = async (id: string, ts: string, body: string, key = KEY) => {
     const k = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, [
       "sign",
     ]);
+
     const mac = new Uint8Array(
       await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(`${id}.${ts}.${body}`)),
     );
+
     return btoa(String.fromCharCode(...mac));
   };
+
   const headers = (id: string, ts: string, sig: string) =>
     new Headers({ "svix-id": id, "svix-timestamp": ts, "svix-signature": sig });
+
   const ts = String(NOW / 1000);
 
   it("accepts a valid v1 signature with or without the whsec_ prefix", async () => {
@@ -168,6 +177,7 @@ describe("verifySvix", () => {
   it("rejects a bad signature, a tampered body, and a signature under another key", async () => {
     const good = await sign("msg_1", ts, BODY);
     const other = await sign("msg_1", ts, BODY, new TextEncoder().encode("another-key"));
+
     for (const [sig, body] of [
       [`v1,${other}`, BODY],
       [`v1,${good}`, `${BODY} `],
@@ -197,6 +207,7 @@ describe("verifySvix", () => {
     const within = String((NOW - SVIX_TOLERANCE_MS) / 1000);
     const hWithin = headers("msg_1", within, `v1,${await sign("msg_1", within, BODY)}`);
     expect((await verifySvix(`whsec_${B64}`, BODY, hWithin, NOW)).ok).toBe(true);
+
     for (const t of [
       String((NOW - SVIX_TOLERANCE_MS - 1000) / 1000),
       String((NOW + SVIX_TOLERANCE_MS + 1000) / 1000),

@@ -27,10 +27,10 @@ export interface ExportedPlan {
  * Alchemy type strings that differ from the inventory's canonical names. Without this, a real
  * D1 deletion (`Cloudflare.D1Database`) would bypass the protected-type check.
  */
-export const TYPE_ALIASES: Readonly<Record<string, string>> = {
-  "Cloudflare.D1Database": "Cloudflare.D1.Database",
-  "Cloudflare.Ruleset.Ruleset": "Cloudflare.Ruleset",
-};
+export const TYPE_ALIASES = new Map([
+  ["Cloudflare.D1Database", "Cloudflare.D1.Database"],
+  ["Cloudflare.Ruleset.Ruleset", "Cloudflare.Ruleset"],
+]);
 
 const ACTIONS: Readonly<Record<ExportedPlanRow["action"], PlanAction>> = {
   create: "create",
@@ -45,14 +45,21 @@ const ACTIONS: Readonly<Record<ExportedPlanRow["action"], PlanAction>> = {
 export const normalizePlan = (exported: ExportedPlan): Plan => {
   if (exported.format !== "bye.plan-export.v1")
     throw new Error(`unsupported plan export format ${String(exported.format)}`);
-  const entries: Array<PlanEntry> = exported.rows.map((row) => ({
-    logicalId: row.logicalId,
-    type: TYPE_ALIASES[row.resourceType] ?? row.resourceType,
-    action: ACTIONS[row.action],
-    // A plan computed for a stage only contains that stage's state rows.
-    stage: exported.stage,
-    ...(row.envBindings ? { bindings: [...row.envBindings].sort() } : {}),
-  }));
+
+  const entries: Array<PlanEntry> = exported.rows.map((row) => {
+    let entry: PlanEntry = {
+      logicalId: row.logicalId,
+      type: TYPE_ALIASES.get(row.resourceType) ?? row.resourceType,
+      action: ACTIONS[row.action],
+      // A plan computed for a stage only contains that stage's state rows.
+      stage: exported.stage,
+    };
+
+    if (row.envBindings) entry = { ...entry, bindings: [...row.envBindings].sort() };
+
+    return entry;
+  });
+
   return { stack: exported.stack, stage: exported.stage, entries };
 };
 
@@ -68,12 +75,17 @@ export const resourceIdentities = (
   exported: ExportedPlan,
 ): ReadonlyArray<{ readonly fqn: string; readonly logicalId: string; readonly type: string }> =>
   [...exported.rows]
-    .filter((r) => r.action !== "delete" && r.action !== "orphaned")
-    .map((r) => ({
-      fqn: r.fqn,
-      logicalId: r.logicalId,
-      type: TYPE_ALIASES[r.resourceType] ?? r.resourceType,
-    }))
+    .flatMap((r) =>
+      r.action !== "delete" && r.action !== "orphaned"
+        ? [
+            {
+              fqn: r.fqn,
+              logicalId: r.logicalId,
+              type: TYPE_ALIASES.get(r.resourceType) ?? r.resourceType,
+            },
+          ]
+        : [],
+    )
     .sort((a, b) => a.fqn.localeCompare(b.fqn));
 
 /**
@@ -100,14 +112,19 @@ export const destroyPlanViolations = (
   foundationTypes: ReadonlySet<string>,
 ): ReadonlyArray<string> => {
   const violations: Array<string> = [];
+
   if (!/^(preview-\d+|dev-[a-z0-9]{4,32})$/.test(plan.stage))
     violations.push(`destroy is only reviewed for preview/dev stages, not ${plan.stage}`);
+
   for (const e of plan.entries) {
     if (e.stage !== plan.stage) violations.push(`${e.logicalId} belongs to ${e.stage}`);
+
     if (foundationTypes.has(e.type))
       violations.push(`${e.logicalId} (${e.type}) is foundation-owned`);
+
     if (e.action !== "delete" && e.action !== "noop")
       violations.push(`unexpected ${e.action} of ${e.logicalId} in a destroy plan`);
   }
+
   return violations;
 };

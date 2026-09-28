@@ -1,5 +1,6 @@
 import type { ByeClient } from "./client.ts";
 import type { MailDraftContent } from "@bye/contracts";
+import { Match, Predicate } from "effect";
 
 // Offline drafts for native clients (§8): saved locally first, synced with optimistic revisions.
 // A conflict keeps both versions; "queued on this device" is never presented as sent.
@@ -35,6 +36,7 @@ export class DraftStore {
       () => undefined,
       () => undefined,
     );
+
     return next;
   }
 
@@ -45,12 +47,14 @@ export class DraftStore {
   list(): Promise<Array<NativeDraft>> {
     return this.serial(async () => {
       const ids = await this.ids();
+
       const drafts = await Promise.all(
         ids.map(
           async (id) =>
             JSON.parse((await this.kv.getItem(`${INDEX}:${id}`)) ?? "null") as NativeDraft | null,
         ),
       );
+
       return drafts.filter((d): d is NativeDraft => d !== null);
     });
   }
@@ -106,17 +110,21 @@ export const pushDraft = async (
         content,
         draft.threadId ?? undefined,
       );
+
       return { _tag: "Synced", draftId: created.draftId, revision: created.revision };
     }
+
     const saved = await client.saveDraft(
       draft.mailboxId,
       draft.draftId,
       draft.baseRevision,
       content,
     );
-    if (saved._tag === "Saved")
+
+    if (Predicate.isTagged(saved, "Saved"))
       return { _tag: "Synced", draftId: draft.draftId, revision: saved.revision };
     const server = await fetchServer(draft.draftId);
+
     return { _tag: "Conflict", revision: server.revision, content: server.content };
   } catch {
     return { _tag: "Offline" };
@@ -135,23 +143,23 @@ export const syncDraft = async (
 ): Promise<NativeDraft> => {
   if (draft.state === "conflict") return draft;
   const pushed = await pushDraft(client, draft, draft.content, fetchServer);
-  switch (pushed._tag) {
-    case "Offline":
-      return draft;
-    case "Conflict":
-      return {
+
+  return Match.value(pushed).pipe(
+    Match.tagsExhaustive({
+      Offline: () => draft,
+      Conflict: (conflict): NativeDraft => ({
         ...draft,
         state: "conflict",
         conflictCopy: draft.content,
-        content: pushed.content,
-        baseRevision: pushed.revision,
-      };
-    case "Synced":
-      return {
+        content: conflict.content,
+        baseRevision: conflict.revision,
+      }),
+      Synced: (synced): NativeDraft => ({
         ...draft,
-        draftId: pushed.draftId,
-        baseRevision: pushed.revision,
+        draftId: synced.draftId,
+        baseRevision: synced.revision,
         state: syncedState(draft.state),
-      };
-  }
+      }),
+    }),
+  );
 };

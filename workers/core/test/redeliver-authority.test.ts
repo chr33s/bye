@@ -4,7 +4,14 @@ import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import { handleInbound } from "../src/inbound.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, inboundMessage, makeHarness, rfc822 } from "./harness.ts";
+import {
+  type Harness,
+  inboundMessage,
+  makeHarness,
+  rfc822,
+  executionContext,
+  mockAs,
+} from "./harness.ts";
 
 // E19 regression: redelivery authority is re-checked when the transfer commits, so a stored
 // redelivery rule stops injecting mail once its owner loses send access to the target.
@@ -15,10 +22,7 @@ import { type Harness, inboundMessage, makeHarness, rfc822 } from "./harness.ts"
   }
 };
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 interface Account {
   readonly userId: string;
@@ -31,35 +35,48 @@ const signup = async (h: Harness, address: string): Promise<Account> => {
   const account = await new ControlDirectory(h.env.DIRECTORY, kernelClock).provisionPersonalAccount(
     { address, displayName: address.split("@")[0]! },
   );
+
   const auth = new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env));
   const session = await auth.issueSession(account.userId, "test", true);
+
   return { ...account, address, cookie: `__Host-session=${session.token}` };
 };
 
-const api = async (h: Harness, a: Account, method: string, path: string, body?: unknown) => {
+const api = async <BodyValue>(
+  h: Harness,
+  a: Account,
+  method: string,
+  path: string,
+  body?: BodyValue,
+) => {
+  const requestHeaders = new Headers({ cookie: a.cookie });
+
+  if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+  if (method !== "GET") requestHeaders.set("content-type", "application/json");
+
   const response = await handleFetch(
-    new Request(`${h.env.APP_ORIGIN}${path}`, {
-      method,
-      headers: {
-        cookie: a.cookie,
-        ...(method === "GET"
-          ? {}
-          : { origin: h.env.APP_ORIGIN, "content-type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }),
+    new Request(
+      `${h.env.APP_ORIGIN}${path}`,
+      body !== undefined
+        ? { method, headers: requestHeaders, body: JSON.stringify(body) }
+        : { method, headers: requestHeaders },
+    ),
     h.env,
     ctx,
   );
+
   const text = await response.text();
+
   return { status: response.status, text, body: text ? JSON.parse(text) : null };
 };
 
 let n = 0;
+
 const cmdId = () => `cmd_${(++n).toString(36).padStart(20, "0")}`;
 
 const storeOf = (h: Harness, mailboxId: string) =>
-  (h.namespaces.MAILBOXES.instance(mailboxId) as unknown as { store: MailboxStore }).store;
+  mockAs<{ store: MailboxStore }>(h.namespaces.MAILBOXES.instance(mailboxId)).store;
 
 describe("redelivery authority at commit (E19)", () => {
   let h: Harness;
@@ -82,9 +99,11 @@ describe("redelivery authority at commit (E19)", () => {
     );
     await h.drain();
     const store = storeOf(h, from.mailboxId);
+
     const deliveryId = store.ctx.sql.one<{ delivery_id: string }>(
       "SELECT delivery_id FROM deliveries ORDER BY received_at DESC, rowid DESC LIMIT 1",
     )!.delivery_id;
+
     store.transfers.redeliver({
       deliveryId,
       targetMailboxId: to.mailboxId,
@@ -93,6 +112,7 @@ describe("redelivery authority at commit (E19)", () => {
     });
     await h.namespaces.MAILBOXES.instance(from.mailboxId).alarm?.();
     await h.drain();
+
     return (await api(h, to, "GET", `/v1/mailboxes/${to.mailboxId}/views/everything`)).text;
   };
 
@@ -121,6 +141,7 @@ describe("redelivery authority at commit (E19)", () => {
       .prepare("SELECT org_id FROM mailboxes WHERE id = ?")
       .bind(bob.mailboxId)
       .first<{ org_id: string }>())!.org_id;
+
     await h.d1
       .prepare(
         "INSERT INTO memberships (org_id, user_id, role, status, created_at, updated_at) VALUES (?, ?, 'member', 'active', ?, ?)",

@@ -20,6 +20,7 @@ describe("native screen routes", () => {
 describe("widget snapshot", () => {
   it("[C07] picks the next future event and carries the active timer", () => {
     const now = 1_000;
+
     const snap = widgetSnapshot(
       {
         upcoming: [
@@ -32,16 +33,19 @@ describe("widget snapshot", () => {
       4,
       now,
     );
+
     expect(snap).toEqual({
       nextEvent: { title: "Next", startMs: 2_000 },
       timer: { label: "Writing", startedAtMs: 900 },
       unseen: 4,
     });
     expect(widgetSnapshot(null, 0, now)).toEqual({ nextEvent: null, timer: null, unseen: 0 });
+
     // The unseen count is the Imbox's new-for-you threads, not a constant.
     const imbox = {
       items: [{ newForYou: true }, { newForYou: false }, { newForYou: true }],
     } as never;
+
     expect(widgetSnapshot(null, countNewForYou(imbox), now).unseen).toBe(2);
     expect(countNewForYou(null)).toBe(0);
   });
@@ -51,6 +55,7 @@ describe("native client", () => {
   it("[E05][A03] triage and device calls hit the documented routes with idempotent commands", async () => {
     const calls: Array<{ url: string; method: string; body: unknown }> = [];
     let rejectNext = true;
+
     const client = new ByeClient({
       origin: "https://app.bye.test",
       // The first request meets an expired access token: the client refreshes and retries it.
@@ -63,12 +68,14 @@ describe("native client", () => {
         });
         const status = rejectNext ? 401 : 200;
         rejectNext = false;
+
         return new Response(JSON.stringify({ items: [], revoked: true }), {
           status,
           headers: { "content-type": "application/json" },
         });
       },
     });
+
     await client.trash("mbx_1", ["thr_1"]);
     await client.revokeDevice("dev/1");
     await client.calendarCommand("cal_1", { type: "StopTimer" });

@@ -23,7 +23,9 @@ const allow: SenderPolicy = {
   bundle: true,
   notify: false,
 };
+
 const block: SenderPolicy = { ...allow, decision: "blocked" };
+
 const base = {
   safety: { _tag: "Clean" } as const,
   exact: undefined,
@@ -41,6 +43,7 @@ describe("[E01] routing precedence (§4.2)", () => {
       const d = route({ ...base, safety, exact: allow, speakeasy: true });
       expect(d).toMatchObject({ disposition: "spam", decidedBy: "safety", quarantine: true });
     }
+
     expect(route({ ...base, safety: { _tag: "Spam", reason: "x" }, exact: allow })).toMatchObject({
       disposition: "spam",
       quarantine: false,
@@ -86,6 +89,7 @@ describe("[E18] send-job state machine (§5.2)", () => {
     expect(canTransition("submitting", "accepted")).toBe(true);
     expect(canTransition("accepted", "ready")).toBe(false);
     expect(canTransition("cancelled", "ready")).toBe(false);
+
     for (const s of SEND_JOB_STATES)
       if (isTerminal(s)) for (const t of SEND_JOB_STATES) expect(canTransition(s, t)).toBe(false);
   });
@@ -132,6 +136,7 @@ describe("opaque identifiers (§4.1)", () => {
     expect(PARITY_LEDGER.length).toBeGreaterThan(0);
     expect(new Set(PARITY_LEDGER.map((r) => r.id)).size).toBe(PARITY_LEDGER.length);
     const families = new Map<string, Array<{ n: number; stage: number }>>();
+
     for (const row of PARITY_LEDGER) {
       expect(row.id).toMatch(/^[A-Z]\d{2}$/);
       expect(row.capability.trim()).not.toBe("");
@@ -140,6 +145,7 @@ describe("opaque identifiers (§4.1)", () => {
       rows.push({ n: Number(row.id.slice(1)), stage: row.stage });
       families.set(row.id[0]!, rows);
     }
+
     for (const [family, rows] of families) {
       // Numbered 01..n with no gaps, and each capability family ships in a single stage.
       expect(
@@ -148,6 +154,7 @@ describe("opaque identifiers (§4.1)", () => {
       ).toEqual(rows.map((_, i) => i + 1));
       expect(new Set(rows.map((r) => r.stage)).size, family).toBe(1);
     }
+
     // Stages never go backwards through the ledger.
     const stages = PARITY_LEDGER.map((r) => r.stage);
     expect(stages).toEqual([...stages].sort((a, b) => a - b));

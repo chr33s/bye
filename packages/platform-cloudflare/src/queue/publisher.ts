@@ -4,17 +4,21 @@ import {
   NotifyMessage,
   QUEUE_MESSAGE_MAX_BYTES,
 } from "@bye/contracts";
-import { QueueFailure, type QueueName, QueuePublisher } from "@bye/application";
-import { Effect, Layer, Result, Schema } from "effect";
+import { QueueFailure, type QueueName, QueuePublisher, type QueueWireBody } from "@bye/application";
+import { Effect, Layer, Option, Predicate, Result, Schema } from "effect";
 import type { Kernel } from "../durable/kernel.ts";
 
 /** Narrow Cloudflare Queue producer binding. */
 export interface QueueBindingLike {
-  send(body: unknown, options?: { contentType?: "json" }): Promise<unknown>;
-  sendBatch(messages: Iterable<{ body: unknown; contentType?: "json" }>): Promise<unknown>;
+  send<Body>(body: Body, options?: { contentType?: "json" }): Promise<QueueSendAck>;
+  sendBatch<Body>(messages: Iterable<{ body: Body; contentType?: "json" }>): Promise<QueueSendAck>;
 }
 
-const sizeOf = (body: unknown): number => new TextEncoder().encode(JSON.stringify(body)).byteLength;
+/** What a producer binding resolves with; callers never read it. */
+type QueueSendAck = object | void;
+
+const sizeOf = <Body>(body: Body): number =>
+  new TextEncoder().encode(JSON.stringify(body)).byteLength;
 
 /** Queue payloads stay small references; oversize is a defect in the caller, reported as failure. */
 export const makeQueuePublisher = (queues: Partial<Record<QueueName, QueueBindingLike>>) =>
@@ -22,7 +26,9 @@ export const makeQueuePublisher = (queues: Partial<Record<QueueName, QueueBindin
     send: (queue, body) =>
       Effect.gen(function* () {
         const q = queues[queue];
+
         if (!q) return yield* new QueueFailure({ queue, detail: "no binding" });
+
         if (sizeOf(body) > QUEUE_MESSAGE_MAX_BYTES)
           return yield* new QueueFailure({ queue, detail: "message exceeds 128 KB" });
         yield* Effect.tryPromise({
@@ -34,10 +40,14 @@ export const makeQueuePublisher = (queues: Partial<Record<QueueName, QueueBindin
     sendBatch: (queue, bodies) =>
       Effect.gen(function* () {
         const q = queues[queue];
+
         if (!q) return yield* new QueueFailure({ queue, detail: "no binding" });
+
         if (bodies.length === 0) return;
+
         if (bodies.some((b) => sizeOf(b) > QUEUE_MESSAGE_MAX_BYTES))
           return yield* new QueueFailure({ queue, detail: "message exceeds 128 KB" });
+
         // Cloudflare batch limits: 100 messages and 256 KB; chunk by both.
         for (const chunk of chunkByBytes(
           bodies.map((body) => ({ item: body, bytes: sizeOf(body) })),
@@ -60,10 +70,14 @@ export class OutboxPayloadError extends Error {
   override readonly name = "OutboxPayloadError";
 }
 
-const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+const OutboxPayload = Schema.Record(Schema.String, Schema.Unknown);
+
+const decodeOutboxPayload = Schema.decodeUnknownOption(OutboxPayload);
+
+const EMPTY_OUTBOX_PAYLOAD = Schema.decodeUnknownSync(OutboxPayload)({});
 
 /** Validate a wire body against its queue schema; missing/mistyped fields never become "undefined". */
-const checked = <S extends Schema.Top>(schema: S, topic: string, body: unknown): S["Type"] => {
+const checked = <S extends Schema.Top, Body>(schema: S, topic: string, body: Body): S["Type"] => {
   try {
     return Schema.decodeUnknownSync(schema as never)(body) as S["Type"];
   } catch (e) {
@@ -72,6 +86,8 @@ const checked = <S extends Schema.Top>(schema: S, topic: string, body: unknown):
     );
   }
 };
+
+type OutboxToQueueMessageResult = { readonly queue: QueueName; readonly body: QueueWireBody };
 
 /**
  * Map an outbox topic to a queue and wire message. Unknown topics go to the propagate queue.
@@ -86,8 +102,9 @@ export const outboxToQueueMessage = (
     readonly target: string;
     readonly payload: unknown;
   },
-): { readonly queue: QueueName; readonly body: unknown } => {
-  const p = (e.payload ?? {}) as Record<string, unknown>;
+): OutboxToQueueMessageResult => {
+  const p = Option.getOrElse(decodeOutboxPayload(e.payload ?? {}), () => EMPTY_OUTBOX_PAYLOAD);
+
   switch (e.topic) {
     case "dispatch":
       return {
@@ -109,7 +126,10 @@ export const outboxToQueueMessage = (
           eventId: e.eventId,
           scope: e.target,
           op: p.op === "delete" ? "delete" : "upsert",
-          docId: str(p.kind) && str(p.id) ? [p.kind, p.id].join(":") : undefined,
+          docId:
+            Predicate.isString(p.kind) && Predicate.isString(p.id) && p.kind && p.id
+              ? [p.kind, p.id].join(":")
+              : undefined,
           source: { mailboxId: e.target, kind: p.kind, id: p.id },
         }),
       };
@@ -143,7 +163,9 @@ export const outboxToQueueMessage = (
 
 /** Cloudflare Queues limits: 100 messages and 256 KB per sendBatch. */
 export const QUEUE_BATCH_MAX_MESSAGES = 100;
+
 export const QUEUE_BATCH_MAX_BYTES = 256 * 1024;
+
 /** Rows refused this many times are dead-lettered locally so they cannot block the queue. */
 export const OUTBOX_MAX_ATTEMPTS = 8;
 
@@ -156,16 +178,20 @@ export const chunkByBytes = <T>(
   const chunks: Array<Array<T>> = [];
   let current: Array<T> = [];
   let size = 0;
+
   for (const { item, bytes } of items) {
     if (current.length > 0 && (current.length >= maxMessages || size + bytes > maxBytes)) {
       chunks.push(current);
       current = [];
       size = 0;
     }
+
     current.push(item);
     size += bytes;
   }
+
   if (current.length > 0) chunks.push(current);
+
   return chunks;
 };
 
@@ -174,7 +200,11 @@ export interface RelayOptions {
    * Store an oversize body by reference (e.g. R2) and return the small message to enqueue instead.
    * Without it, oversize rows are dead-lettered locally with diagnostics.
    */
-  readonly offload?: (eventId: string, queue: QueueName, body: unknown) => Promise<unknown>;
+  readonly offload?: (
+    eventId: string,
+    queue: QueueName,
+    body: QueueWireBody,
+  ) => Promise<QueueWireBody>;
 }
 
 /**
@@ -192,13 +222,17 @@ export const relayOutbox = (
   Effect.gen(function* () {
     const publisher = yield* QueuePublisher;
     const pending = kernel.pendingOutbox(limit);
+
     const byQueue = new Map<
       QueueName,
-      Array<{ item: { id: string; body: unknown }; bytes: number }>
+      Array<{ item: { id: string; body: QueueWireBody }; bytes: number }>
     >();
+
     let dead = 0;
+
     for (const e of pending) {
-      let m: { readonly queue: QueueName; readonly body: unknown };
+      let m: OutboxToQueueMessageResult;
+
       try {
         m = outboxToQueueMessage(source, e);
       } catch (error) {
@@ -208,14 +242,17 @@ export const relayOutbox = (
         dead++;
         continue;
       }
+
       let body = m.body;
       let bytes = sizeOf(body);
+
       if (bytes > QUEUE_MESSAGE_MAX_BYTES) {
         if (options.offload) {
           const offloaded = yield* Effect.tryPromise({
             try: () => options.offload!(e.eventId, m.queue, body),
             catch: () => null,
           }).pipe(Effect.orElseSucceed(() => null));
+
           if (offloaded !== null && sizeOf(offloaded) <= QUEUE_MESSAGE_MAX_BYTES) {
             body = offloaded;
             bytes = sizeOf(offloaded);
@@ -230,12 +267,15 @@ export const relayOutbox = (
           continue;
         }
       }
+
       byQueue.set(m.queue, [
         ...(byQueue.get(m.queue) ?? []),
         { item: { id: e.eventId, body }, bytes },
       ]);
     }
+
     let published = 0;
+
     for (const [queue, items] of byQueue) {
       for (const chunk of chunkByBytes(items)) {
         const result = yield* Effect.result(
@@ -244,6 +284,7 @@ export const relayOutbox = (
             chunk.map((i) => i.body),
           ),
         );
+
         if (Result.isSuccess(result)) {
           kernel.markPublished(chunk.map((i) => i.id));
           published += chunk.length;
@@ -252,6 +293,7 @@ export const relayOutbox = (
           kernel.markPublishFailed(ids);
           const attempts = kernel.outboxAttempts(ids);
           const exhausted = ids.filter((id) => (attempts.get(id) ?? 0) >= OUTBOX_MAX_ATTEMPTS);
+
           if (exhausted.length > 0) {
             kernel.deadLetterOutbox(
               exhausted,
@@ -262,5 +304,6 @@ export const relayOutbox = (
         }
       }
     }
+
     return { published, pending: pending.length, dead };
   });

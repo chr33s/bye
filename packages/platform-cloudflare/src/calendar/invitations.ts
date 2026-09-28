@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import {
   calEndFor,
   calInstant,
@@ -42,22 +43,23 @@ export abstract class CalendarInvitations extends CalendarCalendars {
     );
   }
 
-  private knownInvitation(
-    uid: string,
-    recurrenceKey: string,
-  ): { known: CalKnownInvitation | undefined; row: EventRow | undefined } {
+  private knownInvitation(uid: string, recurrenceKey: string): KnownInvitationLookup {
     const row = this.invitationRow(uid);
+
     const revision = (key: string) => {
       const r = this.sql.one<{ sequence: number; dtstamp: number | null }>(
         "SELECT sequence, dtstamp FROM cal_invitation_revisions WHERE uid = ? AND recurrence_key = ?",
         uid,
         key,
       );
+
       return r ? { sequence: Number(r.sequence), dtstamp: r.dtstamp ?? undefined } : undefined;
     };
+
     const rev = revision(recurrenceKey);
     const seriesRev = revision("");
     const attendeeRevisions: Record<string, { sequence: number; dtstamp: number | undefined }> = {};
+
     for (const a of this.sql.all<{ address: string; sequence: number; dtstamp: number | null }>(
       "SELECT address, sequence, dtstamp FROM cal_attendee_revisions WHERE uid = ?",
       uid,
@@ -67,8 +69,10 @@ export abstract class CalendarInvitations extends CalendarCalendars {
         dtstamp: a.dtstamp ?? undefined,
       };
     }
+
     if (!row && !rev && !seriesRev) return { known: undefined, row: undefined };
     const record = row ? this.toRecord(row) : undefined;
+
     return {
       row,
       known: {
@@ -92,6 +96,7 @@ export abstract class CalendarInvitations extends CalendarCalendars {
   }): Array<CalendarInvitationResult> {
     return this.command(input.ingestionId, "ReceiveInvitation", () => {
       let parsed;
+
       try {
         parsed = calParseCalendar(input.ics, { defaultZone: this.zone, maxItems: 200 });
       } catch (error) {
@@ -102,27 +107,35 @@ export abstract class CalendarInvitations extends CalendarCalendars {
           } as const,
         ];
       }
+
       const results: Array<CalendarInvitationResult> = [];
+
       // Series first, then per-occurrence overrides, so overrides attach to the series row.
       const events = [...parsed.events].sort(
         (a, b) => (a.recurrenceId ? 1 : 0) - (b.recurrenceId ? 1 : 0),
       );
+
       for (let event of events) {
         // RECURRENCE-IDs may be sent in UTC or another zone; key them in the stored series' zone
         // so they address the same occurrence the series expands to.
         let seriesStart = event.recurrenceId ? this.seriesStartFor(event.uid) : undefined;
+
         let recurrenceKey = event.recurrenceId
           ? calRecurrenceKey(event.recurrenceId, seriesStart)
           : "";
+
         // A "this and future" split moved later occurrences to a new UID (§9): route overrides for
         // those occurrences to the tail series so updates and replies keep applying.
         const targetUid = this.resolveSplitUid(event.uid, recurrenceKey);
+
         if (targetUid !== event.uid) {
           event = { ...event, uid: targetUid };
           seriesStart = this.seriesStartFor(targetUid) ?? seriesStart;
           recurrenceKey = calRecurrenceKey(event.recurrenceId!, seriesStart);
         }
+
         const { known, row } = this.knownInvitation(event.uid, recurrenceKey);
+
         const decision = calInterpretItip({
           method: parsed.method,
           event,
@@ -131,17 +144,20 @@ export abstract class CalendarInvitations extends CalendarCalendars {
           known,
           seriesStart,
         });
-        if (decision._tag !== "Apply") {
+
+        if (!Predicate.isTagged(decision, "Apply")) {
           // A re-sent or out-of-date copy of an invitation we hold still lets its thread answer it.
           if (
             row &&
             parsed.method?.toUpperCase() !== "REPLY" &&
-            (decision._tag === "Duplicate" || decision._tag === "IgnoreStale")
+            (Predicate.isTagged(decision, "Duplicate") ||
+              Predicate.isTagged(decision, "IgnoreStale"))
           )
             this.linkMessage(input.sourceRef, row.id, recurrenceKey);
           results.push(decision);
           continue;
         }
+
         const eventId = this.applyInvitation(
           decision.action,
           event,
@@ -149,8 +165,10 @@ export abstract class CalendarInvitations extends CalendarCalendars {
           row,
           input.sourceRef,
         );
+
         if (eventId && decision.action !== "reply")
           this.linkMessage(input.sourceRef, eventId, recurrenceKey);
+
         if (decision.action === "reply") {
           // A series-level attendee REPLY also applies to every tail series split from it.
           if (!recurrenceKey) {
@@ -159,6 +177,7 @@ export abstract class CalendarInvitations extends CalendarCalendars {
               event.uid,
             )) {
               const tail = this.invitationRow(link.new_uid);
+
               if (tail)
                 this.applyInvitation(
                   "reply",
@@ -169,6 +188,7 @@ export abstract class CalendarInvitations extends CalendarCalendars {
                 );
             }
           }
+
           this.sql.run(
             `INSERT INTO cal_attendee_revisions (uid, address, sequence, dtstamp) VALUES (?, ?, ?, ?)
              ON CONFLICT (uid, address) DO UPDATE SET sequence = excluded.sequence, dtstamp = excluded.dtstamp`,
@@ -189,6 +209,7 @@ export abstract class CalendarInvitations extends CalendarCalendars {
             this.clock.now(),
           );
         }
+
         if (eventId)
           this.kernel.emit("calendar.notify", this.config.ownerId, {
             kind: `invitation.${decision.action}`,
@@ -197,6 +218,7 @@ export abstract class CalendarInvitations extends CalendarCalendars {
           });
         results.push({ ...decision, eventId });
       }
+
       return results;
     });
   }
@@ -209,9 +231,11 @@ export abstract class CalendarInvitations extends CalendarCalendars {
     sourceRef: CalendarMessageRef | undefined,
   ): string | undefined {
     const record = row ? this.toRecord(row) : undefined;
+
     if (action === "reply") {
       if (!record) return undefined;
       const reply = calNormAddress(event.attendees[0]!.address);
+
       if (!record.attendees.some((a) => a.address === reply)) return undefined;
       this.writeEvent(
         {
@@ -222,10 +246,13 @@ export abstract class CalendarInvitations extends CalendarCalendars {
         },
         false,
       );
+
       return record.id;
     }
+
     if (action === "cancel") {
       if (!record) return undefined;
+
       if (recurrenceKey) {
         this.writeEvent(
           {
@@ -249,8 +276,10 @@ export abstract class CalendarInvitations extends CalendarCalendars {
         );
         this.kernel.cancelJob(REMINDER_JOB, record.id);
       }
+
       return record.id;
     }
+
     if (recurrenceKey) {
       if (!record) return undefined; // Occurrence update for an unknown series: wait for the series.
       // A moved occurrence needs a new answer: forget the owner's answer to the old time. The old
@@ -260,14 +289,17 @@ export abstract class CalendarInvitations extends CalendarCalendars {
       const priorStart = prior?.start ?? this.timeFromKey(record.series, recurrenceKey);
       const priorEnd = prior?.end ?? calEndFor(priorStart, calSeriesDuration(record.series));
       const nextEnd = calEndFor(event.series.dtstart, calSeriesDuration(event.series));
+
       const same = (a: CalTime, b: CalTime) =>
         a.kind === b.kind && calInstant(a, this.zone) === calInstant(b, this.zone);
+
       if (!same(priorStart, event.series.dtstart) || !same(priorEnd, nextEnd))
         this.sql.run(
           "DELETE FROM cal_occurrence_responses WHERE event_id = ? AND occurrence_key = ?",
           record.id,
           recurrenceKey,
         );
+
       const exception: CalException = {
         recurrenceKey,
         cancelled: event.series.data.status === "cancelled",
@@ -275,6 +307,7 @@ export abstract class CalendarInvitations extends CalendarCalendars {
         end: event.series.dtend,
         data: event.series.data,
       };
+
       this.writeEvent(
         {
           ...record,
@@ -285,22 +318,28 @@ export abstract class CalendarInvitations extends CalendarCalendars {
         },
         false,
       );
+
       return record.id;
     }
+
     if (record) {
       // Preserve our own response unless the organizer changed timing (a new request needs a new answer).
       const timingChanged =
         JSON.stringify([record.series.dtstart, record.series.dtend, record.series.rule]) !==
         JSON.stringify([event.series.dtstart, event.series.dtend, event.series.rule]);
+
       if (timingChanged)
         this.sql.run("DELETE FROM cal_occurrence_responses WHERE event_id = ?", record.id);
+
       const attendees = event.attendees.map((a) => {
         const address = calNormAddress(a.address);
         const prior = record.attendees.find((p) => p.address === address);
+
         return this.self.includes(address) && prior && !timingChanged
           ? { ...a, address, partstat: prior.partstat }
           : { ...a, address };
       });
+
       this.writeEvent(
         {
           ...record,
@@ -311,8 +350,10 @@ export abstract class CalendarInvitations extends CalendarCalendars {
         },
         false,
       );
+
       return record.id;
     }
+
     const id = this.clock.id("evt");
     this.writeEvent(
       {
@@ -333,6 +374,7 @@ export abstract class CalendarInvitations extends CalendarCalendars {
       },
       true,
     );
+
     return id;
   }
 
@@ -346,16 +388,22 @@ export abstract class CalendarInvitations extends CalendarCalendars {
   }): { revision: number } {
     return this.command(input.commandId, "RespondInvitation", () => {
       const row = this.eventRow(input.eventId);
+
       if (!row) throw calendarError("not_found", "event not found");
       const record = this.toRecord(row);
+
       if (record.weAreOrganizer || !record.organizer)
         throw calendarError("bad_request", "not an invitation");
       const me = this.invitedAs(record);
+
       if (!me) throw calendarError("forbidden", "this account is not an attendee");
+
       const attendees = input.occurrenceKey
         ? record.attendees
         : record.attendees.map((a) => (a === me ? { ...a, partstat: input.partstat } : a));
+
       const { revision } = this.writeEvent({ ...record, attendees }, false);
+
       // An occurrence answer is kept beside the series answer, so clients can show it (C04).
       if (input.occurrenceKey)
         this.sql.run(
@@ -375,6 +423,7 @@ export abstract class CalendarInvitations extends CalendarCalendars {
           ? { recurrenceId: this.timeFromKey(record.series, input.occurrenceKey) }
           : {},
       );
+
       return { revision };
     });
   }
@@ -407,19 +456,25 @@ export abstract class CalendarInvitations extends CalendarCalendars {
       deliveryId,
       mailboxId,
     );
+
     const answers = this.occurrenceResponses([...new Set(links.map((l) => l.event_id))]);
     const out: Array<CalendarMessageInvitation> = [];
     const self = new Set(this.self);
+
     for (const link of links) {
       const row = this.eventRow(link.event_id);
+
       if (!row) continue;
       const record = this.toRecord(row);
       const me = this.invitedAs(record, self);
+
       if (!me) continue;
       const key = link.recurrence_key || null;
       const exception = key ? record.exceptions.find((e) => e.recurrenceKey === key) : undefined;
+
       const start =
         exception?.start ?? (key ? this.timeFromKey(record.series, key) : record.series.dtstart);
+
       out.push({
         eventId: record.id,
         calendarId: record.calendarId,
@@ -437,25 +492,31 @@ export abstract class CalendarInvitations extends CalendarCalendars {
         partstat: (key ? answers.get(`${record.id}\u0000${key}`) : undefined) ?? me.partstat,
       });
     }
+
     return out;
   }
 
   /** DTSTART of the stored series for a UID (following split links when the original is gone). */
   private seriesStartFor(uid: string): CalTime | undefined {
     let current = uid;
+
     for (let depth = 0; depth < 16; depth++) {
       const row = this.sql.one<{ series: string }>(
         "SELECT series FROM cal_events WHERE uid = ? AND deleted = 0 ORDER BY created_at LIMIT 1",
         current,
       );
+
       if (row) return (JSON.parse(row.series) as CalSeries).dtstart;
+
       const link = this.sql.one<{ new_uid: string }>(
         "SELECT new_uid FROM cal_series_links WHERE original_uid = ? ORDER BY split_key LIMIT 1",
         current,
       );
+
       if (!link) return undefined;
       current = link.new_uid;
     }
+
     return undefined;
   }
 
@@ -463,15 +524,18 @@ export abstract class CalendarInvitations extends CalendarCalendars {
   private resolveSplitUid(uid: string, recurrenceKey: string): string {
     if (!recurrenceKey) return uid;
     let current = uid;
+
     for (let depth = 0; depth < 16; depth++) {
       const link = this.sql.one<{ new_uid: string }>(
         "SELECT new_uid FROM cal_series_links WHERE original_uid = ? AND split_key <= ? ORDER BY split_key DESC LIMIT 1",
         current,
         recurrenceKey,
       );
+
       if (!link) return current;
       current = link.new_uid;
     }
+
     return current;
   }
 
@@ -482,11 +546,20 @@ export abstract class CalendarInvitations extends CalendarCalendars {
    */
   isOrganizerOf(uid: string): boolean {
     const direct = this.invitationRow(uid);
+
     if (direct) return bool(direct.we_are_organizer);
+
     const linked = this.sql.one<{ new_uid: string }>(
       "SELECT new_uid FROM cal_series_links WHERE original_uid = ? LIMIT 1",
       uid,
     );
+
     return linked ? this.isOrganizerOf(linked.new_uid) : false;
   }
+}
+
+/** An invitation's stored row with what is already known about its UID. */
+export interface KnownInvitationLookup {
+  known: CalKnownInvitation | undefined;
+  row: EventRow | undefined;
 }

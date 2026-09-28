@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { api, list as listItems, query } from "../api.ts";
 import { degrade } from "../core/degrade.ts";
 import { act, h, section, show } from "../core/dom.ts";
@@ -19,6 +20,7 @@ const HELP =
 
 export const renderSearch = async (params: URLSearchParams, signal: AbortSignal): Promise<void> => {
   const q = params.get("q") ?? "";
+
   const input = h("input", {
     type: "search",
     name: "q",
@@ -27,8 +29,10 @@ export const renderSearch = async (params: URLSearchParams, signal: AbortSignal)
     "aria-describedby": "search-help",
     placeholder: "Search mail and calendar",
   });
+
   const results = h("div", {});
   const selected = new Set<string>();
+
   const form = h(
     "form",
     {
@@ -42,6 +46,7 @@ export const renderSearch = async (params: URLSearchParams, signal: AbortSignal)
     h("button", { type: "submit" }, "Search"),
     h("p", { id: "search-help", class: "hint" }, HELP),
   );
+
   show(section("search-title", "Search", form, results));
 
   if (!q) {
@@ -49,6 +54,7 @@ export const renderSearch = async (params: URLSearchParams, signal: AbortSignal)
       `/v1/mailboxes/${mb()}/searches/recent`,
       signal,
     ).catch(degrade([]));
+
     if (recent.length) {
       results.append(
         h("h2", {}, "Recent searches"),
@@ -56,7 +62,8 @@ export const renderSearch = async (params: URLSearchParams, signal: AbortSignal)
           "ul",
           {},
           recent.map((r) => {
-            const text = typeof r === "string" ? r : r.query;
+            const text = Predicate.isString(r) ? r : r.query;
+
             return h("li", {}, h("a", { href: `#/search?q=${encodeURIComponent(text)}` }, text));
           }),
         ),
@@ -74,6 +81,7 @@ export const renderSearch = async (params: URLSearchParams, signal: AbortSignal)
         ),
       );
     }
+
     return;
   }
 
@@ -91,6 +99,7 @@ export const renderSearch = async (params: URLSearchParams, signal: AbortSignal)
         ).catch(degrade([]))
       : Promise.resolve([]),
   ]);
+
   if (mail.lagging)
     results.append(
       h(
@@ -100,10 +109,14 @@ export const renderSearch = async (params: URLSearchParams, signal: AbortSignal)
       ),
     );
   const threadIds = () => [...selected];
-  const needSelection = (fn: () => Promise<unknown>) => async () => {
-    if (!selected.size) throw new Error("Select at least one result");
-    await fn();
-  };
+
+  const needSelection =
+    <R>(fn: () => Promise<R>) =>
+    async () => {
+      if (!selected.size) throw new Error("Select at least one result");
+      await fn();
+    };
+
   const bar = h(
     "div",
     { class: "bulk", role: "toolbar", "aria-label": "Actions for selected results" },
@@ -154,6 +167,7 @@ export const renderSearch = async (params: URLSearchParams, signal: AbortSignal)
               _tag: "CreateBatch",
               threadIds: threadIds(),
             });
+
             location.hash = `#/batch/${encodeURIComponent(batch.batchId)}`;
           }),
         ),
@@ -161,6 +175,7 @@ export const renderSearch = async (params: URLSearchParams, signal: AbortSignal)
       "Read together",
     ),
   );
+
   const list = h(
     "ul",
     { class: "threads", "aria-label": "Mail results" },
@@ -196,10 +211,12 @@ export const renderSearch = async (params: URLSearchParams, signal: AbortSignal)
       ),
     ),
   );
+
   results.append(
     h("h2", {}, "Mail"),
     mail.results.length ? h("div", {}, bar, list) : h("p", { class: "empty" }, "No mail results."),
   );
+
   if (calendar.length) {
     results.append(
       h("h2", {}, "Calendar"),

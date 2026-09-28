@@ -21,6 +21,7 @@ export const UPLOAD_COMMANDS = [
         const mailboxId = yield* mailbox;
         const api = yield* CliApi;
         const bytes = new Uint8Array(yield* Effect.promise(() => readFile(file)));
+
         const reserved = (yield* post("/v1/uploads", {
           mailboxId,
           commandId: yield* commandId,
@@ -28,6 +29,7 @@ export const UPLOAD_COMMANDS = [
           contentType: type ?? "application/octet-stream",
           declaredSize: bytes.byteLength,
         })) as { uploadId: string; partSize: number };
+
         for (
           let offset = 0, part = 1;
           offset < bytes.byteLength;
@@ -39,6 +41,7 @@ export const UPLOAD_COMMANDS = [
             { mailbox: mailboxId },
           );
         }
+
         return yield* post(`/v1/uploads/${encodeURIComponent(reserved.uploadId)}/complete`, {
           mailboxId,
           commandId: yield* commandId,

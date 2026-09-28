@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ControlAuth,
@@ -17,6 +18,9 @@ import {
   makeHarness,
   rfc822,
   enablePersonalMail,
+  executionContext,
+  mockAs,
+  type JsonRecord,
 } from "./harness.ts";
 import { blobKey } from "@bye/application";
 import { bodyKeyFor } from "../src/objects.ts";
@@ -29,10 +33,7 @@ import { bodyKeyFor } from "../src/objects.ts";
   }
 };
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 interface Account {
   readonly userId: string;
@@ -44,12 +45,15 @@ interface Account {
 
 const signup = async (h: Harness, address: string): Promise<Account> => {
   const directory = new ControlDirectory(h.env.DIRECTORY, kernelClock);
+
   const account = await directory.provisionPersonalAccount({
     address,
     displayName: address.split("@")[0]!,
   });
+
   const auth = new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env));
   const session = await auth.issueSession(account.userId, "test", true);
+
   return { ...account, cookie: `__Host-session=${session.token}` };
 };
 
@@ -60,27 +64,31 @@ const call = async (
   url: string,
   init: { body?: BodyInit; json?: unknown; headers?: Record<string, string> } = {},
 ) => {
+  const hdrs = new Headers();
+
+  if (account) hdrs.set("cookie", account.cookie);
+
+  if (method !== "GET") hdrs.set("origin", h.env.APP_ORIGIN);
+
+  if (init.json !== undefined) hdrs.set("content-type", "application/json");
+
+  for (const [k, v] of Object.entries(init.headers ?? {})) hdrs.set(k, v);
+
+  const requestInit: RequestInit = { method, headers: hdrs };
+
+  if (init.json !== undefined) requestInit.body = JSON.stringify(init.json);
+  else if (init.body !== undefined) requestInit.body = init.body;
+
   const response = await handleFetch(
-    new Request(url.startsWith("http") ? url : `${h.env.APP_ORIGIN}${url}`, {
-      method,
-      headers: {
-        ...(account ? { cookie: account.cookie } : {}),
-        ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-        ...(init.json !== undefined ? { "content-type": "application/json" } : {}),
-        ...init.headers,
-      },
-      ...(init.json !== undefined
-        ? { body: JSON.stringify(init.json) }
-        : init.body !== undefined
-          ? { body: init.body }
-          : {}),
-    }),
+    new Request(url.startsWith("http") ? url : `${h.env.APP_ORIGIN}${url}`, requestInit),
     h.env,
     ctx,
   );
+
   const type = response.headers.get("content-type") ?? "";
   const bytes = new Uint8Array(await response.arrayBuffer());
   const text = new TextDecoder().decode(bytes);
+
   return {
     status: response.status,
     headers: response.headers,
@@ -91,9 +99,10 @@ const call = async (
 };
 
 let n = 0;
+
 const cmdId = () => `cmd_${(++n).toString(36).padStart(20, "0")}`;
 
-const command = (h: Harness, a: Account, body: Record<string, unknown>) =>
+const command = (h: Harness, a: Account, body: JsonRecord) =>
   call(h, a, "POST", `/v1/mailboxes/${a.mailboxId}/commands`, {
     json: { commandId: cmdId(), ...body },
   });
@@ -109,6 +118,7 @@ const allowDomain = (h: Harness, a: Account, domain: string) =>
 const deliver = async (h: Harness, raw: string, from: string, to: string) => {
   const outcome = await handleInbound(inboundMessage(from, to, raw), h.env);
   await h.drain();
+
   return outcome;
 };
 
@@ -157,6 +167,7 @@ describe("mail gap routes", () => {
     const bad = await call(h, ana, "POST", "/v1/drafts", {
       json: { mailboxId: ana.mailboxId, content: { subject: "no command id" } },
     });
+
     expect(bad.status).toBe(400);
     expect(bad.body.error.message).toMatch(/invalid request body/);
     expect(
@@ -192,6 +203,7 @@ describe("mail gap routes", () => {
       expect(r.status, path).toBe(200);
       expect(Array.isArray(r.body.items), path).toBe(true);
     }
+
     // A refusal inside the authority (unknown board) is the public not_found, not a 500.
     expect(
       (await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/workflows/brd_missing`)).status,
@@ -211,9 +223,11 @@ describe("mail gap routes", () => {
         declaredSize: 11,
       },
     });
+
     expect(reserve.status).toBe(201);
     const { uploadId, partSize } = reserve.body;
     expect(partSize).toBeGreaterThan(0);
+
     const part = await call(
       h,
       ana,
@@ -221,10 +235,13 @@ describe("mail gap routes", () => {
       `/v1/uploads/${uploadId}/parts/1?mailbox=${ana.mailboxId}`,
       { body: "hello world", headers: { "content-length": "11" } },
     );
+
     expect(part.status).toBe(200);
+
     const done = await call(h, ana, "POST", `/v1/uploads/${uploadId}/complete`, {
       json: { mailboxId: ana.mailboxId, commandId: cmdId() },
     });
+
     expect(done.status).toBe(200);
     expect(done.body).toMatchObject({ state: "complete", actualSize: 11 });
     await h.drain();
@@ -263,15 +280,18 @@ describe("mail gap routes", () => {
         declaredSize: 4,
       },
     });
+
     const { uploadId } = reserve.body;
     // The declared part length fits, but the stored bytes are what count.
     await call(h, ana, "PUT", `/v1/uploads/${uploadId}/parts/1?mailbox=${ana.mailboxId}`, {
       body: "123456789",
       headers: { "content-length": "4" },
     });
+
     const done = await call(h, ana, "POST", `/v1/uploads/${uploadId}/complete`, {
       json: { mailboxId: ana.mailboxId, commandId: cmdId() },
     });
+
     expect(done.body).toMatchObject({ state: "failed", actualSize: 9 });
   });
 
@@ -302,6 +322,7 @@ describe("mail gap routes", () => {
         })),
       },
     });
+
     expect(zip.status).toBe(200);
     expect(zip.headers.get("content-type")).toBe("application/zip");
     expect(new DataView(zip.bytes.buffer).getUint32(0, true)).toBe(0x04034b50);
@@ -309,12 +330,14 @@ describe("mail gap routes", () => {
     expect(zip.text).toContain("notes (2).txt");
 
     const a0 = lib.body.items[0] as { deliveryId: string; partId: string };
+
     const preview = await call(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/deliveries/${a0.deliveryId}/attachments/${encodeURIComponent(a0.partId)}/preview`,
     );
+
     expect(preview.status).toBe(200);
     expect(preview.body.previewUrl.startsWith(h.env.MAIL_ORIGIN)).toBe(true);
     const rendered = await call(h, null, "GET", preview.body.previewUrl);
@@ -335,14 +358,17 @@ describe("mail gap routes", () => {
   it("[E21] a read-only credential can search but never writes the recent-search history", async () => {
     const auth = new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env));
     const session = await auth.issueSession(ana.userId, "t", true);
+
     const agent = await auth.createApiToken(session.session.user_id, {
       kind: "agent",
       label: "ro",
       scopes: ["read"],
     });
+
     const hits = await call(h, null, "GET", `/v1/mailboxes/${ana.mailboxId}/search?q=zanzibar`, {
       headers: { authorization: `Bearer ${agent.token}` },
     });
+
     expect(hits.status).toBe(200);
     const recent = await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/searches/recent`);
     expect(recent.body.items).not.toContain("zanzibar");
@@ -366,13 +392,14 @@ describe("mail gap routes", () => {
     expect(hits.status).toBe(200);
     expect(hits.body.results).toHaveLength(1);
     expect(hits.body).toMatchObject({ lagging: false });
-    expect(typeof hits.body.watermark).toBe("number");
+    expect(Predicate.isNumber(hits.body.watermark)).toBe(true);
     const recent = await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/searches/recent`);
     expect(recent.body.items).toContain("zanzibar");
 
     // Trash is reindexed and excluded from default search; `in:trash` finds it (P0 #3).
     const thread = (await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`)).body
       .items[0];
+
     await command(h, ana, { _tag: "MoveToTrash", threadIds: [thread.threadId] });
     await h.drain();
     expect(
@@ -403,27 +430,33 @@ describe("mail gap routes", () => {
       "END:VCARD",
       "",
     ].join("\r\n");
+
     const imported = await call(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/contacts/import`, {
       body: vcf,
       headers: { "content-type": "text/vcard", "idempotency-key": cmdId() },
     });
+
     expect(imported.status).toBe(200);
     expect(imported.body).toMatchObject({ imported: 1 });
     const search = await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/contacts?q=carol`);
     expect(search.body.items).toHaveLength(1);
+
     const suggest = await call(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/contacts/suggest?prefix=car`,
     );
+
     expect(suggest.status).toBe(200);
+
     const exported = await call(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/contacts/export.vcf`,
     );
+
     expect(exported.status).toBe(200);
     expect(exported.headers.get("content-type")).toContain("text/vcard");
     expect(exported.text).toContain("carol@example.org");
@@ -472,6 +505,7 @@ describe("mail gap routes", () => {
     expect(labels.body.items.map((l: { name: string }) => l.name)).toContain("Work");
 
     await command(h, ana, { _tag: "AddIdentity", address: "ana@bye.test", kind: "hosted" });
+
     const draft = await call(h, ana, "POST", "/v1/drafts", {
       json: {
         mailboxId: ana.mailboxId,
@@ -486,6 +520,7 @@ describe("mail gap routes", () => {
         },
       },
     });
+
     const send = await call(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
       json: {
         mailboxId: ana.mailboxId,
@@ -494,6 +529,7 @@ describe("mail gap routes", () => {
         afterSend: { _tag: "MarkDone" },
       },
     });
+
     expect(send.status).toBe(202);
     const jobId = send.body.sendJobIds[0];
     const job = await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/send-jobs/${jobId}`);
@@ -525,9 +561,11 @@ describe("mail gap routes", () => {
         "END:VCALENDAR",
         "",
       ].join("\r\n");
-    const calendar = h.namespaces.CALENDARS.instance(ana.calendarId) as unknown as {
+
+    const calendar = h.namespaces.CALENDARS.instance(ana.calendarId) as {
       isOrganizerOf: (uid: string) => boolean;
     };
+
     const asked: Array<string> = [];
     calendar.isOrganizerOf = (uid: string) => (asked.push(uid), uid === "evt-ours");
     await deliver(
@@ -558,14 +596,16 @@ describe("mail gap routes", () => {
 
   it("[C04] outbound iTIP jobs commit with their receipt: a failure part-way leaves nothing behind", async () => {
     const cal = await signup(h, "cal@bye.test");
-    const mailbox = h.namespaces.MAILBOXES.instance(cal.mailboxId) as unknown as Pick<
-      MailboxDO,
-      "sendCalendarMessage"
-    > & { store: MailboxStore };
+
+    const mailbox = mockAs<Pick<MailboxDO, "sendCalendarMessage"> & { store: MailboxStore }>(
+      h.namespaces.MAILBOXES.instance(cal.mailboxId),
+    );
+
     const sends = mailbox.store.sends;
     mailbox.store.ctx.sql.tx(() =>
       mailbox.store.identities.addIdentity({ address: "cal@bye.test", kind: "hosted" }),
     );
+
     const input = {
       eventKey: "evt-1:1",
       method: "REQUEST",
@@ -574,19 +614,22 @@ describe("mail gap routes", () => {
       from: "cal@bye.test",
       subject: "Invitation",
     };
+
     const before = sends.jobs().length;
     const real = sends.createSystemJob.bind(sends);
     let calls = 0;
     sends.createSystemJob = (job) => {
       if (++calls === 2) throw new Error("storage hiccup");
+
       return real(job);
     };
+
     expect(() => mailbox.sendCalendarMessage(input)).toThrow("storage hiccup");
     expect(sends.jobs()).toHaveLength(before);
     sends.createSystemJob = real;
     const first = mailbox.sendCalendarMessage(input);
     expect(first).toHaveLength(2);
-    expect(first.every((id) => typeof id === "string")).toBe(true);
+    expect(first.every((id) => Predicate.isString(id))).toBe(true);
     expect(mailbox.sendCalendarMessage(input)).toEqual(first);
     expect(sends.jobs()).toHaveLength(before + 2);
   });
@@ -598,6 +641,7 @@ describe("signed attachment download links", () => {
     vi.setSystemTime(Date.UTC(2026, 8, 25, 12));
     const h = makeHarness();
     const ana = await signup(h, "ana@bye.test");
+
     const raw = [
       "Authentication-Results: mx.cloudflare.net; spf=pass; dkim=pass; dmarc=pass",
       "From: bob@example.net",
@@ -620,17 +664,22 @@ describe("signed attachment download links", () => {
       "--b1--",
       "",
     ].join("\r\n");
+
     await handleInbound(inboundMessage("bob@example.net", "ana@bye.test", raw), h.env);
     await h.drain();
+
     const thread = (await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/screener`)).body
       .items[0];
+
     const detail = await call(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${thread.threadId}`,
     );
+
     const d = detail.body.deliveries[0];
+
     const link = await call(
       h,
       ana,
@@ -638,13 +687,16 @@ describe("signed attachment download links", () => {
       `/v1/mailboxes/${ana.mailboxId}/deliveries/${d.deliveryId}/attachments/${d.attachments[0].partId}/link`,
       { json: {} },
     );
+
     expect(link.status).toBe(200);
     expect(link.body.downloadUrl.startsWith(h.env.MAIL_ORIGIN)).toBe(true);
+
     const file = await handleFetch(
       new Request(link.body.downloadUrl),
       h.env,
       {} as ExecutionContext,
     );
+
     expect(file.status).toBe(200);
     expect(file.headers.get("content-disposition")).toContain("numbers.txt");
     expect((await file.text()).trim()).toBe("42");
@@ -679,10 +731,8 @@ describe("quota includes derived storage", () => {
     }
   };
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
+
   let n = 0;
   const cmdId = () => `cmd_oc_${(++n).toString(36).padStart(16, "0")}`;
 
@@ -700,20 +750,24 @@ describe("quota includes derived storage", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     await h.env.CALENDARS.getByName(account.calendarId).provision({
       ownerId: account.userId,
       selfAddresses: [address],
       defaultZone: "UTC",
     });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -724,28 +778,35 @@ describe("quota includes derived storage", () => {
     };
   };
 
-  const call = async (
+  const call = async <JsonValue>(
     h: Harness,
     a: Account | null,
     method: string,
     path: string,
-    json?: unknown,
+    json?: JsonValue,
     headers: Record<string, string> = {},
   ) => {
+    const requestHeaders = new Headers();
+
+    if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(headers ?? {})) requestHeaders.set(k, v);
+
     const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(json !== undefined ? { "content-type": "application/json" } : {}),
-          ...headers,
-        },
-        ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
-      }),
+      new Request(
+        `${h.env.APP_ORIGIN}${path}`,
+        json !== undefined
+          ? { method, headers: requestHeaders, body: JSON.stringify(json) }
+          : { method, headers: requestHeaders },
+      ),
       h.env,
       ctx,
     );
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
@@ -761,9 +822,11 @@ describe("quota includes derived storage", () => {
 
   it("[§12] the quota counts extracted parts, bodies and the owner's exports", async () => {
     const ana = await signup(h, "ana@bye.test");
-    const instance = h.namespaces.MAILBOXES.instance(ana.mailboxId) as unknown as {
-      store: { uploads: { setQuota(n: number): void } };
-    };
+
+    const instance = mockAs<{ store: { uploads: { setQuota(n: number): void } } }>(
+      h.namespaces.MAILBOXES.instance(ana.mailboxId),
+    );
+
     instance.store.uploads.setQuota(10_000);
     const now = Date.now();
     await h.d1
@@ -774,6 +837,7 @@ describe("quota includes derived storage", () => {
       .run();
     const quota = await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/quota`);
     expect(quota.body).toMatchObject({ limitBytes: 10_000, usedBytes: 9500 });
+
     const tooBig = await call(h, ana, "POST", "/v1/uploads", {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
@@ -781,7 +845,9 @@ describe("quota includes derived storage", () => {
       contentType: "application/octet-stream",
       declaredSize: 600,
     });
+
     expect(tooBig.status).toBe(413);
+
     const fits = await call(h, ana, "POST", "/v1/uploads", {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
@@ -789,15 +855,14 @@ describe("quota includes derived storage", () => {
       contentType: "application/octet-stream",
       declaredSize: 400,
     });
+
     expect(fits.status).toBe(201);
   });
 });
 
 describe("sending policy at dispatch", () => {
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
+
   let n = 0;
   const cmdId = () => `cmd_rv_${(++n).toString(36).padStart(16, "0")}`;
 
@@ -810,10 +875,12 @@ describe("sending policy at dispatch", () => {
   it("[§10] suppressed recipients are removed from the envelope while the rest still receive the message", async () => {
     const h = makeHarness();
     enablePersonalMail(h);
+
     const account = await new ControlDirectory(
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address: "ana@bye.test", displayName: "Ana" });
+
     const token = (
       await new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env)).issueSession(
         account.userId,
@@ -821,22 +888,28 @@ describe("sending policy at dispatch", () => {
         true,
       )
     ).token;
-    const api = async (method: string, path: string, body?: unknown) => {
+
+    const api = async <BodyValue>(method: string, path: string, body?: BodyValue) => {
+      const requestHeaders = new Headers({
+        cookie: `__Host-session=${token}`,
+        origin: h.env.APP_ORIGIN,
+        "content-type": "application/json",
+      });
+
       const r = await handleFetch(
-        new Request(`${h.env.APP_ORIGIN}${path}`, {
-          method,
-          headers: {
-            cookie: `__Host-session=${token}`,
-            origin: h.env.APP_ORIGIN,
-            "content-type": "application/json",
-          },
-          ...(body ? { body: JSON.stringify(body) } : {}),
-        }),
+        new Request(
+          `${h.env.APP_ORIGIN}${path}`,
+          body
+            ? { method, headers: requestHeaders, body: JSON.stringify(body) }
+            : { method, headers: requestHeaders },
+        ),
         h.env,
         ctx,
       );
+
       return { status: r.status, body: (await r.json().catch(() => null)) as any };
     };
+
     await new SendingPolicy(h.env.DIRECTORY, kernelClock).suppress(
       "bob@example.net",
       "manual",
@@ -848,6 +921,7 @@ describe("sending policy at dispatch", () => {
       address: "ana@bye.test",
       kind: "hosted",
     });
+
     const draft = await api("POST", "/v1/drafts", {
       mailboxId: account.mailboxId,
       commandId: cmdId(),
@@ -860,30 +934,32 @@ describe("sending policy at dispatch", () => {
         attachments: [],
       },
     });
+
     const sent = await api("POST", `/v1/drafts/${draft.body.draftId}/send`, {
       mailboxId: account.mailboxId,
       commandId: cmdId(),
       revision: draft.body.revision,
     });
+
     const before = h.sent.length;
     vi.setSystemTime(Date.now() + 60_000);
     await h.namespaces.MAILBOXES.instance(account.mailboxId).alarm();
     await h.drain();
     // One send per envelope recipient: only alice is on the envelope.
     expect(h.sent.slice(before).map((m) => m.to)).toEqual(["alice@example.net"]);
+
     const job = await h.namespaces.MAILBOXES.instance(account.mailboxId).sendJob(
       sent.body.sendJobIds[0],
     );
+
     expect(job?.state).toBe("accepted");
     expect(job?.outcomes.find((o) => o.address === "bob@example.net")?.outcome).toBe("rejected");
   });
 });
 
 describe("quota accounting", () => {
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
+
   let n = 0;
   const cmdId = () => `cmd_r5_${(++n).toString(36).padStart(16, "0")}`;
 
@@ -899,16 +975,19 @@ describe("quota accounting", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     await h.env.CALENDARS.getByName(account.calendarId).provision({
       ownerId: account.userId,
       selfAddresses: [address],
       defaultZone: "UTC",
     });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -924,24 +1003,23 @@ describe("quota accounting", () => {
     path: string,
     init: { json?: unknown; body?: BodyInit; headers?: Record<string, string> } = {},
   ) => {
-    const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(init.json !== undefined ? { "content-type": "application/json" } : {}),
-          ...init.headers,
-        },
-        ...(init.json !== undefined
-          ? { body: JSON.stringify(init.json) }
-          : init.body !== undefined
-            ? { body: init.body }
-            : {}),
-      }),
-      h.env,
-      ctx,
-    );
+    const requestHeaders = new Headers();
+
+    if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (init.json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(init.headers ?? {})) requestHeaders.set(k, v);
+
+    const requestInit: RequestInit = { method, headers: requestHeaders };
+
+    if (init.json !== undefined) requestInit.body = JSON.stringify(init.json);
+    else if (init.body !== undefined) requestInit.body = init.body;
+
+    const r = await handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, requestInit), h.env, ctx);
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
@@ -956,6 +1034,7 @@ describe("quota accounting", () => {
   it("[§12] a D1 error refreshing storage usage doesn't fail uploads or the quota read", async () => {
     const ana = await signup(h, "ana@bye.test");
     await h.d1.prepare("DROP TABLE storage_usage").run();
+
     const reserve = await call(h, ana, "POST", "/v1/uploads", {
       json: {
         mailboxId: ana.mailboxId,
@@ -965,16 +1044,19 @@ describe("quota accounting", () => {
         declaredSize: 3,
       },
     });
+
     expect(reserve.status).toBe(201);
     expect((await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/quota`)).status).toBe(200);
   });
 
   it("[§12] a user's exports count against one mailbox's quota, not every mailbox they own", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const org = (await h.d1
       .prepare("SELECT org_id FROM mailboxes WHERE id = ?")
       .bind(ana.mailboxId)
       .first<{ org_id: string }>())!.org_id;
+
     await h.d1
       .prepare(
         "INSERT INTO mailboxes (id, org_id, owner_user_id, kind, created_at) VALUES ('mbx_second', ?, ?, 'personal', ?)",
@@ -993,8 +1075,10 @@ describe("quota accounting", () => {
       )
       .bind(ana.userId, Date.now())
       .run();
+
     const used = async (mailboxId: string) =>
       (await call(h, ana, "GET", `/v1/mailboxes/${mailboxId}/quota`)).body.usedBytes as number;
+
     expect(await used(ana.mailboxId)).toBeGreaterThanOrEqual(3000000);
     expect(await used("mbx_second")).toBeLessThan(3000000);
   });
@@ -1009,10 +1093,8 @@ describe("outbound mail and delivery rules", () => {
     }
   };
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
+
   let n = 0;
   const cmdId = () => `cmd_xh_${(++n).toString(36).padStart(16, "0")}`;
 
@@ -1028,15 +1110,18 @@ describe("outbound mail and delivery rules", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -1052,28 +1137,27 @@ describe("outbound mail and delivery rules", () => {
     path: string,
     init: { json?: unknown; body?: BodyInit; headers?: Record<string, string> } = {},
   ) => {
-    const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(init.json !== undefined ? { "content-type": "application/json" } : {}),
-          ...init.headers,
-        },
-        ...(init.json !== undefined
-          ? { body: JSON.stringify(init.json) }
-          : init.body !== undefined
-            ? { body: init.body }
-            : {}),
-      }),
-      h.env,
-      ctx,
-    );
+    const requestHeaders = new Headers();
+
+    if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (init.json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(init.headers ?? {})) requestHeaders.set(k, v);
+
+    const requestInit: RequestInit = { method, headers: requestHeaders };
+
+    if (init.json !== undefined) requestInit.body = JSON.stringify(init.json);
+    else if (init.body !== undefined) requestInit.body = init.body;
+
+    const r = await handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, requestInit), h.env, ctx);
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
-  const command = (h: Harness, a: Account, body: Record<string, unknown>) =>
+  const command = (h: Harness, a: Account, body: JsonRecord) =>
     call(h, a, "POST", `/v1/mailboxes/${a.mailboxId}/commands`, {
       json: { commandId: cmdId(), ...body },
     });
@@ -1085,6 +1169,7 @@ describe("outbound mail and delivery rules", () => {
     vi.setSystemTime(Date.now() + 60_000);
     await h.namespaces.MAILBOXES.instance(mailboxId).alarm();
     await h.drain();
+
     return h.sent.slice(before).map((m) => m.raw);
   };
 
@@ -1100,6 +1185,7 @@ describe("outbound mail and delivery rules", () => {
   it("[E20] sent mail stores its normalized body and sends composer cid: images as inline parts", async () => {
     const ana = await signup(h, "ana@bye.test");
     await command(h, ana, { _tag: "AddIdentity", address: "ana@bye.test", kind: "hosted" });
+
     const upload = async (filename: string, contentType: string, content: string) => {
       const reserve = await call(h, ana, "POST", "/v1/uploads", {
         json: {
@@ -1110,6 +1196,7 @@ describe("outbound mail and delivery rules", () => {
           declaredSize: content.length,
         },
       });
+
       const { uploadId } = reserve.body;
       await call(h, ana, "PUT", `/v1/uploads/${uploadId}/parts/1?mailbox=${ana.mailboxId}`, {
         body: content,
@@ -1118,16 +1205,20 @@ describe("outbound mail and delivery rules", () => {
       await call(h, ana, "POST", `/v1/uploads/${uploadId}/complete`, {
         json: { mailboxId: ana.mailboxId, commandId: cmdId() },
       });
+
       return uploadId as string;
     };
+
     const image = await upload("dot.png", "image/png", "PNG-bytes");
     const doc = await upload("notes.txt", "text/plain", "plain notes");
     await h.drain();
+
     // Raw-body writes (upload parts) are audited like every other API write (X02).
     const audited = await h.d1
       .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'api.put' AND actor_id = ?")
       .bind(ana.userId)
       .first<{ n: number }>();
+
     expect(audited?.n).toBe(2);
 
     const draft = await call(h, ana, "POST", "/v1/drafts", {
@@ -1145,15 +1236,18 @@ describe("outbound mail and delivery rules", () => {
         },
       },
     });
+
     const sent = await call(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
       json: { mailboxId: ana.mailboxId, commandId: cmdId(), revision: draft.body.revision },
     });
+
     expect(sent.status).toBe(202);
     expect(await dispatch(h, ana.mailboxId)).toHaveLength(1);
 
     const job = await h.namespaces.MAILBOXES.instance(ana.mailboxId).sendJob(
       sent.body.sendJobIds[0],
     );
+
     expect(job?.state).toBe("accepted");
     const mime = new TextDecoder().decode(h.buckets.ORIGINALS.objects.get(job!.contentKey)!.bytes);
     expect(mime).toContain("multipart/related");
@@ -1164,6 +1258,7 @@ describe("outbound mail and delivery rules", () => {
     const body = JSON.parse(
       new TextDecoder().decode(h.buckets.PARTS.objects.get(bodyKeyFor(job!.contentKey))!.bytes),
     ) as { text: string; html: string | null };
+
     expect(body.text).toContain("see picture");
     expect((body as { inline?: Record<string, string> }).inline).toEqual({
       [image]: blobKey.upload(ana.mailboxId, image),
@@ -1181,10 +1276,12 @@ describe("outbound mail and delivery rules", () => {
       "usr_operator",
     );
     const before = h.sent.length;
+
     const added = await command(h, ana, {
       _tag: "AddForwardingDestination",
       address: "victim@example.net",
     });
+
     expect(added.status).toBe(200);
     const submitted = await dispatch(h, ana.mailboxId);
     expect(submitted).toEqual([]);
@@ -1193,18 +1290,20 @@ describe("outbound mail and delivery rules", () => {
 
   it("[E23] an invalid quiet-hours zone is refused, and a bad stored zone never blocks delivery", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const bad = await command(h, ana, {
       _tag: "SetNotificationSettings",
       quietHours: { start: "22:00", end: "07:00", timeZone: "Mars/Olympus" },
       devices: {},
     });
+
     expect(bad.status).toBe(400);
+
     // Simulate a value stored before validation existed.
-    const store = (
-      h.namespaces.MAILBOXES.instance(ana.mailboxId) as unknown as {
-        store: { ctx: { putSetting(k: string, v: unknown): void } };
-      }
+    const store = mockAs<{ store: { ctx: { putSetting<VValue>(k: string, v: VValue): void } } }>(
+      h.namespaces.MAILBOXES.instance(ana.mailboxId),
     ).store;
+
     store.ctx.putSetting("notifications", {
       quietHours: { start: "22:00", end: "07:00", timeZone: "Mars/Olympus" },
       devices: {},
@@ -1242,12 +1341,14 @@ describe("outbound mail and delivery rules", () => {
 
   it("[E12] screened mail is never enrolled on a workflow board by address", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const board = await command(h, ana, {
       _tag: "CreateBoard",
       name: "Hiring",
       stages: ["New"],
       enrollAddress: "ana@bye.test",
     });
+
     expect(board.status).toBe(200);
     // Unknown sender → Screener.
     await handleInbound(
@@ -1265,9 +1366,11 @@ describe("outbound mail and delivery rules", () => {
       h.env,
     );
     await h.drain();
-    const cards = h.namespaces.MAILBOXES.instance(ana.mailboxId) as unknown as {
-      store: { ctx: { sql: { all<T>(q: string): Array<T> } } };
-    };
+
+    const cards = mockAs<{ store: { ctx: { sql: { all<T>(q: string): Array<T> } } } }>(
+      h.namespaces.MAILBOXES.instance(ana.mailboxId),
+    );
+
     expect(
       cards.store.ctx.sql.all<{ thread_id: string }>("SELECT thread_id FROM workflow_cards"),
     ).toEqual([]);
@@ -1283,10 +1386,8 @@ describe("message rendering, search and redelivery", () => {
     }
   };
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
+
   let n = 0;
   const cmdId = () => `cmd_xh_${(++n).toString(36).padStart(16, "0")}`;
 
@@ -1302,15 +1403,18 @@ describe("message rendering, search and redelivery", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -1326,28 +1430,27 @@ describe("message rendering, search and redelivery", () => {
     path: string,
     init: { json?: unknown; body?: BodyInit; headers?: Record<string, string> } = {},
   ) => {
-    const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(init.json !== undefined ? { "content-type": "application/json" } : {}),
-          ...init.headers,
-        },
-        ...(init.json !== undefined
-          ? { body: JSON.stringify(init.json) }
-          : init.body !== undefined
-            ? { body: init.body }
-            : {}),
-      }),
-      h.env,
-      ctx,
-    );
+    const requestHeaders = new Headers();
+
+    if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (init.json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(init.headers ?? {})) requestHeaders.set(k, v);
+
+    const requestInit: RequestInit = { method, headers: requestHeaders };
+
+    if (init.json !== undefined) requestInit.body = JSON.stringify(init.json);
+    else if (init.body !== undefined) requestInit.body = init.body;
+
+    const r = await handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, requestInit), h.env, ctx);
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
-  const command = (h: Harness, a: Account, body: Record<string, unknown>) =>
+  const command = (h: Harness, a: Account, body: JsonRecord) =>
     call(h, a, "POST", `/v1/mailboxes/${a.mailboxId}/commands`, {
       json: { commandId: cmdId(), ...body },
     });
@@ -1365,6 +1468,7 @@ describe("message rendering, search and redelivery", () => {
   const PNG_B64 = btoa(
     String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4),
   );
+
   const newsletter = (messageId: string) =>
     [
       "Authentication-Results: mx.cloudflare.net; spf=pass; dkim=pass; dmarc=pass",
@@ -1393,12 +1497,14 @@ describe("message rendering, search and redelivery", () => {
 
   const renderDoc = async (ana: Account) => {
     const imbox = await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`);
+
     const thread = await call(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${imbox.body.items[0].threadId}`,
     );
+
     return (await handleFetch(new Request(thread.body.deliveries[0].renderUrl), h.env, ctx)).text();
   };
 
@@ -1464,12 +1570,14 @@ describe("message rendering, search and redelivery", () => {
     );
     await h.drain();
     const imbox = await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`);
+
     const thread = await call(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${imbox.body.items[0].threadId}`,
     );
+
     const deliveryId = thread.body.deliveries[0].deliveryId;
     const path = `/v1/mailboxes/${ana.mailboxId}/deliveries/${deliveryId}/text`;
     const text = await call(h, ana, "GET", path);
@@ -1487,6 +1595,7 @@ describe("message rendering, search and redelivery", () => {
       (await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/deliveries/dlv_missing/text`))
         .status,
     ).toBe(404);
+
     // A purged body is reported, not shown as an empty message.
     for (const key of h.buckets.PARTS.objects.keys())
       if (key.includes("/body/")) h.buckets.PARTS.objects.delete(key);
@@ -1516,12 +1625,14 @@ describe("message rendering, search and redelivery", () => {
     );
     await h.drain();
     const imbox = await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`);
+
     const thread = await call(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${imbox.body.items[0].threadId}`,
     );
+
     const probe = async (deliveryId: string) =>
       call(h, bob, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
         json: {
@@ -1532,6 +1643,7 @@ describe("message rendering, search and redelivery", () => {
           mode: "copy",
         },
       });
+
     const real = await probe(thread.body.deliveries[0].deliveryId);
     const fake = await probe("dlv_does_not_exist");
     expect(real.status).toBe(403);
@@ -1550,10 +1662,12 @@ describe("message rendering, search and redelivery", () => {
       date,
       version: 1,
     });
+
     const pages = [
       { candidates: [c("a", 3), c("b", 2)], nextCursor: null, watermark: 1 },
       { candidates: [c("a", 3), c("c", 1)], nextCursor: null, watermark: 1 },
     ];
+
     const page = await authorizeSearchResults(pages, async (cs) => cs.map((x) => x.docId), 2);
     expect(page.results).toEqual(["a", "b"]);
     expect(page.last?.docId).toBe("b");
@@ -1570,10 +1684,8 @@ describe("unified view, uploads and threading", () => {
     }
   };
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
+
   let n = 0;
   const cmdId = () => `cmd_xh_${(++n).toString(36).padStart(16, "0")}`;
 
@@ -1589,15 +1701,18 @@ describe("unified view, uploads and threading", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -1613,24 +1728,23 @@ describe("unified view, uploads and threading", () => {
     path: string,
     init: { json?: unknown; body?: BodyInit; headers?: Record<string, string> } = {},
   ) => {
-    const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(init.json !== undefined ? { "content-type": "application/json" } : {}),
-          ...init.headers,
-        },
-        ...(init.json !== undefined
-          ? { body: JSON.stringify(init.json) }
-          : init.body !== undefined
-            ? { body: init.body }
-            : {}),
-      }),
-      h.env,
-      ctx,
-    );
+    const requestHeaders = new Headers();
+
+    if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (init.json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(init.headers ?? {})) requestHeaders.set(k, v);
+
+    const requestInit: RequestInit = { method, headers: requestHeaders };
+
+    if (init.json !== undefined) requestInit.body = JSON.stringify(init.json);
+    else if (init.body !== undefined) requestInit.body = init.body;
+
+    const r = await handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, requestInit), h.env, ctx);
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
@@ -1660,6 +1774,7 @@ describe("unified view, uploads and threading", () => {
         },
       },
     });
+
   const receive = async (
     from: string,
     to: string,
@@ -1673,19 +1788,23 @@ describe("unified view, uploads and threading", () => {
       subject,
       body: "hi",
       messageId,
-      ...(extra ? { extraHeaders: extra } : {}),
+      extraHeaders: extra,
     });
+
     const outcome = await handleInbound(inboundMessage(from, to, raw), h.env);
     await h.drain();
+
     return outcome;
   };
 
   it("[E19] the unified view returns exactly `limit` items per page, newest first across mailboxes, without skipping", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const org = (await h.d1
       .prepare("SELECT org_id FROM mailboxes WHERE id = ?")
       .bind(ana.mailboxId)
       .first<{ org_id: string }>())!.org_id;
+
     await h.d1
       .prepare(
         "INSERT INTO mailboxes (id, org_id, owner_user_id, kind, created_at) VALUES ('mbx_team', ?, NULL, 'extension', ?)",
@@ -1708,6 +1827,7 @@ describe("unified view, uploads and threading", () => {
     await allow(ana, "mbx_team");
     const day = 86400_000;
     const start = Date.now();
+
     for (const [i, to] of [
       [1, "ana@bye.test"],
       [2, "ana@bye.test"],
@@ -1719,8 +1839,10 @@ describe("unified view, uploads and threading", () => {
       vi.setSystemTime(start + i * day);
       await receive("news@example.net", to, `Day ${i}`, `d${i}@example.net`);
     }
+
     const seen: Array<string> = [];
     let cursor: string | null = null;
+
     for (let pageNo = 0; pageNo < 5; pageNo++) {
       const page: { status: number; body: any } = await call(
         h,
@@ -1728,17 +1850,21 @@ describe("unified view, uploads and threading", () => {
         "GET",
         `/v1/unified/views/imbox?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
       );
+
       expect(page.status).toBe(200);
       expect(page.body.items.length).toBeLessThanOrEqual(2);
       seen.push(...page.body.items.map((i: { thread: { subject: string } }) => i.thread.subject));
       cursor = page.body.cursor;
+
       if (!cursor) break;
     }
+
     expect(seen).toEqual(["Day 12", "Day 11", "Day 10", "Day 3", "Day 2", "Day 1"]);
   });
 
   it("[E20] empty files upload and complete", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const reserve = await call(h, ana, "POST", "/v1/uploads", {
       json: {
         mailboxId: ana.mailboxId,
@@ -1748,10 +1874,13 @@ describe("unified view, uploads and threading", () => {
         declaredSize: 0,
       },
     });
+
     expect(reserve.status).toBe(201);
+
     const done = await call(h, ana, "POST", `/v1/uploads/${reserve.body.uploadId}/complete`, {
       json: { mailboxId: ana.mailboxId, commandId: cmdId() },
     });
+
     expect(done.status).toBe(200);
     expect(done.body).toMatchObject({ state: "complete", actualSize: 0 });
   });
@@ -1777,6 +1906,7 @@ describe("unified view, uploads and threading", () => {
     const imbox = await call(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`);
     const threads = imbox.body.items as Array<{ threadId: string; subject: string }>;
     expect(threads).toHaveLength(2);
+
     const counts = await Promise.all(
       threads.map(async (t) =>
         (
@@ -1784,6 +1914,7 @@ describe("unified view, uploads and threading", () => {
         ).body.deliveries.map((d: { from: { address: string } }) => d.from.address),
       ),
     );
+
     expect(counts.map((c: Array<string>) => c.sort().join(",")).sort()).toEqual([
       "bob@example.net,bob@example.net",
       "carol@example.net",

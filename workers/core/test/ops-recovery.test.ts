@@ -23,7 +23,15 @@ import {
   reportMetadataHealth,
   SHARDS_PER_RUN,
 } from "../src/scheduled.ts";
-import { type Harness, makeHarness, inboundMessage, rfc822 } from "./harness.ts";
+import {
+  type Harness,
+  makeHarness,
+  inboundMessage,
+  rfc822,
+  executionContext,
+  mockAs,
+  type StepResult,
+} from "./harness.ts";
 import { authConfig } from "../src/services.ts";
 import { handleInbound } from "../src/inbound.ts";
 import { ReindexWorkflow } from "../src/workflows/reindex.ts";
@@ -37,39 +45,42 @@ import {
 // Operator recovery (§6, §12): DLQ capture + validated replay, delayed reference-aware blob GC,
 // erasure with tombstone replay after restore, and cron branching.
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
+
 const OPS = "ops-token-0123456789abcdef0123456789abcdef";
 
-const opsCall = async (
+const opsCall = async <BodyValue>(
   h: Harness,
   method: string,
   path: string,
-  body?: unknown,
+  body?: BodyValue,
   token: string | null = OPS,
 ) => {
+  const headers = new Headers();
+
+  if (token) headers.set("authorization", `Bearer ${token}`);
+
+  if (body !== undefined) headers.set("content-type", "application/json");
+
   const r = await handleFetch(
-    new Request(`${h.env.APP_ORIGIN}${path}`, {
-      method,
-      headers: {
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }),
+    new Request(
+      `${h.env.APP_ORIGIN}${path}`,
+      body !== undefined ? { method, headers, body: JSON.stringify(body) } : { method, headers },
+    ),
     h.env,
     ctx,
   );
+
   const text = await r.text();
+
   return { status: r.status, body: text ? JSON.parse(text) : null };
 };
 
 const dlqBatch = (queue: string, bodies: ReadonlyArray<unknown>) => {
   const acked: Array<number> = [];
   const retried: Array<number> = [];
-  const batch = {
+
+  const batch: MessageBatch<unknown> = mockAs({
     queue,
     messages: bodies.map((body, i) => ({
       id: `m${i}`,
@@ -81,7 +92,8 @@ const dlqBatch = (queue: string, bodies: ReadonlyArray<unknown>) => {
     })),
     ackAll: () => undefined,
     retryAll: () => undefined,
-  } as unknown as MessageBatch<unknown>;
+  });
+
   return { batch, acked, retried };
 };
 
@@ -114,6 +126,7 @@ describe("ops recovery", () => {
       mailboxId: "mbx_missing",
       sendJobId: "job_x",
     };
+
     const notify = {
       schemaVersion: 1,
       type: "notify",
@@ -121,8 +134,15 @@ describe("ops recovery", () => {
       userId: "mbx_1",
       kind: "mail.delivery",
     };
-    const unknownShape = { hello: "world" };
-    const { batch, acked } = dlqBatch("bye-prod-dispatch-dlq", [dispatch, notify, unknownShape]);
+
+    const unrecognisedMessage = { hello: "world" };
+
+    const { batch, acked } = dlqBatch("bye-prod-dispatch-dlq", [
+      dispatch,
+      notify,
+      unrecognisedMessage,
+    ]);
+
     await handleQueueBatch(batch, h.env);
     expect(acked).toEqual([0, 1, 2]);
     const list = await opsCall(h, "GET", "/v1/ops/dlq");
@@ -150,6 +170,7 @@ describe("ops recovery", () => {
 
   it("[§6] a mixed batch acks the good messages and retries only the poison one", async () => {
     const poison = { schemaVersion: 1, type: "not-a-type" };
+
     const good = {
       schemaVersion: 1,
       type: "propagate",
@@ -159,6 +180,7 @@ describe("ops recovery", () => {
       topic: "no-such-topic",
       payload: {},
     };
+
     const acked: Array<string> = [];
     const retried: Array<string> = [];
     await handleQueueBatch(
@@ -183,6 +205,7 @@ describe("ops recovery", () => {
 
   it("[§15.10] the calendar post-deploy probe erases its throwaway calendar authority", async () => {
     (h.env as { PROBE_TOKEN: string }).PROBE_TOKEN = "probe-token-0123456789";
+
     const res = await handleFetch(
       new Request(`${h.env.APP_ORIGIN}/__probe/calendar/p12345678`, {
         method: "POST",
@@ -191,6 +214,7 @@ describe("ops recovery", () => {
       h.env,
       ctx as never,
     );
+
     expect(await res.json()).toMatchObject({ ok: true });
     const storage = h.namespaces.CALENDARS.state("probe-cal-p12345678").storage;
     expect(storage.kv.get("config")).toBeUndefined();
@@ -200,6 +224,7 @@ describe("ops recovery", () => {
     const acked: Array<string> = [];
     const retried: Array<string> = [];
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
     try {
       await handleQueueBatch(
         {
@@ -284,9 +309,11 @@ describe("ops recovery", () => {
       payload: { key: "t/mbx_1/upload/up_1", reason: "aborted" },
     });
     expect(h.buckets.PARTS.objects.has("t/mbx_1/upload/up_1")).toBe(true);
+
     const intent = await h.env.DIRECTORY.prepare(
       "SELECT bucket, reason, not_before FROM blob_gc_intents",
     ).first<{ bucket: string; reason: string; not_before: number }>();
+
     expect(intent).toMatchObject({
       bucket: "PARTS",
       reason: "upload-aborted",
@@ -301,6 +328,7 @@ describe("ops recovery", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address: "ana@bye.test", displayName: "ana" });
+
     await h.buckets.ORIGINALS.put(`t/${account.mailboxId}/orig/i1.eml`, "raw");
     await h.buckets.PUBLISHED.put("site/ana/index.html", "<p>hi</p>");
     const world = h.env.SHARED_SPACES.getByName("world:ana");
@@ -314,10 +342,12 @@ describe("ops recovery", () => {
         })
       ).ok,
     ).toBe(true);
+
     const started = await opsCall(h, "POST", "/v1/ops/erasure", {
       userId: account.userId,
       reason: "test",
     });
+
     expect(started.status).toBe(202);
     expect(h.workflows.ERASE_ACCOUNT?.[0]).toMatchObject({
       id: `erase-${account.userId}`,
@@ -327,11 +357,13 @@ describe("ops recovery", () => {
     const again = await startErasure(h.env, account.userId, "again");
     expect(again.instanceId).toBe(`erase-${account.userId}`);
     expect(h.workflows.ERASE_ACCOUNT).toHaveLength(1);
+
     const kinds = (
       await h.env.DIRECTORY.prepare(
         "SELECT resource_kind FROM erasure_tombstones ORDER BY resource_kind",
       ).all<{ resource_kind: string }>()
     ).results.map((r) => r.resource_kind);
+
     expect(kinds).toEqual(["calendar", "mailbox", "user", "world"]);
     // Simulate a restore that brought content back; replay removes it again.
     expect(await replayTombstones(h.env)).toEqual({ replayed: 4 });
@@ -346,10 +378,12 @@ describe("ops recovery", () => {
 
   it("[§12] a released World handle re-claimed by someone else survives replay of the old tombstone", async () => {
     const directory = new ControlDirectory(h.env.DIRECTORY, kernelClock);
+
     const ana = await directory.provisionPersonalAccount({
       address: "ana@bye.test",
       displayName: "ana",
     });
+
     const world = h.env.SHARED_SPACES.getByName("world:ana");
     expect(
       (
@@ -382,14 +416,17 @@ describe("ops recovery", () => {
 
   it("[§12] erasure removes shared-space membership and grants, and replay re-erases a restored membership", async () => {
     const directory = new ControlDirectory(h.env.DIRECTORY, kernelClock);
+
     const owner = await directory.provisionPersonalAccount({
       address: "owner@bye.test",
       displayName: "owner",
     });
+
     const ana = await directory.provisionPersonalAccount({
       address: "ana@bye.test",
       displayName: "ana",
     });
+
     const space = h.env.SHARED_SPACES.getByName("space:spc_team1");
     expect(
       (
@@ -402,6 +439,7 @@ describe("ops recovery", () => {
       ).ok,
     ).toBe(true);
     expect((await space.setMember(owner.userId, ana.userId, "member")).ok).toBe(true);
+
     const shared = await space.shareThread({
       actorId: owner.userId,
       sourceMailboxId: owner.mailboxId,
@@ -411,27 +449,34 @@ describe("ops recovery", () => {
       grantees: [ana.userId],
       includeFuture: false,
     });
+
     expect(shared.ok).toBe(true);
+
     const indexed = (
       await h.env.DIRECTORY.prepare(
         "SELECT user_id, role FROM space_memberships WHERE space_id = 'spc_team1' ORDER BY user_id",
       ).all<{ user_id: string; role: string }>()
     ).results;
+
     expect(indexed.map((r) => r.role).sort()).toEqual(["member", "owner"]);
 
     await startErasure(h.env, ana.userId, "closure");
     expect(h.workflows.ERASE_ACCOUNT?.at(-1)?.params).toMatchObject({ spaceIds: ["spc_team1"] });
+
     const tombstones = (
       await h.env.DIRECTORY.prepare(
         "SELECT resource_id FROM erasure_tombstones WHERE resource_kind = 'space-member'",
       ).all<{ resource_id: string }>()
     ).results;
+
     expect(tombstones.map((t) => t.resource_id)).toEqual([`spc_team1:${ana.userId}`]);
 
     const memberOf = async (userId: string) => {
       const r = (await space.isMember(userId)) as { ok: boolean; value?: boolean };
+
       return r.ok && r.value === true;
     };
+
     await replayTombstones(h.env);
     expect(await memberOf(ana.userId)).toBe(false);
     expect((await space.readThread(ana.userId, (shared as { value: string }).value)).ok).toBe(
@@ -460,9 +505,17 @@ describe("ops recovery", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address: "ana@bye.test", displayName: "ana" });
-    const inst = h.namespaces.MAILBOXES.instance(account.mailboxId) as unknown as {
-      ctx: { storage: Record<string, unknown>; abort?: (r?: string) => void };
-    };
+
+    const inst = mockAs<{
+      ctx: {
+        storage: {
+          getBookmarkForTime?: (t: number) => Promise<string>;
+          onNextSessionRestoreBookmark?: (b: string) => Promise<string>;
+        };
+        abort?: (r?: string) => void;
+      };
+    }>(h.namespaces.MAILBOXES.instance(account.mailboxId));
+
     const armed: Array<string> = [];
     let aborted = false;
     inst.ctx.storage.getBookmarkForTime = async (t: number) => `bm-${t}`;
@@ -472,6 +525,7 @@ describe("ops recovery", () => {
       aborted = true;
       h.namespaces.MAILBOXES.instances.delete(account.mailboxId);
     };
+
     const at = Date.now() - 3600_000;
 
     expect(
@@ -510,12 +564,14 @@ describe("ops recovery", () => {
     ).toBe(400);
 
     await startErasure(h.env, account.userId, "closure");
+
     const r = await opsCall(h, "POST", "/v1/ops/restore", {
       kind: "mailbox",
       id: account.mailboxId,
       at,
       confirm: account.mailboxId,
     });
+
     expect(r.status).toBe(202);
     expect(r.body).toMatchObject({ bookmark: `bm-${at}`, at });
     expect(r.body.tombstonesReplayed).toBeGreaterThan(0);
@@ -527,12 +583,14 @@ describe("ops recovery", () => {
     const other = await new ControlDirectory(h.env.DIRECTORY, kernelClock).provisionPersonalAccount(
       { address: "bo@bye.test", displayName: "bo" },
     );
+
     const none = await opsCall(h, "POST", "/v1/ops/restore", {
       kind: "mailbox",
       id: other.mailboxId,
       at,
       confirm: other.mailboxId,
     });
+
     expect(none.status).toBe(503);
   });
 
@@ -599,6 +657,7 @@ describe("restore restart wait", () => {
     await awaitRestart(
       async () => {
         if (++rejectedCalls < 2) throw new Error("aborting");
+
         return "new";
       },
       "old",
@@ -634,17 +693,21 @@ describe("[§13 Stage 0] Workflow checkpoint/resume", () => {
     const checkpoints = new Map<string, unknown>();
     const executed: Array<string> = [];
     let crashAt: string | null = null;
+
     const step = {
       do: async (name: string, ...args: ReadonlyArray<unknown>) => {
         if (checkpoints.has(name)) return checkpoints.get(name);
+
         if (name === crashAt) throw new Error(`runtime crashed before ${name}`);
         executed.push(name);
-        const value = await (args.at(-1) as () => Promise<unknown>)();
+        const value = await (args.at(-1) as () => Promise<StepResult>)();
         checkpoints.set(name, JSON.parse(JSON.stringify(value)));
+
         return checkpoints.get(name);
       },
       sleep: async () => undefined,
     };
+
     return { step, checkpoints, executed, crashBefore: (name: string | null) => (crashAt = name) };
   };
 
@@ -661,6 +724,7 @@ describe("[§13 Stage 0] Workflow checkpoint/resume", () => {
       address: "ana@bye.test",
       displayName: "ana",
     });
+
     for (const i of [1, 2]) {
       await handleInbound(
         inboundMessage(
@@ -677,33 +741,36 @@ describe("[§13 Stage 0] Workflow checkpoint/resume", () => {
         h.env,
       );
     }
+
     await h.drain();
 
     const sent: Array<number> = [];
-    const index = h.env.INDEX as unknown as { sendBatch(b: ReadonlyArray<unknown>): Promise<void> };
+    const index = mockAs<{ sendBatch(b: ReadonlyArray<unknown>): Promise<void> }>(h.env.INDEX);
     const realSend = index.sendBatch.bind(index);
     index.sendBatch = async (batch) => (sent.push(batch.length), realSend(batch));
     let clears = 0;
-    const shards = h.env.SEARCH_SHARDS as unknown as {
-      getByName(n: string): { clear(): Promise<unknown> };
+
+    const shards = h.env.SEARCH_SHARDS as {
+      getByName(n: string): { clear(): Promise<void> };
     };
+
     const realGet = shards.getByName.bind(shards);
     shards.getByName = (n: string) => {
       const stub = realGet(n);
+
       return new Proxy(stub, {
-        get: (t, p) =>
-          p === "clear"
-            ? async () => (clears++, t.clear())
-            : (t as Record<string | symbol, unknown>)[p],
+        get: (t, p) => (p === "clear" ? async () => (clears++, t.clear()) : t[p as keyof typeof t]),
       });
     };
 
     const rt = runtime();
+
     const event = {
       payload: { v: 1, mailboxId: ana.mailboxId },
       instanceId: "ri-crash",
       timestamp: new Date(),
     };
+
     const workflow = new ReindexWorkflow({} as never, h.env);
     rt.crashBefore("v1:other-docs");
     await expect(workflow.run(event as never, rt.step as never)).rejects.toThrow(/crashed/);
@@ -714,10 +781,12 @@ describe("[§13 Stage 0] Workflow checkpoint/resume", () => {
 
     // Restart: same instance, same checkpoint store, code redeployed (a fresh Workflow object).
     rt.crashBefore(null);
+
     const result = (await new ReindexWorkflow({} as never, h.env).run(
       event as never,
       rt.step as never,
     )) as { enqueued: number };
+
     expect(rt.executed).toEqual(["v1:clear", "v1:deliveries:0", "v1:other-docs", "v1:pin-spaces"]);
     expect({ clears, sent }).toEqual({ clears: 1, sent: [2] }); // nothing before the crash ran twice
     expect(result.enqueued).toBe(2);
@@ -725,10 +794,12 @@ describe("[§13 Stage 0] Workflow checkpoint/resume", () => {
 
   it("a legacy instance with no `v` resumes; a payload from an unknown future version is refused", async () => {
     const rt = runtime();
+
     const ana = await new ControlDirectory(h.env.DIRECTORY, kernelClock).provisionPersonalAccount({
       address: "ana@bye.test",
       displayName: "ana",
     });
+
     await expect(
       new ReindexWorkflow({} as never, h.env).run(
         { payload: { mailboxId: ana.mailboxId } } as never,
@@ -753,10 +824,8 @@ describe("catalog, metadata probe and propagation", () => {
     }
   };
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
+
   let n = 0;
   const cmdId = () => `cmd_oc_${(++n).toString(36).padStart(16, "0")}`;
 
@@ -774,20 +843,24 @@ describe("catalog, metadata probe and propagation", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     await h.env.CALENDARS.getByName(account.calendarId).provision({
       ownerId: account.userId,
       selfAddresses: [address],
       defaultZone: "UTC",
     });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -798,28 +871,35 @@ describe("catalog, metadata probe and propagation", () => {
     };
   };
 
-  const call = async (
+  const call = async <JsonValue>(
     h: Harness,
     a: Account | null,
     method: string,
     path: string,
-    json?: unknown,
+    json?: JsonValue,
     headers: Record<string, string> = {},
   ) => {
+    const hdrs = new Headers();
+
+    if (a) hdrs.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") hdrs.set("origin", h.env.APP_ORIGIN);
+
+    if (json !== undefined) hdrs.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(headers)) hdrs.set(k, v);
+
     const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(json !== undefined ? { "content-type": "application/json" } : {}),
-          ...headers,
-        },
-        ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
-      }),
+      new Request(
+        `${h.env.APP_ORIGIN}${path}`,
+        json !== undefined
+          ? { method, headers: hdrs, body: JSON.stringify(json) }
+          : { method, headers: hdrs },
+      ),
       h.env,
       ctx,
     );
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
@@ -857,7 +937,7 @@ describe("catalog, metadata probe and propagation", () => {
           subject,
           body: "hi",
           messageId,
-          ...(extra ? { extraHeaders: extra } : {}),
+          extraHeaders: extra,
         }),
       ),
       h.env,
@@ -868,11 +948,14 @@ describe("catalog, metadata probe and propagation", () => {
   /** Run the Cron reconciler over every catalog shard (one full rotation). */
   const fullRotation = async (h: Harness, start: number) => {
     const totals = { byKind: {} as Record<string, number>, failures: 0 };
+
     for (let i = 0; i < CATALOG_SHARDS / SHARDS_PER_RUN; i++) {
       const r = await reconcileCatalog(h.env, start + i * 5 * 60_000);
       totals.failures += r.failures;
+
       for (const [k, v] of Object.entries(r.byKind)) totals.byKind[k] = (totals.byKind[k] ?? 0) + v;
     }
+
     return totals;
   };
 
@@ -886,9 +969,11 @@ describe("catalog, metadata probe and propagation", () => {
 
   it("[§6 row 3] spaces and World authors are catalogued, and one rotation reconciles every kind without failures", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const created = await call(h, ana, "POST", "/v1/spaces", {
       organizationId: ana.organizationId,
     });
+
     expect(created.status).toBe(201);
     expect(
       (
@@ -900,11 +985,13 @@ describe("catalog, metadata probe and propagation", () => {
         })
       ).status,
     ).toBe(201);
+
     const kinds = (
       await h.d1
         .prepare("SELECT kind, id FROM resource_catalog ORDER BY kind")
         .all<{ kind: string; id: string }>()
     ).results;
+
     expect(kinds).toEqual(
       expect.arrayContaining([
         { kind: "space", id: created.body.spaceId },
@@ -920,10 +1007,12 @@ describe("catalog, metadata probe and propagation", () => {
   it("[§12] the Cron probe records each mailbox's metadata size and level; 50%/70% alert and flag rollover", async () => {
     const ana = await signup(h, "ana@bye.test");
     await fullRotation(h, Date.now());
+
     const row = await h.d1
       .prepare("SELECT bytes, level FROM authority_storage WHERE kind = 'mailbox' AND id = ?")
       .bind(ana.mailboxId)
       .first<{ bytes: number; level: string }>();
+
     expect(row?.level).toBe("ok");
     expect(row?.bytes).toBeGreaterThan(0);
     expect(
@@ -940,10 +1029,12 @@ describe("catalog, metadata probe and propagation", () => {
         Math.ceil(MAILBOX_METADATA_BUDGET_BYTES * 0.75),
       ),
     ).toBe("rollover");
+
     const flagged = await h.d1
       .prepare("SELECT level FROM authority_storage WHERE id = ?")
       .bind(ana.mailboxId)
       .first<{ level: string }>();
+
     expect(flagged?.level).toBe("rollover");
   });
 
@@ -957,8 +1048,10 @@ describe("catalog, metadata probe and propagation", () => {
     const created = await call(h, ana, "POST", "/v1/spaces", {
       organizationId: ana.organizationId,
     });
+
     const spaceId = created.body.spaceId as string;
     const space = h.env.SHARED_SPACES.getByName(`space:${spaceId}`);
+
     const shared = (await space.shareThread({
       actorId: ana.userId,
       sourceMailboxId: ana.mailboxId,
@@ -968,6 +1061,7 @@ describe("catalog, metadata probe and propagation", () => {
       grantees: [],
       includeFuture: true,
     })) as { ok: boolean; value: string };
+
     await new ControlSharedRegistry(h.env.DIRECTORY, kernelClock).registerSharedThread({
       mailboxId: ana.mailboxId,
       threadId,
@@ -977,13 +1071,15 @@ describe("catalog, metadata probe and propagation", () => {
     });
 
     // The space is briefly unavailable and the queue message is then lost (dead-lettered).
-    const instance = h.namespaces.SHARED_SPACES.instance(`space:${spaceId}`) as unknown as {
-      appendReply: (...a: Array<unknown>) => unknown;
+    const instance = h.namespaces.SHARED_SPACES.instance(`space:${spaceId}`) as {
+      appendReply: (...a: Array<unknown>) => void;
     };
+
     const real = instance.appendReply.bind(instance);
     instance.appendReply = () => {
       throw new Error("space unavailable");
     };
+
     await receive(
       h,
       "bob@example.net",
@@ -1022,6 +1118,7 @@ describe("tombstone replay scope", () => {
 
   it("[§12] a single-object restore replays only that object's tombstones; the daily sweep skips verified ones", async () => {
     const h = makeHarness();
+
     const insert = (kind: string, id: string) =>
       h.d1
         .prepare(
@@ -1029,6 +1126,7 @@ describe("tombstone replay scope", () => {
         )
         .bind(kind, id, Date.now())
         .run();
+
     await insert("mailbox", "mbx_a");
     await insert("mailbox", "mbx_b");
     await insert("space-member", "spc_1:usr_x");
@@ -1054,16 +1152,19 @@ describe("shared propagation cleanup", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     await h.env.CALENDARS.getByName(account.calendarId).provision({
       ownerId: account.userId,
       selfAddresses: [address],
       defaultZone: "UTC",
     });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -1092,9 +1193,11 @@ describe("shared propagation cleanup", () => {
       .run();
     // The mailbox is no longer an extension of any space and the thread isn't shared.
     await propagateDelivery(h.env, ana.mailboxId, "thr_1", "dlv_1");
+
     const row = await h.d1
       .prepare("SELECT state FROM shared_propagation WHERE event_key = 'extension:spc_old:dlv_1'")
       .first<{ state: string }>();
+
     expect(row?.state).toBe("dropped");
   });
 
@@ -1115,19 +1218,21 @@ describe("shared propagation cleanup", () => {
       h.env,
     );
     await h.drain();
-    const store = (
-      h.namespaces.MAILBOXES.instance(ana.mailboxId) as unknown as {
-        store: { ctx: { sql: { all<T>(sql: string, ...p: Array<unknown>): Array<T> } } };
-      }
-    ).store;
+
+    const store = mockAs<{
+      store: { ctx: { sql: { all<T>(sql: string, ...p: Array<unknown>): Array<T> } } };
+    }>(h.namespaces.MAILBOXES.instance(ana.mailboxId)).store;
+
     const [msg] = store.ctx.sql.all<{ thread_id: string; delivery_id: string }>(
       "SELECT thread_id, delivery_id FROM deliveries",
     );
+
     const { thread_id: threadId, delivery_id: deliveryId } = msg!;
     // A live extension target and two live include-future shares: three keys bind as one list.
     const registry = new ControlSharedRegistry(h.env.DIRECTORY, kernelClock);
     await registry.registerExtension(ana.mailboxId, "spc_live", "ext@bye.test");
     const now = Date.now();
+
     for (const [spaceId, sharedThreadId] of [
       ["spc_a", "sth_a"],
       ["spc_b", "sth_b"],
@@ -1139,6 +1244,7 @@ describe("shared propagation cleanup", () => {
         sharedThreadId,
         includeFuture: true,
       });
+
     const insert = (
       key: string,
       space: string,
@@ -1153,6 +1259,7 @@ describe("shared propagation cleanup", () => {
         )
         .bind(key, space, mailboxId, threadId, delivery, state, now, now)
         .run();
+
     await insert(`reply:spc_a:${deliveryId}`, "spc_a", ana.mailboxId, deliveryId, "pending");
     await insert(`reply:spc_b:${deliveryId}`, "spc_b", ana.mailboxId, deliveryId, "pending");
     await insert(`reply:spc_gone:${deliveryId}`, "spc_gone", ana.mailboxId, deliveryId, "pending");
@@ -1161,6 +1268,7 @@ describe("shared propagation cleanup", () => {
     await insert(`reply:spc_gone:${deliveryId}:x`, "spc_gone", "mbx_other", deliveryId, "pending");
     // Live targets are applied (never dropped by the key-list filter); a failing extension is tolerated.
     await propagateDelivery(h.env, ana.mailboxId, threadId, deliveryId).catch(() => undefined);
+
     const states = Object.fromEntries(
       (
         await h.d1
@@ -1168,6 +1276,7 @@ describe("shared propagation cleanup", () => {
           .all<{ event_key: string; state: string }>()
       ).results.map((r) => [r.event_key, r.state]),
     );
+
     expect(states[`reply:spc_gone:${deliveryId}`]).toBe("dropped");
     expect(states[`reply:spc_a:${deliveryId}`]).toBe("applied");
     expect(states[`reply:spc_b:${deliveryId}`]).toBe("applied");
@@ -1238,15 +1347,18 @@ describe("blob pins for shared content", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -1283,6 +1395,7 @@ describe("blob pins for shared content", () => {
         })
       ).ok,
     ).toBe(true);
+
     const message = {
       messageRef: "dlv_1",
       from: { address: "bob@example.net" },
@@ -1293,6 +1406,7 @@ describe("blob pins for shared content", () => {
       contentKey: key,
       sentAt: Date.now(),
     };
+
     expect(
       (
         await space.shareThread({
@@ -1307,12 +1421,14 @@ describe("blob pins for shared content", () => {
       ).ok,
     ).toBe(true);
     await h.drain();
+
     const pin = await h.d1
       .prepare(
         "SELECT holder_kind, holder_id FROM blob_pins WHERE bucket = 'ORIGINALS' AND object_key = ?",
       )
       .bind(key)
       .first();
+
     expect(pin).toEqual({ holder_kind: "space", holder_id: "spc_pin" });
     // The owner trashes and purges the source: the delayed sweep must keep what the space reads.
     await recordGcIntent(h.env, {
@@ -1345,6 +1461,7 @@ describe("blob pins for shared content", () => {
       organizationId: "org_1",
       ownerId: ana.userId,
     });
+
     const msg = (ref: string, contentKey: string) => ({
       messageRef: ref,
       from: { address: "bob@example.net" },
@@ -1355,6 +1472,7 @@ describe("blob pins for shared content", () => {
       contentKey,
       sentAt: Date.now(),
     });
+
     await space.shareThread({
       actorId: ana.userId,
       sourceMailboxId: ana.mailboxId,
@@ -1377,10 +1495,12 @@ describe("blob pins for shared content", () => {
     });
 
     const { ReindexWorkflow } = await import("../src/workflows/reindex.ts");
+
     const step = {
       do: async (_n: string, ...args: ReadonlyArray<unknown>) =>
-        (args.at(-1) as () => Promise<unknown>)(),
+        (args.at(-1) as () => Promise<StepResult>)(),
     };
+
     const result = (await new ReindexWorkflow({} as never, h.env).run(
       {
         payload: { v: 1, mailboxId: ana.mailboxId },
@@ -1389,12 +1509,15 @@ describe("blob pins for shared content", () => {
       } as never,
       step as never,
     )) as { pinned: number };
+
     expect(result.pinned).toBe(1);
+
     const pins = (
       await h.d1
         .prepare("SELECT object_key, holder_id FROM blob_pins ORDER BY object_key")
         .all<{ object_key: string; holder_id: string }>()
     ).results;
+
     // Only this mailbox's keys: another mailbox's content is pinned by that mailbox's own reindex.
     expect(pins).toEqual([{ object_key: mine, holder_id: "spc_old" }]);
   });
@@ -1409,17 +1532,19 @@ describe("blob pins for shared content", () => {
       sharedThreadId: "sth_x",
       includeFuture: false,
     });
-    const spaces = h.env.SHARED_SPACES as unknown as { getByName: (n: string) => unknown };
+    const spaces = h.env.SHARED_SPACES as { getByName: (n: string) => object };
     const original = spaces.getByName.bind(spaces);
     spaces.getByName = (name: string) =>
       name.endsWith("spc_down")
         ? { contentKeys: async () => ({ ok: false, error: { code: "unavailable" } }) }
         : original(name);
     const { ReindexWorkflow } = await import("../src/workflows/reindex.ts");
+
     const step = {
       do: async (_n: string, ...args: ReadonlyArray<unknown>) =>
-        (args.at(-1) as () => Promise<unknown>)(),
+        (args.at(-1) as () => Promise<StepResult>)(),
     };
+
     await expect(
       new ReindexWorkflow({} as never, h.env).run(
         {

@@ -97,6 +97,7 @@ export const QUEUES = {
 >;
 
 export type QueueName = keyof typeof QUEUES;
+
 export type QueueBinding = (typeof QUEUES)[QueueName]["binding"];
 
 export const QUEUE_NAMES = Object.keys(QUEUES) as ReadonlyArray<QueueName>;
@@ -133,9 +134,17 @@ export const CONSUMER_POLICY: Readonly<Record<QueueName, ConsumerPolicy>> = byNa
   (name) => QUEUES[name].consumer,
 );
 
-export const Queues = byName((name) => Cloudflare.Queues.Queue(queueIds(name).queue));
+/** Declares every queue then every dead-letter queue by logical ID, in table order. */
+export const declareQueues = <T>(makeQueue: (id: string) => T) => ({
+  queues: byName((name) => makeQueue(queueIds(name).queue)),
+  deadLetters: byName((name) => makeQueue(queueIds(name).deadLetter)),
+});
 
-export const DeadLetters = byName((name) => Cloudflare.Queues.Queue(queueIds(name).deadLetter));
+const declared = declareQueues((id) => Cloudflare.Queues.Queue(id));
+
+export const Queues = declared.queues;
+
+export const DeadLetters = declared.deadLetters;
 
 /** MailCore producer bindings (INGEST, PARSE_SCAN, …) for the core Worker env. */
 export const queueBindings = Object.fromEntries(

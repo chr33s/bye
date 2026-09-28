@@ -1,3 +1,5 @@
+import { Predicate } from "effect";
+import { typeNameOf } from "./typename.ts";
 import {
   CATALOG_SHARDS,
   type CatalogKind,
@@ -28,10 +30,14 @@ import { calendar, mailbox, space, world } from "./authorities.ts";
 //                  identity tables, release abandoned signups.
 
 export const SHARDS_PER_RUN = 4;
+
 /** Republish budget per ingress receipt; the journal owns the cap. */
 export const MAX_REPLAYS = REPLAY_ATTEMPT_CAP;
+
 export const DAILY_CRON = "17 3 * * *";
+
 const RECONCILE_BATCH = 200;
+
 const DAY = 24 * 3600_000;
 
 /** Deterministic rotation: every catalog shard is visited once per CATALOG_SHARDS/SHARDS_PER_RUN runs. */
@@ -42,6 +48,7 @@ export const shardsForRun = (
 ): ReadonlyArray<number> => {
   const run = Math.floor(scheduledTime / (5 * 60_000));
   const start = (run * perRun) % total;
+
   return Array.from({ length: perRun }, (_, i) => (start + i) % total);
 };
 
@@ -83,12 +90,12 @@ export const RECONCILED_KINDS: ReadonlyArray<CatalogKind> = [
 export const RECONCILE_CONCURRENCY = 8;
 
 /** A failure's class for aggregated logging: the rejection code, the error name, or its type. */
-const errorClass = (error: unknown): string =>
-  error && typeof error === "object" && "code" in error && typeof error.code === "string"
+const errorClass = <E>(error: E): string =>
+  Predicate.isObjectOrArray(error) && "code" in error && Predicate.isString(error.code)
     ? error.code
     : error instanceof Error
       ? error.name
-      : typeof error;
+      : typeNameOf(error);
 
 export const reconcileCatalog = async (
   env: CoreEnv,
@@ -104,21 +111,27 @@ export const reconcileCatalog = async (
   const failuresByClass = new Map<string, number>();
   let unknownSends = 0;
   let failures = 0;
+
   const reconcileOne = async (
     kind: CatalogKind,
     entry: { readonly id: string; readonly nextWakeHint: number | null },
   ): Promise<void> => {
     const stub = stubFor(env, kind, entry.id);
+
     if (!stub) return;
+
     try {
       const result = await stub.reconcile(scheduledTime);
       unknownSends += result?.unknown ?? 0;
       const nextWake = result?.nextWake ?? null;
+
       if (nextWake !== entry.nextWakeHint) await directory.setWakeHint(kind, entry.id, nextWake);
       byKind[kind] = (byKind[kind] ?? 0) + 1;
+
       if (kind === "mailbox") {
         await reportShardHealth(env, entry.id);
-        if (typeof result?.metadataBytes === "number")
+
+        if (Predicate.isNumber(result?.metadataBytes))
           await reportMetadataHealth(env, entry.id, result.metadataBytes);
       }
     } catch (error) {
@@ -128,33 +141,42 @@ export const reconcileCatalog = async (
       failuresByClass.set(key, (failuresByClass.get(key) ?? 0) + 1);
     }
   };
+
   for (const kind of RECONCILED_KINDS) {
     for (const shard of shardsForRun(scheduledTime)) {
       let after = "";
+
       for (;;) {
         const page = await directory.listCatalog(kind, shard, after, RECONCILE_BATCH);
+
         if (page.length === 0) break;
+
         for (let i = 0; i < page.length; i += RECONCILE_CONCURRENCY) {
           await Promise.all(
             page.slice(i, i + RECONCILE_CONCURRENCY).map((entry) => reconcileOne(kind, entry)),
           );
         }
+
         after = page.at(-1)!.id;
+
         if (page.length < RECONCILE_BATCH) break;
       }
     }
   }
+
   for (const [key, count] of failuresByClass) {
     const [kind, cls] = key.split(":");
     console.warn(
       JSON.stringify({ level: "warn", op: "reconcile.failure", kind, errorClass: cls, count }),
     );
   }
+
   metric(
     "reconcile.catalog",
     Object.values(byKind).reduce((a, b) => a + b, 0),
     { failures },
   );
+
   return { mailboxes: byKind.mailbox ?? 0, unknownSends, byKind, failures };
 };
 
@@ -166,6 +188,7 @@ export const reportShardHealth = async (
   const health = await env.SEARCH_SHARDS.getByName(`search:${mailboxId}`).health();
   const level = storageLevel(health.storedBytes, SEARCH_SHARD_BUDGET_BYTES);
   metric("search.shard.bytes", health.storedBytes, { level });
+
   if (level !== "ok")
     console.warn(
       JSON.stringify({
@@ -175,6 +198,7 @@ export const reportShardHealth = async (
         ratio: Number((health.storedBytes / SEARCH_SHARD_BUDGET_BYTES).toFixed(3)),
       }),
     );
+
   return level;
 };
 
@@ -191,6 +215,7 @@ export const reportMetadataHealth = async (
 ): Promise<"ok" | "alert" | "rollover"> => {
   const level = storageLevel(bytes, MAILBOX_METADATA_BUDGET_BYTES);
   metric("mailbox.metadata.bytes", bytes, { level });
+
   if (level !== "ok")
     console.warn(
       JSON.stringify({
@@ -207,6 +232,7 @@ export const reportMetadataHealth = async (
     .bind(mailboxId, bytes, level, now)
     .run()
     .catch(() => undefined);
+
   return level;
 };
 
@@ -230,6 +256,7 @@ export const quarantineUnprocessable = async (
 ): Promise<boolean> => {
   if (await mailboxErased(env, r.mailboxId)) return false;
   const from = r.envelopeFrom || "mailer-daemon@invalid";
+
   // Forced by Cloudflare's RPC type mapping (see consumers.ts commitParsed): the full envelope.
   const result = (await mailbox(env, r.mailboxId).commitDelivery({
     ingestionId: r.ingestionId,
@@ -257,17 +284,21 @@ export const quarantineUnprocessable = async (
     // Quarantine (not just Spam): the unparsed original must never render or release attachments.
     safety: { _tag: "Malware", reason: "unprocessable message quarantined" },
     receivedAt: r.receivedAt,
-  })) as unknown as { readonly ok: boolean; readonly code?: string };
+  })) as { readonly ok: boolean; readonly code?: string };
+
   if (result.ok === false && result.code === "gone") return false;
   metric("ingest.quarantined", 1);
+
   return true;
 };
 
 export const reconcileIngress = async (env: CoreEnv): Promise<number> => {
   let republished = 0;
+
   for (let p = 0; p < INGRESS_JOURNAL_PARTITIONS; p++) {
     const journal = env.INGRESS_JOURNALS.getByName(`journal-${p}`);
     await journal.abandonStale(60 * 60_000);
+
     for (const r of await journal.pendingReplay(10 * 60_000, 100)) {
       if (IngressJournal.exhausted(r)) {
         try {
@@ -279,6 +310,7 @@ export const reconcileIngress = async (env: CoreEnv): Promise<number> => {
           // `quarantine-failed` rows are retried at QUARANTINE_RETRY_MS and never pruned.
           await journal.markQuarantineFailed(r.ingestionId);
         }
+
         console.error(
           JSON.stringify({
             level: "error",
@@ -288,6 +320,7 @@ export const reconcileIngress = async (env: CoreEnv): Promise<number> => {
         );
         continue;
       }
+
       await env.INGEST.send(
         {
           schemaVersion: 1,
@@ -307,20 +340,26 @@ export const reconcileIngress = async (env: CoreEnv): Promise<number> => {
       republished++;
     }
   }
+
   metric("ingest.republished", republished);
+
   return republished;
 };
 
 /** Rows deleted per statement, and statements per table per run, so no prune exceeds limits. */
 export const PRUNE_PAGE = 500;
+
 export const PRUNE_MAX_PAGES = 20;
+
 /**
  * Audit history kept in D1 (O02/X02 auditable administrative and API writes). The spec sets no
  * period; 400 days covers a full year of look-back plus a month of slack for annual reviews.
  */
 export const AUDIT_RETENTION_DAYS = 400;
+
 /** Revoked or expired credentials stay this long for incident review and reuse detection. */
 export const CREDENTIAL_RETENTION_DAYS = 30;
+
 /**
  * A signup that has not registered a passkey this long after creation is released. The retry
  * token lasts 30 minutes (routes/common.ts SIGNUP_TOKEN_TTL_MS); a day leaves ample margin.
@@ -338,16 +377,20 @@ export const pruneBounded = async (
   ...args: ReadonlyArray<unknown>
 ): Promise<number> => {
   let deleted = 0;
+
   for (let page = 0; page < PRUNE_MAX_PAGES; page++) {
     const r = await env.DIRECTORY.prepare(
       `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${where} LIMIT ?)`,
     )
       .bind(...args, PRUNE_PAGE)
       .run();
+
     const n = Number(r.meta.changes ?? 0);
     deleted += n;
+
     if (n < PRUNE_PAGE) break;
   }
+
   return deleted;
 };
 
@@ -356,6 +399,7 @@ export const pruneLedgers = async (env: CoreEnv, now: number): Promise<number> =
   const credentialCutoff = now - CREDENTIAL_RETENTION_DAYS * DAY;
   // A device session past retention: revoked, or absolutely expired, long enough ago.
   const deadDevice = "(revoked_at IS NOT NULL AND revoked_at < ?) OR absolute_expires_at < ?";
+
   const prunes: ReadonlyArray<readonly [string, string, ...Array<unknown>]> = [
     ["push_deliveries", "delivered_at < ?", now - 30 * DAY],
     ["dead_letters", "state <> 'held' AND resolved_at < ?", now - 90 * DAY],
@@ -398,7 +442,9 @@ export const pruneLedgers = async (env: CoreEnv, now: number): Promise<number> =
       now,
     ],
   ];
+
   let deleted = 0;
+
   for (const [table, where, ...args] of prunes) {
     try {
       deleted += await pruneBounded(env, table, where, ...args);
@@ -407,6 +453,7 @@ export const pruneLedgers = async (env: CoreEnv, now: number): Promise<number> =
       console.warn(JSON.stringify({ level: "warn", op: "prune.ledger", table }));
     }
   }
+
   for (let p = 0; p < INGRESS_JOURNAL_PARTITIONS; p++) {
     try {
       await env.INGRESS_JOURNALS.getByName(`journal-${p}`).pruneCommitted(30 * DAY);
@@ -414,6 +461,7 @@ export const pruneLedgers = async (env: CoreEnv, now: number): Promise<number> =
       console.warn(JSON.stringify({ level: "warn", op: "prune.journal", partition: p }));
     }
   }
+
   return deleted;
 };
 
@@ -424,8 +472,10 @@ export const pruneLedgers = async (env: CoreEnv, now: number): Promise<number> =
 export const rotateTotpSeals = async (env: CoreEnv): Promise<number> => {
   const auth = new ControlAuth(env.DIRECTORY, kernelClock, await authConfig(env));
   const rotated = await auth.rotateTotpKeys(100, 10);
+
   if (rotated > 0)
     console.log(JSON.stringify({ level: "info", op: "totp.rotated", count: rotated }));
+
   return rotated;
 };
 
@@ -435,8 +485,10 @@ export const releaseAbandonedSignups = async (env: CoreEnv, now: number): Promis
     now - ABANDONED_SIGNUP_MS,
     200,
   );
+
   if (released > 0)
     console.log(JSON.stringify({ level: "info", op: "signup.released", count: released }));
+
   return released;
 };
 
@@ -454,7 +506,7 @@ export const runDaily = async (
   await releaseAbandonedSignups(env, now).catch(() =>
     console.warn(JSON.stringify({ level: "warn", op: "signup.release-failed" })),
   );
-  await rotateTotpSeals(env).catch((e: unknown) =>
+  await rotateTotpSeals(env).catch((e) =>
     console.warn(
       JSON.stringify({
         level: "warn",
@@ -464,6 +516,7 @@ export const runDaily = async (
     ),
   );
   const usage = await sweepUsage(env, now);
+
   return { gc, tombstones: replayed, usage };
 };
 
@@ -483,8 +536,10 @@ export const handleScheduled = async (
         usageCorrected: daily.usage.corrected,
       }),
     );
+
     return;
   }
+
   const [catalog, ingress, unknown, propagation, newsletters] = await Promise.all([
     reconcileCatalog(env, controller.scheduledTime),
     reconcileIngress(env),
@@ -492,6 +547,7 @@ export const handleScheduled = async (
     replayPendingPropagation(env, controller.scheduledTime),
     reconcileNewsletters(env, controller.scheduledTime),
   ]);
+
   console.log(
     JSON.stringify({
       level: "info",

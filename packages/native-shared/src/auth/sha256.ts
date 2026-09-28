@@ -18,6 +18,7 @@ export const sha256 = (message: Uint8Array): Uint8Array => {
   const h = new Uint32Array([
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
   ]);
+
   const bitLength = message.length * 8;
   const padded = new Uint8Array(Math.ceil((message.length + 9) / 64) * 64);
   padded.set(message);
@@ -26,14 +27,18 @@ export const sha256 = (message: Uint8Array): Uint8Array => {
   view.setUint32(padded.length - 8, Math.floor(bitLength / 0x100000000));
   view.setUint32(padded.length - 4, bitLength >>> 0);
   const w = new Uint32Array(64);
+
   for (let offset = 0; offset < padded.length; offset += 64) {
     for (let i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4);
+
     for (let i = 16; i < 64; i++) {
       const s0 = rotr(w[i - 15]!, 7) ^ rotr(w[i - 15]!, 18) ^ (w[i - 15]! >>> 3);
       const s1 = rotr(w[i - 2]!, 17) ^ rotr(w[i - 2]!, 19) ^ (w[i - 2]! >>> 10);
       w[i] = (w[i - 16]! + s0 + w[i - 7]! + s1) >>> 0;
     }
+
     let [a, b, c, d, e, f, g, hh] = [h[0]!, h[1]!, h[2]!, h[3]!, h[4]!, h[5]!, h[6]!, h[7]!];
+
     for (let i = 0; i < 64; i++) {
       const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
       const ch = (e & f) ^ (~e & g);
@@ -50,6 +55,7 @@ export const sha256 = (message: Uint8Array): Uint8Array => {
       b = a;
       a = (t1 + t2) >>> 0;
     }
+
     h[0] = (h[0]! + a) >>> 0;
     h[1] = (h[1]! + b) >>> 0;
     h[2] = (h[2]! + c) >>> 0;
@@ -59,8 +65,11 @@ export const sha256 = (message: Uint8Array): Uint8Array => {
     h[6] = (h[6]! + g) >>> 0;
     h[7] = (h[7]! + hh) >>> 0;
   }
+
   const out = new Uint8Array(32);
   const outView = new DataView(out.buffer);
+
   for (let i = 0; i < 8; i++) outView.setUint32(i * 4, h[i]!);
+
   return out;
 };

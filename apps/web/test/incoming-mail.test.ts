@@ -1,14 +1,19 @@
 // Domain page incoming-email section (infra/onboarding/spec.md Part B): every state offers an action.
 import { JSDOM } from "jsdom";
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("../src/auth.ts", () => ({ stepUpWithPasskey: vi.fn() }));
+import { describe, expect, it } from "vitest";
 
 const jsdom = new JSDOM("<!doctype html><body></body>", { url: "https://bye.example.test/" });
-const g = globalThis as Record<string, unknown>;
-for (const k of ["window", "document", "location", "history", "HTMLElement", "Node", "Event"])
-  g[k] = (jsdom.window as unknown as Record<string, unknown>)[k];
-g.localStorage = jsdom.window.localStorage;
+
+Object.assign(globalThis, {
+  window: jsdom.window,
+  document: jsdom.window.document,
+  location: jsdom.window.location,
+  history: jsdom.window.history,
+  HTMLElement: jsdom.window.HTMLElement,
+  Node: jsdom.window.Node,
+  Event: jsdom.window.Event,
+  localStorage: jsdom.window.localStorage,
+});
 
 const { incomingMailSection } = await import("../src/views/incoming-mail.ts");
 
@@ -18,6 +23,7 @@ const domain = (state: string, workflow: string | null) => ({
   state,
   workflow: workflow ? { id: "wf", status: workflow } : null,
 });
+
 const info = {
   zone: "example.test",
   automation: "manual-records" as const,
@@ -25,6 +31,7 @@ const info = {
   domain: null,
   incomingMail: "not-set-up" as const,
 };
+
 const buttons = (el: HTMLElement) => [...el.querySelectorAll("button")].map((b) => b.textContent);
 
 describe("incoming-mail section", () => {
@@ -35,6 +42,7 @@ describe("incoming-mail section", () => {
       info,
       () => undefined,
     );
+
     expect(el.textContent).toContain("could not read the current mail setup");
     expect(buttons(el)).toEqual(["Try again", "Restart setup"]);
   });
@@ -67,6 +75,7 @@ describe("incoming-mail section", () => {
       info,
       () => undefined,
     );
+
     expect(el.textContent).toContain("MX example.test 1 aspmx.l.google.com");
     expect(buttons(el)).toContain("I've restored these");
     expect(buttons(el)).toContain("Enable incoming email");
@@ -95,6 +104,7 @@ describe("incoming-mail section", () => {
       info,
       () => undefined,
     );
+
     expect(el.textContent).toContain("Confirm the switch to continue");
     expect(el.textContent).toContain("bye-verify-abc@example.test");
     expect(buttons(el)).toEqual(
@@ -118,12 +128,14 @@ describe("incoming-mail section", () => {
       },
       plan: [],
     };
+
     const manual = incomingMailSection(
       domain("ownership-proven", null),
       newDomain,
       info,
       () => undefined,
     );
+
     expect(buttons(manual)).toContain("Let Bye make the changes");
     expect(buttons(manual)).toContain("I'll add the records myself");
     const form = manual.querySelector("form")!;
@@ -140,10 +152,12 @@ describe("incoming-mail section", () => {
       { ...info, automation: "zone-api" as const, tokenConfigured: true },
       () => undefined,
     );
+
     expect(automated.textContent).toContain("Bye will make these changes in Cloudflare");
     expect(buttons(automated)).toContain(
       "Remove the Cloudflare token (I'll add the records myself)",
     );
+
     // Another customer domain (not the installation zone) gets no token chooser.
     const other = incomingMailSection(
       { ...domain("ownership-proven", null), name: "other.test" },
@@ -151,6 +165,7 @@ describe("incoming-mail section", () => {
       info,
       () => undefined,
     );
+
     expect(buttons(other)).not.toContain("Let Bye make the changes");
   });
 });

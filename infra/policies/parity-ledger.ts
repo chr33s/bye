@@ -8,16 +8,19 @@ import { PARITY_LEDGER, type ParityRow } from "../../packages/domain/src/parity.
 import { ROOT, sourceFiles } from "./fs.ts";
 
 export const LEDGER_PATH = join(ROOT, "infra/PARITY.md");
+
 const EVIDENCE_PATH = join(ROOT, "infra/parity-evidence.json");
 
 /** IDs tagged in test/describe title strings only, not in comments. */
 export const tagsIn = (source: string): Set<string> => {
   const tags = new Set<string>();
+
   for (const m of source.matchAll(
     /\b(?:it|test|describe)(?:\.\w+)*(?:\([^)]*\))?\(\s*(["'`])([^"'`]*)\1/g,
   )) {
     for (const t of (m[2] ?? "").matchAll(/\[([ECOPAX]\d\d)\]/g)) tags.add(t[1] as string);
   }
+
   return tags;
 };
 
@@ -33,6 +36,7 @@ export const DIMENSIONS = [
   "Security",
   "Accessibility",
 ] as const;
+
 export type Dimension = (typeof DIMENSIONS)[number];
 
 /** Dimensions evidenced by tagged tests, and the test paths that count for each. */
@@ -52,6 +56,7 @@ const TESTED: ReadonlyArray<readonly [Dimension, (path: string) => boolean]> = [
 ];
 
 const EXTERNAL = new Set(["E17", "E18", "E19", "E22", "E23", "C04", "C10", "O01", "P02", "A02"]);
+
 const TUI_SCOPE = new Set([
   "E01",
   "E04",
@@ -72,6 +77,7 @@ const TUI_SCOPE = new Set([
 /** Where a dimension applies to a row (spec.md §2.4); elsewhere the cell is `—`. */
 const applies = (id: string, d: Dimension): boolean => {
   const area = id[0];
+
   switch (d) {
     case "Domain":
     case "API":
@@ -114,16 +120,22 @@ const LEVELS = [
 const levelOf = (cells: ReadonlyMap<Dimension, string>): (typeof LEVELS)[number] => {
   const done = (d: Dimension, real = false) => {
     const c = cells.get(d)!;
+
     return (
       c === "—" || c.startsWith("excluded") || (c !== "open" && (!real || c.includes("evidence/")))
     );
   };
+
   if (!done("Domain") || !done("API")) return "open";
+
   if (!(["Web", "Native", "CLI", "TUI", "Accessibility"] as const).every((d) => done(d)))
     return "repository-complete";
+
   if (!done("Provider", true)) return "client-complete";
+
   if (!(["Recovery", "Security"] as const).every((d) => done(d, true)))
     return "integration-qualified";
+
   return "production-accepted";
 };
 
@@ -135,18 +147,23 @@ const cell = (value: string): string =>
 export const renderLedger = (): string => {
   const evidence = JSON.parse(readFileSync(EVIDENCE_PATH, "utf8")) as Record<string, RowEvidence>;
   const tagged = new Map<string, Map<Dimension, Array<string>>>();
+
   for (const file of sourceFiles(["packages", "workers", "apps"], { ext: /\.test\.tsx?$/ })) {
     const path = relative(ROOT, file);
-    const dims = TESTED.filter(([, match]) => match(path)).map(([d]) => d);
+    const dims = TESTED.flatMap(([d, match]) => (match(path) ? [d] : []));
+
     for (const id of tagsIn(readFileSync(file, "utf8"))) {
       const byDim = tagged.get(id) ?? new Map<Dimension, Array<string>>();
+
       for (const d of dims) byDim.set(d, [...(byDim.get(d) ?? []), path]);
       tagged.set(id, byDim);
     }
   }
+
   const rows = PARITY_LEDGER.map((r: ParityRow) => {
     const manual = evidence[r.id] ?? {};
     const cells = new Map<Dimension, string>();
+
     for (const d of DIMENSIONS) {
       const tests = tagged.get(r.id)?.get(d) ?? [];
       cells.set(
@@ -154,8 +171,10 @@ export const renderLedger = (): string => {
         manual.cells?.[d] ?? (!applies(r.id, d) ? "—" : tests.length > 0 ? tests[0]! : "open"),
       );
     }
+
     return `| ${r.id} | ${r.capability} | ${manual.owner ?? "unassigned"} | ${levelOf(cells)} | ${DIMENSIONS.map((d) => cell(cells.get(d)!)).join(" | ")} |`;
   });
+
   return [
     "# Parity evidence ledger",
     "",

@@ -1,4 +1,4 @@
-import type { NewsletterProviderShape } from "@bye/application";
+import type { NewsletterProvider } from "@bye/application";
 import {
   checkOperation,
   type OperationOutcome,
@@ -15,7 +15,7 @@ import {
   RESEND_UNSUBSCRIBE_PLACEHOLDER,
   type RpcResult,
 } from "@bye/platform-cloudflare";
-import { Effect } from "effect";
+import { Effect, Predicate, type Types } from "effect";
 import { settle, world } from "./authorities.ts";
 import type { CoreEnv } from "./env.ts";
 import { escapeHtml } from "./html.ts";
@@ -30,10 +30,19 @@ import { publicSiteHtml } from "./publishing.ts";
 // durable claim of its operation and followed by a settle; an ambiguous outcome is reconciled from
 // provider evidence or held for an operator, never replayed blindly or failed over.
 
+type ProviderCredentials = {
+  apiKey: string;
+  webhookSecret: string;
+  account: string;
+  provider: string;
+};
+
+type ProviderPort = NewsletterProvider["Service"];
+
 export type NewsletterSetup =
   | {
       readonly _tag: "Ready";
-      readonly provider: NewsletterProviderShape;
+      readonly provider: ProviderPort;
       readonly config: NewsletterConfig;
       /**
        * Why NEW dispatch (audience creation, additions, drafts, sends) is blocked, or null. Removal
@@ -55,14 +64,19 @@ export const newsletterSetup = async (
   fetchFn: typeof fetch = (u, i) => fetch(u, i),
 ): Promise<NewsletterSetup> => {
   const runtime = await loadRuntimeNewsletterConfig(env);
-  if (runtime._tag === "Unusable") return { _tag: "Blocked", reason: runtime.reason };
-  let credentials: { apiKey: string; webhookSecret: string; account: string; provider: string };
-  if (runtime._tag === "Present") credentials = runtime.credentials;
+
+  if (Predicate.isTagged(runtime, "Unusable")) return { _tag: "Blocked", reason: runtime.reason };
+  let credentials: ProviderCredentials;
+
+  if (Predicate.isTagged(runtime, "Present")) credentials = runtime.credentials;
   else {
     const name = (env.NEWSLETTER_PROVIDER ?? "").trim();
+
     if (!name) return { _tag: "Blocked", reason: "no newsletter provider configured" };
+
     if (name !== "resend")
       return { _tag: "Blocked", reason: `unknown newsletter provider ${name}` };
+
     if (!env.NEWSLETTER_API_KEY || !env.NEWSLETTER_WEBHOOK_SECRET || !env.NEWSLETTER_ACCOUNT)
       return { _tag: "Blocked", reason: "newsletter credentials incomplete" };
     credentials = {
@@ -72,9 +86,11 @@ export const newsletterSetup = async (
       account: env.NEWSLETTER_ACCOUNT,
     };
   }
+
   // Previews never hold production subscriber data: their sandbox forbids external audiences.
   if ((env.MAIL_SANDBOX_DOMAINS ?? "").trim())
     return { _tag: "Blocked", reason: "newsletters are disabled in sandboxed stages" };
+
   const provider = makeResendNewsletterProvider(
     {
       apiKey: credentials.apiKey,
@@ -83,6 +99,7 @@ export const newsletterSetup = async (
     },
     (u, i) => fetchFn(u, i as RequestInit),
   );
+
   return {
     _tag: "Ready",
     provider,
@@ -100,6 +117,7 @@ export const newsletterSetup = async (
 };
 
 type Ledger = NewsletterLedger;
+
 export type LedgerCall = <K extends NewsletterMethod>(
   method: K,
   ...args: Parameters<Ledger[K]>
@@ -107,9 +125,10 @@ export type LedgerCall = <K extends NewsletterMethod>(
 
 /** Typed access to one creator's ledger over the WorldDO `newsletter` RPC. */
 export const ledgerOf = (env: CoreEnv, handle: string): LedgerCall => {
-  const stub = world(env, handle) as unknown as {
+  const stub = world(env, handle) as {
     newsletter(method: string, ...args: Array<unknown>): Promise<RpcResult<unknown>>;
   };
+
   return ((method: string, ...args: Array<unknown>) =>
     settle(stub.newsletter(method, ...args))) as LedgerCall;
 };
@@ -128,6 +147,7 @@ interface PostContent {
 export const renderNewsletter = async (env: CoreEnv, handle: string, post: PostContent) => {
   const { publicOrigin: origin, serviceDomain: domain } = origins(env);
   const online = `${origin}/@${handle}/${post.slug}`;
+
   return {
     from: `@${handle} <world@${domain}>`,
     subject: post.title,
@@ -161,10 +181,13 @@ export const approveNewsletter = async (
   scheduledAt: number | null = null,
 ): Promise<PublicationRow | { readonly blocked: string }> => {
   const setup = await newsletterSetup(env);
-  if (setup._tag === "Blocked") return { blocked: setup.reason };
+
+  if (Predicate.isTagged(setup, "Blocked")) return { blocked: setup.reason };
+
   if (setup.dispatchBlocked) return { blocked: setup.dispatchBlocked };
   const post = await loadPost(env, handle, postId, revision);
   const message = await renderNewsletter(env, handle, post);
+
   return ledgerOf(env, handle)("approve", {
     ...setup.config,
     postId,
@@ -208,64 +231,78 @@ export const runNewsletter = async (
   fetchFn?: typeof fetch,
 ): Promise<NewsletterRun> => {
   const setup = await newsletterSetup(env, fetchFn);
-  if (setup._tag === "Blocked") return { blocked: setup.reason, synced: 0 };
+
+  if (Predicate.isTagged(setup, "Blocked")) return { blocked: setup.reason, synced: 0 };
   const { provider, config, dispatchBlocked } = setup;
   const L = ledgerOf(env, handle);
   const run = <A>(e: Effect.Effect<A>) => Effect.runPromise(e);
 
   // 1. Audience. A mapping to another provider/account is never silently replaced.
   let audience = await L("audience");
+
   if (audience && (audience.provider !== config.provider || audience.account !== config.account))
     return {
       blocked: "creator is mapped to another provider account; reconcile before switching",
       synced: 0,
     };
+
   if (!audience && dispatchBlocked) return { blocked: dispatchBlocked, synced: 0 };
+
   if (!audience) {
     const opId = `aud_${handle}`;
     const claim = await L("claimOp", opId, "audience", null, null);
-    if (claim._tag === "Reconcile") {
+
+    if (Predicate.isTagged(claim, "Reconcile")) {
       // No documented lookup for a half-created segment/topic pair: hold for an operator.
       await L("reconcileOp", opId, "inconclusive");
+
       return { blocked: "audience creation outcome unknown", synced: 0 };
     }
-    if (claim._tag === "Skip")
+
+    if (Predicate.isTagged(claim, "Skip"))
       return { blocked: `audience operation ${claim.op.state}`, synced: 0 };
     const created = await run(provider.createAudience(`bye-${handle}`, opId));
-    if (created._tag !== "Accepted") {
+
+    if (!Predicate.isTagged(created, "Accepted")) {
       await L("settleOp", opId, created, null);
+
       return { blocked: `audience not created: ${created.detail}`, synced: 0 };
     }
-    const mapping: AudienceMapping = {
-      ...config,
-      audienceId: created.audience.audienceId,
-      ...(created.audience.scopeId ? { scopeId: created.audience.scopeId } : {}),
-    };
+
+    const mapping: AudienceMapping = created.audience.scopeId
+      ? {
+          ...config,
+          audienceId: created.audience.audienceId,
+          scopeId: created.audience.scopeId,
+        }
+      : { ...config, audienceId: created.audience.audienceId };
+
     await L("mapAudience", mapping);
     await recordRef(env, config, "audience", mapping.audienceId, handle);
     await L("settleOp", opId, { _tag: "Accepted", providerRef: mapping.audienceId }, null);
     audience = mapping;
   }
-  const ref = {
-    audienceId: audience.audienceId,
-    ...(audience.scopeId ? { scopeId: audience.scopeId } : {}),
-  };
+
+  const ref = audience.scopeId
+    ? { audienceId: audience.audienceId, scopeId: audience.scopeId }
+    : { audienceId: audience.audienceId };
 
   // 2. Contact sync (removals first; additions wait while a publication is open).
   let synced = 0;
+
   for (const item of await L("dueSync", SYNC_BATCH)) {
     // Removals always reach the provider; additions only while dispatch is enabled.
     if (item.subscribed && dispatchBlocked) continue;
     const op = item.subscribed ? "contact-sync" : "unsubscribe-sync";
     const check = checkOperation(provider.capabilities, op);
-    const outcome: OperationOutcome =
-      check._tag === "Ok"
-        ? await run(
-            provider.syncContact(ref, { address: item.address, subscribed: item.subscribed }),
-          )
-        : { _tag: "NotAccepted", retryable: false, detail: check.detail };
+
+    const outcome: OperationOutcome = Predicate.isTagged(check, "Ok")
+      ? await run(provider.syncContact(ref, { address: item.address, subscribed: item.subscribed }))
+      : { _tag: "NotAccepted", retryable: false, detail: check.detail };
+
     await L("settleSync", item.address, item.revision, outcome);
-    if (outcome._tag === "Accepted") {
+
+    if (Predicate.isTagged(outcome, "Accepted")) {
       synced++;
       await env.DIRECTORY.prepare(
         "INSERT INTO newsletter_contacts (provider, account, address, handle, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET updated_at = excluded.updated_at",
@@ -273,13 +310,16 @@ export const runNewsletter = async (
         .bind(config.provider, config.account, item.address, handle, Date.now())
         .run();
     }
+
     // Rate limited: stop this pass; the outbox keeps the rest.
-    if (outcome._tag === "NotAccepted" && outcome.detail.startsWith("http 429")) break;
+    if (Predicate.isTagged(outcome, "NotAccepted") && outcome.detail.startsWith("http 429")) break;
   }
 
   // 3. The open publication.
   const open = await L("openPublication");
+
   if (!open) return { synced };
+
   const after = await advancePublication(
     env,
     handle,
@@ -290,6 +330,7 @@ export const runNewsletter = async (
     L,
     dispatchBlocked,
   );
+
   return {
     synced,
     publication: { id: after.id, state: after.state, detail: after.detail },
@@ -300,7 +341,7 @@ export const runNewsletter = async (
 export const advancePublication = async (
   env: CoreEnv,
   handle: string,
-  provider: NewsletterProviderShape,
+  provider: ProviderPort,
   config: NewsletterConfig,
   audience: { readonly audienceId: string; readonly scopeId?: string },
   p: PublicationRow,
@@ -321,27 +362,36 @@ export const advancePublication = async (
   if (p.state === "submitted" || (p.state === "submit-pending" && p.providerRef)) {
     if (p.state === "submit-pending") {
       const settled = await settleAmbiguous(provider, p, "send", L);
+
       if (settled) return settled;
     }
+
     const seen = await run(provider.getBroadcast(p.providerRef!));
-    return seen._tag === "Found" ? L("observe", p.id, seen.broadcast.state) : p;
+
+    return Predicate.isTagged(seen, "Found") ? L("observe", p.id, seen.broadcast.state) : p;
   }
 
   if (p.state === "draft-pending") {
     const settled = await settleAmbiguous(provider, p, "create", L);
+
     if (settled) return settled;
   }
 
   if (p.state !== "approved" && p.state !== "drafted") return p;
+
   // Disabling sends stops new provider steps; it never asserts that submitted work was cancelled.
   if (dispatchBlocked) return wait(dispatchBlocked);
 
   // Dispatch-time rechecks: still published, within its send window, due, fresh, no drift.
   const published = await settle(world(env, handle).isPublished(p.postId, p.revision));
+
   if (!published) return L("requestCancel", p.id);
+
   if (now > p.expiresAt) return hold("send window expired before dispatch; approve again to send");
+
   if (p.scheduledAt !== null && p.scheduledAt > now) return wait("scheduled");
   const sync = await L("freshness", p.id);
+
   if (sync.pending > 0 || sync.held > 0)
     return wait(
       sync.held > 0
@@ -349,9 +399,11 @@ export const advancePublication = async (
         : "awaiting contact sync",
     );
   const drift = await L("audienceDrift", p.id);
+
   if (drift.length > 0)
     return hold(`provider audience exceeds approved snapshot (${drift.length})`);
   const eligible = await L("snapshotEligible", p.id);
+
   if (eligible.eligible === 0)
     return L("setPublication", p.id, {
       state: "cancelled",
@@ -361,16 +413,20 @@ export const advancePublication = async (
 
   const post = await loadPost(env, handle, p.postId, p.revision);
   const message = await renderNewsletter(env, handle, post);
+
   if ((await fingerprint(p.postId, p.revision, message, p.scheduledAt)) !== p.fingerprint)
     return hold("content no longer matches the approved publication");
 
   if (p.state === "approved") {
     const check = checkOperation(provider.capabilities, "broadcast-create");
-    if (check._tag !== "Ok") return hold(check.detail);
+
+    if (!Predicate.isTagged(check, "Ok")) return hold(check.detail);
     const opId = `${p.id}:create`;
     const claim = await L("claimOp", opId, "create", p.id, check.capability.idempotency);
-    if (claim._tag !== "Proceed") return p;
+
+    if (!Predicate.isTagged(claim, "Proceed")) return p;
     await L("setPublication", p.id, { state: "draft-pending" });
+
     const outcome = await run(
       provider.createBroadcast({
         operationId: opId,
@@ -383,19 +439,25 @@ export const advancePublication = async (
         headers: {},
       }),
     );
+
     const op = await L("settleOp", opId, outcome, check.capability.idempotency);
+
     if (op.state === "accepted" && op.providerRef) {
       await recordRef(env, config, "broadcast", op.providerRef, handle);
+
       return L("setPublication", p.id, {
         state: "drafted",
         providerRef: op.providerRef,
         detail: null,
       });
     }
+
     if (op.state === "rejected")
       return L("setPublication", p.id, { state: "failed", detail: op.detail });
+
     if (op.state === "pending")
       return L("setPublication", p.id, { state: "approved", detail: op.detail });
+
     return L("setPublication", p.id, { detail: `create ${op.state}` });
   }
 
@@ -403,10 +465,13 @@ export const advancePublication = async (
   const check = checkOperation(provider.capabilities, "broadcast-send", {
     exclusionsAtDispatch: true,
   });
-  if (check._tag !== "Ok") return hold(check.detail);
+
+  if (!Predicate.isTagged(check, "Ok")) return hold(check.detail);
   const seen = await run(provider.getBroadcast(p.providerRef!));
-  if (seen._tag !== "Found") return wait(`draft lookup ${seen._tag}`);
+
+  if (!Predicate.isTagged(seen, "Found")) return wait(`draft lookup ${seen._tag}`);
   const b = seen.broadcast;
+
   if (
     b.state !== "draft" ||
     b.subject !== p.subject ||
@@ -416,16 +481,21 @@ export const advancePublication = async (
     return hold("provider draft does not match the publication");
   const opId = `${p.id}:send`;
   const claim = await L("claimOp", opId, "send", p.id, check.capability.idempotency);
-  if (claim._tag !== "Proceed") return p;
+
+  if (!Predicate.isTagged(claim, "Proceed")) return p;
   await L("setPublication", p.id, { state: "submit-pending" });
   const outcome = await run(provider.sendBroadcast(p.providerRef!, opId, null));
   const op = await L("settleOp", opId, outcome, check.capability.idempotency);
+
   if (op.state === "accepted")
     return L("setPublication", p.id, { state: "submitted", detail: null });
+
   if (op.state === "rejected")
     return L("setPublication", p.id, { state: "failed", detail: op.detail });
+
   if (op.state === "pending")
     return L("setPublication", p.id, { state: "drafted", detail: op.detail });
+
   return L("setPublication", p.id, { detail: `send ${op.state}` });
 };
 
@@ -434,7 +504,7 @@ export const advancePublication = async (
  * this pass should stop, or null when the operation was settled and the caller may continue.
  */
 const settleAmbiguous = async (
-  provider: NewsletterProviderShape,
+  provider: ProviderPort,
   p: PublicationRow,
   kind: "create" | "send",
   L: LedgerCall,
@@ -442,37 +512,52 @@ const settleAmbiguous = async (
   const run = <A>(e: Effect.Effect<A>) => Effect.runPromise(e);
   const opId = `${p.id}:${kind}`;
   const op = await L("operation", opId);
+
   if (!op) return L("setPublication", p.id, { state: kind === "create" ? "approved" : "drafted" });
+
   if (op.state === "accepted") {
-    return L("setPublication", p.id, {
-      state: kind === "create" ? "drafted" : "submitted",
-      ...(op.providerRef && kind === "create" ? { providerRef: op.providerRef } : {}),
-      detail: null,
-    });
+    const state = kind === "create" ? "drafted" : "submitted";
+
+    return L(
+      "setPublication",
+      p.id,
+      op.providerRef && kind === "create"
+        ? { state, providerRef: op.providerRef, detail: null }
+        : { state, detail: null },
+    );
   }
+
   if (op.state === "pending") {
     return L("setPublication", p.id, { state: kind === "create" ? "approved" : "drafted" });
   }
+
   if (op.state === "in-flight") {
     // Claim again: a live lease skips; an expired one turns into Unknown for reconciliation below.
     const claim = await L("claimOp", opId, kind, p.id, null);
-    if (claim._tag === "Skip") return p;
-    if (claim._tag === "Proceed") {
+
+    if (Predicate.isTagged(claim, "Skip")) return p;
+
+    if (Predicate.isTagged(claim, "Proceed")) {
       // Only reachable when the provider protects retries; the ledger decided it is safe.
       await L("settleOp", opId, { _tag: "Unknown", detail: "re-claimed without a call" }, null);
+
       return p;
     }
   }
+
   if (op.state === "held" || op.state === "rejected")
     return L("setPublication", p.id, {
       state: "held",
       detail: `${kind} ${op.state}: ${op.detail ?? ""}`,
     });
+
   // Unknown: look for provider evidence. Absence is never inferred from a missing record.
   if (kind === "create") {
     const found = await run(provider.findBroadcast(p.id));
-    if (found._tag === "Found") {
+
+    if (Predicate.isTagged(found, "Found")) {
       await L("reconcileOp", opId, "accepted", found.broadcast.providerRef);
+
       return L("setPublication", p.id, {
         state: "drafted",
         providerRef: found.broadcast.providerRef,
@@ -481,13 +566,17 @@ const settleAmbiguous = async (
     }
   } else {
     const seen = await run(provider.getBroadcast(p.providerRef!));
-    if (seen._tag === "Found" && seen.broadcast.state !== "draft") {
+
+    if (Predicate.isTagged(seen, "Found") && seen.broadcast.state !== "draft") {
       await L("reconcileOp", opId, "accepted", p.providerRef!);
       await L("setPublication", p.id, { state: "submitted", detail: "send reconciled" });
+
       return L("observe", p.id, seen.broadcast.state);
     }
   }
+
   await L("reconcileOp", opId, "inconclusive");
+
   return L("setPublication", p.id, {
     state: "held",
     detail: `${kind} outcome unknown; awaiting operator review`,
@@ -495,47 +584,62 @@ const settleAmbiguous = async (
 };
 
 const cancelSubmitted = async (
-  provider: NewsletterProviderShape,
+  provider: ProviderPort,
   p: PublicationRow,
   L: LedgerCall,
 ): Promise<PublicationRow> => {
   const run = <A>(e: Effect.Effect<A>) => Effect.runPromise(e);
   const check = checkOperation(provider.capabilities, "broadcast-cancel");
-  if (check._tag !== "Ok")
+
+  if (!Predicate.isTagged(check, "Ok"))
     return L("setPublication", p.id, { cancel: { _tag: "Unsupported", detail: check.detail } });
+
   if (!p.providerRef)
     return L("setPublication", p.id, {
       cancel: { _tag: "Uncertain", detail: "no provider reference for the submitted broadcast" },
     });
   const before = await run(provider.getBroadcast(p.providerRef));
-  if (before._tag === "Found") {
+
+  if (Predicate.isTagged(before, "Found")) {
     const observed = await L("observe", p.id, before.broadcast.state);
+
     if (observed.state === "cancelled") return observed;
+
     if (before.broadcast.state === "sent")
       return L("setPublication", p.id, {
         cancel: { _tag: "Unsupported", detail: "already sent; cancellation cannot recall mail" },
       });
   }
+
   const opId = `${p.id}:cancel`;
   const claim = await L("claimOp", opId, "cancel", p.id, check.capability.idempotency);
-  if (claim._tag === "Reconcile") {
+
+  if (Predicate.isTagged(claim, "Reconcile")) {
     await L("reconcileOp", opId, "inconclusive");
+
     return L("setPublication", p.id, {
       cancel: { _tag: "Uncertain", detail: "cancel outcome unknown" },
     });
   }
-  if (claim._tag === "Skip") {
+
+  if (Predicate.isTagged(claim, "Skip")) {
     // Already accepted: confirm coverage from the observed state.
     const seen = await run(provider.getBroadcast(p.providerRef));
-    return seen._tag === "Found" ? L("observe", p.id, seen.broadcast.state) : p;
+
+    return Predicate.isTagged(seen, "Found") ? L("observe", p.id, seen.broadcast.state) : p;
   }
+
   const outcome = await run(provider.cancelBroadcast(p.providerRef, opId));
   const op = await L("settleOp", opId, outcome, check.capability.idempotency);
+
   if (op.state === "accepted") {
     const seen = await run(provider.getBroadcast(p.providerRef));
-    if (seen._tag === "Found") {
+
+    if (Predicate.isTagged(seen, "Found")) {
       const observed = await L("observe", p.id, seen.broadcast.state);
+
       if (observed.state === "cancelled") return observed;
+
       // Scheduled broadcasts return to draft on cancel: nothing was sent.
       if (seen.broadcast.state === "draft")
         return L("setPublication", p.id, {
@@ -543,16 +647,20 @@ const cancelSubmitted = async (
           cancel: { _tag: "Confirmed", coverage: "complete" },
         });
     }
+
     return p;
   }
+
   if (op.state === "rejected")
     return L("setPublication", p.id, {
       cancel: { _tag: "Unsupported", detail: op.detail ?? "provider refused cancellation" },
     });
+
   if (op.state === "unknown" || op.state === "held")
     return L("setPublication", p.id, {
       cancel: { _tag: "Uncertain", detail: op.detail ?? "unknown" },
     });
+
   return p;
 };
 
@@ -586,9 +694,11 @@ export const intakeNewsletterEvents = async (
   now = Date.now(),
 ): Promise<EventIntake> => {
   const setup = await newsletterSetup(env);
-  if (setup._tag === "Blocked") return { _tag: "Unavailable" };
+
+  if (Predicate.isTagged(setup, "Blocked")) return { _tag: "Unavailable" };
   const verified = await Effect.runPromise(setup.provider.verifyEvents(body, headers, now));
-  if (verified._tag === "Unauthenticated")
+
+  if (Predicate.isTagged(verified, "Unauthenticated"))
     return { _tag: "Unauthenticated", detail: verified.detail };
   const { provider, account } = setup.config;
   await env.DIRECTORY.batch(
@@ -613,14 +723,17 @@ export const intakeNewsletterEvents = async (
     ),
   );
   let applied = 0;
+
   for (const e of verified.events) {
     if (e.kind === "informational") continue;
+
     try {
       if (await applyStoredEvent(env, { provider, account, event_id: e.eventId })) applied++;
     } catch {
       // Left `received`: the reconciler applies it later. The receipt is already durable.
     }
   }
+
   return { _tag: "Persisted", events: verified.events.length, applied };
 };
 
@@ -637,12 +750,14 @@ export const applyStoredEvent = async (
   )
     .bind(key.provider, key.account, key.event_id)
     .first<StoredEvent>();
+
   if (!e) return true;
   await env.DIRECTORY.prepare(
     "UPDATE newsletter_events SET attempts = attempts + 1 WHERE provider = ? AND account = ? AND event_id = ?",
   )
     .bind(e.provider, e.account, e.event_id)
     .run();
+
   // Bound to the configured provider account: refs from any other account never match.
   const handles = e.broadcast_ref
     ? (
@@ -661,25 +776,36 @@ export const applyStoredEvent = async (
             .all<{ handle: string }>()
         ).results
       : [];
+
   let mapped = false;
+
   for (const { handle } of handles) {
-    const r = await ledgerOf(env, handle)("applyEvent", {
+    const input: Types.Mutable<Parameters<Ledger["applyEvent"]>[0]> = {
       eventId: e.event_id,
       kind: e.kind,
       rawType: e.raw_type,
-      ...(e.address ? { address: e.address } : {}),
-      ...(e.broadcast_ref ? { broadcastRef: e.broadcast_ref } : {}),
-      ...(e.scope === "provider" || e.scope === "creator" ? { scope: e.scope } : {}),
       occurredAt: Number(e.occurred_at),
-    });
+    };
+
+    if (e.address) input.address = e.address;
+
+    if (e.broadcast_ref) input.broadcastRef = e.broadcast_ref;
+
+    if (e.scope === "provider" || e.scope === "creator") input.scope = e.scope;
+
+    const r = await ledgerOf(env, handle)("applyEvent", input);
+
     if (r !== "unmapped") mapped = true;
   }
+
   await env.DIRECTORY.prepare(
     "UPDATE newsletter_events SET state = ? WHERE provider = ? AND account = ? AND event_id = ?",
   )
     .bind(mapped ? "applied" : "unmapped", e.provider, e.account, e.event_id)
     .run();
+
   if (!mapped) metric("newsletter.event.unmapped", 1, { kind: e.kind });
+
   return true;
 };
 
@@ -695,17 +821,21 @@ export const reconcileNewsletters = async (
   now = Date.now(),
 ): Promise<{ readonly events: number; readonly creators: number; readonly failures: number }> => {
   const setup = await newsletterSetup(env);
-  if (setup._tag === "Blocked") return { events: 0, creators: 0, failures: 0 };
+
+  if (Predicate.isTagged(setup, "Blocked")) return { events: 0, creators: 0, failures: 0 };
   const { provider, account } = setup.config;
   let events = 0;
   let failures = 0;
+
   const pending = await env.DIRECTORY.prepare(
     "SELECT provider, account, event_id, received_at FROM newsletter_events WHERE provider = ? AND account = ? AND state = 'received' ORDER BY received_at LIMIT 100",
   )
     .bind(provider, account)
     .all<{ provider: string; account: string; event_id: string; received_at: number }>();
+
   const oldest = pending.results[0]?.received_at;
   metric("newsletter.event.lag_ms", oldest ? now - Number(oldest) : 0);
+
   for (const row of pending.results) {
     try {
       if (await applyStoredEvent(env, row)) events++;
@@ -713,40 +843,48 @@ export const reconcileNewsletters = async (
       failures++;
     }
   }
+
   const creators = await env.DIRECTORY.prepare(
     "SELECT ref, handle FROM newsletter_refs WHERE provider = ? AND account = ? AND kind = 'audience' ORDER BY last_run_at LIMIT ?",
   )
     .bind(provider, account, NEWSLETTER_RECONCILE_BATCH)
     .all<{ ref: string; handle: string }>();
+
   let unknown = 0;
   let held = 0;
   let oldestSync = 0;
   let uncertainCancels = 0;
+
   for (const c of creators.results) {
     await env.DIRECTORY.prepare(
       "UPDATE newsletter_refs SET last_run_at = ? WHERE provider = ? AND account = ? AND kind = 'audience' AND ref = ?",
     )
       .bind(now, provider, account, c.ref)
       .run();
+
     try {
       await runNewsletter(env, c.handle);
       const h = await ledgerOf(env, c.handle)("health");
       unknown += h.unknownOps;
       held += h.heldOps;
       uncertainCancels += h.uncertainCancels;
+
       if (h.oldestSyncPendingAt !== null)
         oldestSync = Math.max(oldestSync, now - h.oldestSyncPendingAt);
     } catch {
       failures++;
     }
   }
+
   metric("newsletter.ops.unknown", unknown);
   metric("newsletter.ops.held", held);
   metric("newsletter.sync.lag_ms", oldestSync);
   metric("newsletter.cancel.uncertain", uncertainCancels);
+
   if (unknown + held + uncertainCancels > 0)
     console.warn(
       JSON.stringify({ level: "warn", op: "newsletter.review", unknown, held, uncertainCancels }),
     );
+
   return { events, creators: creators.results.length, failures };
 };

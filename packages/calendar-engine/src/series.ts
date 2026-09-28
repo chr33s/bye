@@ -95,6 +95,7 @@ export const calExpandSeries = (
   const recurring = !!series.rule || (series.rdates?.length ?? 0) > 0;
   const base = spanMs(series.dtstart, series.dtend, viewerZone);
   const durationMs = Math.max(0, base.endMs - base.startMs);
+
   const starts = calExpand(
     {
       dtstart: series.dtstart,
@@ -110,8 +111,10 @@ export const calExpandSeries = (
       maxOccurrences: maxOccurrences + 100,
     },
   );
+
   const out: Array<CalOccurrence> = [];
   const seen = new Set<string>();
+
   const emit = (
     key: string,
     start: CalTime,
@@ -120,6 +123,7 @@ export const calExpandSeries = (
     isException: boolean,
   ): void => {
     const { startMs, endMs } = spanMs(start, end, viewerZone);
+
     if (!(startMs < window.to && Math.max(endMs, startMs + 1) > window.from)) return;
     seen.add(key);
     out.push({
@@ -135,12 +139,15 @@ export const calExpandSeries = (
       recurring,
     });
   };
+
   for (const s of starts) {
     const exception = byKey.get(s.key);
+
     if (exception?.cancelled) {
       seen.add(s.key);
       continue;
     }
+
     if (exception) {
       const start = exception.start ?? s.start;
       const end = exception.end ?? endFor(series, start);
@@ -149,12 +156,14 @@ export const calExpandSeries = (
       emit(s.key, s.start, endFor(series, s.start), series.data, false);
     }
   }
+
   // Overrides moved into the window from an original time outside the expansion range.
   for (const e of exceptions) {
     if (e.cancelled || seen.has(e.recurrenceKey) || !e.start) continue;
     const end = e.end ?? endFor(series, e.start);
     emit(e.recurrenceKey, e.start, end, { ...series.data, ...e.data }, true);
   }
+
   return out
     .sort((a, b) => a.startMs - b.startMs || a.uid.localeCompare(b.uid))
     .slice(0, maxOccurrences);
@@ -191,14 +200,16 @@ export const calSplitSeries = (
   const mapping = { originalUid: series.uid, newUid, splitKey: split.key };
   const tailStart = split.start;
   const tailEnd = endFor(series, tailStart);
-  const tailRule: CalRRule | undefined = series.rule
-    ? {
-        ...series.rule,
-        ...(series.rule.count !== undefined
-          ? { count: Math.max(1, series.rule.count - beforeCount) }
-          : {}),
-      }
-    : undefined;
+
+  let tailRule: CalRRule | undefined;
+
+  if (series.rule) {
+    tailRule =
+      series.rule.count === undefined
+        ? { ...series.rule }
+        : { ...series.rule, count: Math.max(1, series.rule.count - beforeCount) };
+  }
+
   const tail: CalSeries = {
     ...series,
     uid: newUid,
@@ -208,27 +219,34 @@ export const calSplitSeries = (
     rdates: (series.rdates ?? []).filter((t) => !isBefore(t)),
     exdates: (series.exdates ?? []).filter((t) => !isBefore(t)),
   };
+
   const tailExceptions = exceptions.filter((e) => !keyBefore(e.recurrenceKey));
+
   if (beforeCount === 0)
     return { head: undefined, headExceptions: [], tail, tailExceptions, mapping };
+
   const headUntil =
     series.dtstart.kind === "date" && split.start.kind === "date"
       ? calFormatDate(calAddDays(split.start.date, -1)).replace(/-/g, "")
       : calFormatUtcStamp(splitMs - 1000);
+
   const headRule: CalRRule | undefined = series.rule
     ? (() => {
         const { count: _count, until: _until, ...rest } = series.rule;
+
         return series.rule.count !== undefined
           ? { ...rest, count: beforeCount }
           : { ...rest, until: headUntil };
       })()
     : undefined;
+
   const head: CalSeries = {
     ...series,
     rule: headRule,
     rdates: (series.rdates ?? []).filter(isBefore),
     exdates: (series.exdates ?? []).filter(isBefore),
   };
+
   return {
     head,
     headExceptions: exceptions.filter((e) => keyBefore(e.recurrenceKey)),
@@ -259,19 +277,23 @@ export interface CalSeriesChanges {
  */
 export const calApplySeriesChanges = (series: CalSeries, changes: CalSeriesChanges): CalSeries => {
   const start = changes.start ?? series.dtstart;
+
   const end =
     changes.end ??
     (changes.start && !(changes.start.kind === "timed" && series.dtend.kind === "date")
       ? endFor(series, changes.start)
       : series.dtend);
+
   // An explicit new end replaces a DURATION-defined length; otherwise it is kept.
   const { duration, ...rest } = series;
-  return {
+
+  const updated: CalSeries = {
     ...rest,
-    ...(duration && !changes.end ? { duration } : {}),
     dtstart: start,
     dtend: end,
     rule: changes.rule === null ? undefined : (changes.rule ?? series.rule),
     data: { ...series.data, ...changes.data },
   };
+
+  return duration && !changes.end ? { ...updated, duration } : updated;
 };

@@ -37,6 +37,7 @@ export class MailboxFacts extends Context.Service<
 
 /** What guards may fail with and require (all request-scoped services). */
 export type GuardFailure = Forbidden | NotFound | StepUpRequired | Unavailable;
+
 export type GuardServices = CurrentAuthentication | Principal | Directory | MailboxFacts;
 
 type Guard<K extends MailboxCommandTag> = (
@@ -44,14 +45,18 @@ type Guard<K extends MailboxCommandTag> = (
   command: Extract<MailboxCommand, { readonly _tag: K }>,
 ) => Effect.Effect<void, GuardFailure, GuardServices>;
 
-export const COMMAND_GUARDS: { readonly [K in MailboxCommandTag]?: Guard<K> } = {
+type CommandGuardTable = { readonly [K in MailboxCommandTag]?: Guard<K> };
+
+export const COMMAND_GUARDS: CommandGuardTable = {
   // New sending identities need a recent step-up; a hosted identity is auto-verified in the
   // mailbox, so the directory must confirm the principal may send as that address (E19).
   AddIdentity: (mailboxId, c) =>
     Effect.gen(function* () {
       yield* requireStepUp("new-identity");
+
       if (c.kind !== "hosted") return;
       const principal = yield* requireMailbox(mailboxId, "send");
+
       if (!(yield* (yield* Directory).canSendAs(principal.userId, mailboxId, c.address)))
         return yield* new Forbidden({ reason: "address not authorized for this mailbox" });
     }),
@@ -65,9 +70,12 @@ export const COMMAND_GUARDS: { readonly [K in MailboxCommandTag]?: Guard<K> } = 
       yield* requireMailbox(mailboxId, "read");
       yield* requireMailbox(c.targetMailboxId, "send");
       const source = yield* (yield* MailboxFacts).redeliverySource(mailboxId, c.deliveryId);
+
       if (!source) return yield* new NotFound({ resource: "delivery" });
+
       if (source.quarantined)
         return yield* new Forbidden({ reason: "quarantined messages cannot be redelivered" });
+
       if (!source.scan.allowed)
         return yield* new Forbidden({ reason: `message scan ${source.scan.status}` });
     }),
@@ -84,5 +92,6 @@ export const guardMailboxCommand = (
   command: MailboxCommand,
 ): Effect.Effect<void, GuardFailure, GuardServices> => {
   const guard = COMMAND_GUARDS[command._tag] as Guard<MailboxCommandTag> | undefined;
+
   return guard ? guard(mailboxId, command) : Effect.void;
 };

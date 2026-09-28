@@ -36,8 +36,10 @@ export class CalendarDO extends DurableObject<CoreEnv> {
   private open(): CalendarStore {
     if (this.store) return this.store;
     const row = this.ctx.storage.kv.get<CalendarStoreConfig>("config");
+
     if (!row) throw new Error("calendar not provisioned");
     this.store = CalendarStore.open(this.ctx.storage, kernelClock, row);
+
     return this.store;
   }
 
@@ -68,7 +70,9 @@ export class CalendarDO extends DurableObject<CoreEnv> {
   /** A command (public or authority-internal). `actor` null: trusted Worker code with no principal. */
   execute(actor: string | null, command: CalendarAuthorityCommand): RpcResult<unknown> {
     const result = toRpcSync(() => calendarExecute(this.open(), actor, command));
+
     if (result.ok) this.ctx.waitUntil(this.afterCommit());
+
     return result;
   }
 
@@ -90,6 +94,7 @@ export class CalendarDO extends DurableObject<CoreEnv> {
   /** Hibernating change-hint socket (§8); authorized and credential-tagged by the API Worker. */
   override async fetch(request: Request): Promise<Response> {
     if (!this.ctx.storage.kv.get("config")) return new Response("not found", { status: 404 });
+
     return acceptLiveSocket(this.ctx, request, this.open().kernel.currentSeq());
   }
 
@@ -113,6 +118,7 @@ export class CalendarDO extends DurableObject<CoreEnv> {
     store.kernel.compactChanges(10_000);
     await this.afterCommit();
     await setAlarmAt(this.ctx.storage, due.nextAlarm);
+
     return { nextWake: store.kernel.nextDueAt() };
   }
 

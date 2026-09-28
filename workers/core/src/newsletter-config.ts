@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import {
   fromBase64Url,
   openWithKey,
@@ -62,9 +63,12 @@ type Field = "api_key" | "webhook_secret";
 /** NEWSLETTER_CONFIG_SEAL_KEY: 32 bytes, base64url (as onboarding generates it). */
 export const newsletterSealKeys = (env: Pick<CoreEnv, "NEWSLETTER_CONFIG_SEAL_KEY">) => {
   const raw = (env.NEWSLETTER_CONFIG_SEAL_KEY ?? "").trim();
+
   if (!raw) return null;
+
   try {
     const bytes = fromBase64Url(raw.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""));
+
     return bytes.byteLength === 32
       ? ({ current: 1, keys: { 1: new Uint8Array(bytes) } } satisfies VersionedKeys)
       : null;
@@ -95,8 +99,10 @@ export const openField = async (
     c?: unknown;
     v?: unknown;
   };
-  if (plain.c !== context(field) || typeof plain.v !== "string")
+
+  if (plain.c !== context(field) || !Predicate.isString(plain.v))
     throw new Error("sealed value belongs to another field");
+
   return plain.v;
 };
 
@@ -115,24 +121,31 @@ export const loadRuntimeNewsletterConfig = async (
   env: CoreEnv,
 ): Promise<RuntimeNewsletterConfig> => {
   const row = await readRow(env);
+
   if (!row) return { _tag: "None" };
+
   if (row.status !== "ready")
     return { _tag: "Unusable", reason: "newsletter provider needs attention" };
+
   if (row.provider !== "resend")
     return { _tag: "Unusable", reason: `unknown newsletter provider ${row.provider}` };
   const keys = newsletterSealKeys(env);
+
   if (!keys) return { _tag: "Unusable", reason: "newsletter configuration key unavailable" };
+
   try {
     const apiKey = await openField(keys, "api_key", {
       keyVersion: row.key_version,
       iv: row.api_key_iv,
       ciphertext: row.api_key_ciphertext,
     });
+
     const webhookSecret = await openField(keys, "webhook_secret", {
       keyVersion: row.key_version,
       iv: row.webhook_secret_iv,
       ciphertext: row.webhook_secret_ciphertext,
     });
+
     return {
       _tag: "Present",
       credentials: { provider: "resend", account: row.account_ref, apiKey, webhookSecret },
@@ -144,6 +157,7 @@ export const loadRuntimeNewsletterConfig = async (
 };
 
 const qualified = (env: CoreEnv) => (env.NEWSLETTER_QUALIFIED ?? "").trim() !== "";
+
 const sandboxed = (env: CoreEnv) => (env.MAIL_SANDBOX_DOMAINS ?? "").trim() !== "";
 
 /** Legacy deployment configuration (CI/operator-managed stages): complete or absent. */
@@ -170,8 +184,10 @@ export const newsletterConfigView = async (
   const q = qualified(env);
   const base = { provider: "resend" as const, qualified: q };
   const row = await readRow(env);
+
   if (row) {
-    const usable = (await loadRuntimeNewsletterConfig(env))._tag === "Present";
+    const usable = Predicate.isTagged(await loadRuntimeNewsletterConfig(env), "Present");
+
     if (usable)
       return {
         ...base,
@@ -182,6 +198,7 @@ export const newsletterConfigView = async (
     // Unusable credentials must not lock the instance out: an operator may repair them, unless
     // nothing can be stored at all (then the installation itself is blocked).
     const blocked = setupBlocker(env);
+
     return {
       ...base,
       status: blocked ? "blocked" : "needs-attention",
@@ -190,18 +207,24 @@ export const newsletterConfigView = async (
       detail: blocked ?? "the stored newsletter credentials cannot be used; reconnect Resend",
     };
   }
+
   if (legacyNewsletterEnv(env)) return { ...base, status: "ready", canConfigure: false };
   const blocked = setupBlocker(env);
+
   if (blocked) return { ...base, status: "blocked", canConfigure: false, detail: blocked };
+
   const pending = await env.DIRECTORY.prepare(
     "SELECT detail FROM newsletter_provider_reconcile ORDER BY created_at DESC LIMIT 1",
   ).first<{ detail: string }>();
-  return {
-    ...base,
-    status: pending ? "needs-attention" : "unconfigured",
-    canConfigure: isOperator,
-    ...(pending ? { detail: pending.detail } : {}),
-  };
+
+  return pending
+    ? {
+        ...base,
+        status: "needs-attention",
+        canConfigure: isOperator,
+        detail: pending.detail,
+      }
+    : { ...base, status: "unconfigured", canConfigure: isOperator };
 };
 
 // ---- setup ----
@@ -227,9 +250,9 @@ const RESEND_KEY = /^re_[A-Za-z0-9_-]{8,200}$/;
 /** A Resend API call with only the operator's key; errors never carry the key or a body. */
 const resendCall =
   (apiKey: string, fetchFn: Fetch, base: string) =>
-  async (method: string, path: string, body?: unknown): Promise<Response | null> => {
+  async <B>(method: string, path: string, body?: B): Promise<Response | null> => {
     try {
-      return await fetchFn(`${base}${path}`, {
+      const init: RequestInit = {
         method,
         headers: {
           authorization: `Bearer ${apiKey}`,
@@ -237,9 +260,12 @@ const resendCall =
           "content-type": "application/json",
           "user-agent": "bye-mailcore/1",
         },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(15_000),
-      });
+      };
+
+      if (body !== undefined) init.body = JSON.stringify(body);
+
+      return await fetchFn(`${base}${path}`, init);
     } catch {
       return null;
     }
@@ -254,7 +280,7 @@ const readJson = async <T>(r: Response): Promise<T | null> => {
 };
 
 const secretOf = (b: { signing_secret?: unknown } | null) =>
-  typeof b?.signing_secret === "string" && b.signing_secret.startsWith("whsec_")
+  Predicate.isString(b?.signing_secret) && b.signing_secret.startsWith("whsec_")
     ? b.signing_secret
     : null;
 
@@ -273,6 +299,7 @@ const recordReconcile = async (
   } catch {
     // The operator still gets needs-attention in the response; a retry lists and reconciles.
   }
+
   console.warn(JSON.stringify({ level: "warn", op: "newsletter.config.reconcile", detail }));
 };
 
@@ -295,17 +322,23 @@ export const configureNewsletterProvider = async (
 ): Promise<ConfigureResult> => {
   const reject = (code: Extract<ConfigureResult, { _tag: "Rejected" }>["code"], message: string) =>
     ({ _tag: "Rejected", code, message }) as const;
+
   if (!qualified(env)) return reject("forbidden", "newsletters are not qualified for this release");
+
   if (sandboxed(env)) return reject("forbidden", "newsletters are disabled in sandboxed stages");
   const keys = newsletterSealKeys(env);
+
   if (!keys) return reject("unavailable", "this installation cannot store newsletter credentials");
+
   if (input.provider !== "resend") return reject("bad_request", "unsupported newsletter provider");
+
   if (!RESEND_KEY.test(input.apiKey)) return reject("bad_request", "that is not a Resend API key");
   const existing = await readRow(env);
+
   if (
     existing === null
       ? legacyNewsletterEnv(env)
-      : (await loadRuntimeNewsletterConfig(env))._tag === "Present"
+      : Predicate.isTagged(await loadRuntimeNewsletterConfig(env), "Present")
   )
     return reject("conflict", "a newsletter provider is already configured");
 
@@ -314,37 +347,46 @@ export const configureNewsletterProvider = async (
 
   // 1. List first: a retry after an uncertain create finds the earlier webhook.
   const listed = await call("GET", "/webhooks");
+
   if (listed === null)
     return reject("unavailable", "Resend could not be reached; nothing was changed");
+
   if (listed.status === 401 || listed.status === 403)
     return reject(
       "bad_request",
       "Resend refused this key; create a key with full access (contacts, broadcasts and webhooks)",
     );
+
   if (!listed.ok)
     return reject("unavailable", `Resend returned ${listed.status}; nothing was changed`);
+
   const data =
     (await readJson<{ data?: ReadonlyArray<Partial<ResendWebhook>> }>(listed))?.data ?? [];
+
   const matches = data.filter(
-    (w): w is ResendWebhook => typeof w.id === "string" && w.endpoint === endpoint,
+    (w): w is ResendWebhook => Predicate.isString(w.id) && w.endpoint === endpoint,
   );
 
   let webhookId: string | null = null;
   let secret: string | null = null;
   let created = false;
+
   for (const w of matches) {
     if (secret === null) {
       const got = await call("GET", `/webhooks/${encodeURIComponent(w.id)}`);
       const s = got?.ok ? secretOf(await readJson(got)) : null;
+
       if (s) {
         webhookId = w.id;
         secret = s;
         continue;
       }
     }
+
     // A Bye webhook whose secret Bye cannot recover (or a duplicate) would deliver events nobody
     // can verify: remove it, and stop if its removal can't be confirmed.
     const del = await call("DELETE", `/webhooks/${encodeURIComponent(w.id)}`);
+
     if (!del || !(del.ok || del.status === 404)) {
       await recordReconcile(
         env,
@@ -352,6 +394,7 @@ export const configureNewsletterProvider = async (
         w.id,
         "an existing Resend webhook for this instance could not be reused or removed",
       );
+
       return {
         _tag: "NeedsAttention",
         message:
@@ -363,6 +406,7 @@ export const configureNewsletterProvider = async (
   // 2. Create when none was reusable.
   if (secret === null) {
     const res = await call("POST", "/webhooks", { endpoint, events: [...RESEND_WEBHOOK_EVENTS] });
+
     if (res !== null && res.status >= 400 && res.status < 500)
       return reject(
         "bad_request",
@@ -372,19 +416,22 @@ export const configureNewsletterProvider = async (
       );
     const body = res?.ok ? await readJson<{ id?: unknown; signing_secret?: unknown }>(res) : null;
     const s = secretOf(body);
-    if (!res?.ok || typeof body?.id !== "string" || !s) {
+
+    if (!res?.ok || !Predicate.isString(body?.id) || !s) {
       // The webhook may exist now. Never create another blindly: the retry lists and reconciles.
       await recordReconcile(
         env,
         endpoint,
-        typeof body?.id === "string" ? body.id : null,
+        Predicate.isString(body?.id) ? body.id : null,
         "webhook creation outcome unknown",
       );
+
       return {
         _tag: "NeedsAttention",
         message: "the Resend webhook may have been created; retry to reconcile it",
       };
     }
+
     webhookId = body.id;
     secret = s;
     created = true;
@@ -392,6 +439,7 @@ export const configureNewsletterProvider = async (
 
   // 3. Seal and persist.
   const now = Date.now();
+
   try {
     const apiKey = await sealField(keys, "api_key", input.apiKey);
     const hook = await sealField(keys, "webhook_secret", secret);
@@ -429,20 +477,26 @@ export const configureNewsletterProvider = async (
   } catch {
     if (created && webhookId) {
       const del = await call("DELETE", `/webhooks/${encodeURIComponent(webhookId)}`);
+
       if (del && (del.ok || del.status === 404))
         return reject("unavailable", "the configuration could not be saved; nothing was kept");
     }
+
     await recordReconcile(env, endpoint, webhookId, "the configuration could not be saved");
+
     return {
       _tag: "NeedsAttention",
       message: "the configuration could not be saved; retry to reconcile the Resend webhook",
     };
   }
+
   // A repaired row's old webhook (e.g. for a previous endpoint) would deliver events nobody can
   // verify: remove it, or leave a reconcile record when that can't be confirmed.
   const stale = existing?.provider_webhook_id ?? null;
+
   if (stale && stale !== webhookId) {
     const del = await call("DELETE", `/webhooks/${encodeURIComponent(stale)}`);
+
     if (!del || !(del.ok || del.status === 404))
       await recordReconcile(
         env,
@@ -451,6 +505,7 @@ export const configureNewsletterProvider = async (
         "the previous Resend webhook could not be removed",
       );
   }
+
   console.log(
     JSON.stringify({
       level: "info",
@@ -459,5 +514,6 @@ export const configureNewsletterProvider = async (
       repaired: existing !== null,
     }),
   );
+
   return { _tag: "Ready", configuredAt: now };
 };

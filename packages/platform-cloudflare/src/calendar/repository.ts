@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Predicate } from "effect";
 import { CalendarFailure, CalendarRepository } from "@bye/application";
 import {
   calIsValidTimeZone,
@@ -20,30 +20,69 @@ import { calendarError, type CalendarOccurrenceView } from "./types.ts";
 // read models. Both enforce the access table first, then dispatch to the store. The DO RPC, the
 // in-process repository used by tests, and nothing else call the store's operations.
 
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+/** A decoded JSON wire value; requests arrive untyped and are probed structurally below. */
+type WireValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | ReadonlyArray<WireValue>
+  | WireRecord;
+
+interface WireRecord {
+  readonly [key: string]: WireValue;
+}
+
+const isObject = (v: WireValue): v is WireRecord =>
+  Predicate.isObjectKeyword(v) && !Predicate.isFunction(v);
+
+/** A wire object claiming to be a time; `calTimeProblem` then decides whether it is valid. */
+const isTimeCandidate = (v: WireValue): v is WireRecord & CalTime => isObject(v);
+
+type StoreInput<K extends keyof CalendarStore> = CalendarStore[K] extends (
+  input: infer I,
+  ...rest: Array<never>
+) => infer _Result
+  ? I
+  : never;
+
+type Input<K extends keyof CalendarStore> = {
+  -readonly [P in keyof StoreInput<K>]: StoreInput<K>[P];
+};
 
 /**
  * Wire shapes are permissive (frozen v1 contracts), so time values are checked here, before any
  * zone or date math: an unknown `tzid`/`viewerZone` or an out-of-range field is a `bad_request`,
  * never a RangeError (500) or a silent `Date` rollover.
  */
-const checkTimeInputs = (m: Record<string, unknown>): void => {
-  const time = (what: string, v: unknown): void => {
-    if (!isObject(v)) return;
-    const problem = calTimeProblem(v as unknown as CalTime);
+const checkTimeInputs = (input: CalendarAuthorityCommand | CalendarAuthorityQuery): void => {
+  const m = input as WireRecord;
+
+  const time = (what: string, v: WireValue): void => {
+    if (!isTimeCandidate(v)) return;
+    const problem = calTimeProblem(v);
+
     if (problem) throw calendarError("bad_request", `${what}: ${problem}`);
   };
-  const date = (what: string, v: unknown): void => {
+
+  const date = (what: string, v: WireValue): void => {
     if (isObject(v)) time(what, { kind: "date", date: v });
   };
+
   for (const key of ["start", "end"]) time(key, m[key]);
+
   for (const key of ["rdates", "exdates"])
-    if (Array.isArray(m[key])) for (const t of m[key] as Array<unknown>) time(key, t);
+    if (Array.isArray(m[key])) for (const t of m[key] as ReadonlyArray<WireValue>) time(key, t);
+
   if (isObject(m.changes)) for (const key of ["start", "end"]) time(key, m.changes[key]);
+
   for (const key of ["date", "from", "to"]) date(key, m[key]);
   const zone = m.viewerZone;
-  if (zone !== undefined && (typeof zone !== "string" || !calIsValidTimeZone(zone)))
+
+  if (zone !== undefined && (!Predicate.isString(zone) || !calIsValidTimeZone(zone)))
     throw calendarError("bad_request", `unknown time zone ${JSON.stringify(zone)}`);
+
   if (m.type === "Month" || m.type === "Year")
     date(String(m.type), { year: m.year, month: m.type === "Month" ? m.month : 1, day: 1 });
 };
@@ -53,23 +92,31 @@ export const calendarExecute = (
   store: CalendarStore,
   actor: string | null,
   c: CalendarAuthorityCommand,
-): unknown => {
+) => {
   authorizeCalendar(store, actor, c);
-  checkTimeInputs(c as unknown as Record<string, unknown>);
+  checkTimeInputs(c);
   // Principal-free (system) commands never read `actor`; every other policy guarantees one.
   const base = { commandId: c.commandId, actor: actor ?? "" };
+
   switch (c.type) {
     case "CreateCalendar":
       return store.createCalendar({ ...base, name: c.name, color: c.color });
-    case "UpdateCalendar":
-      return store.updateCalendar({
+    case "UpdateCalendar": {
+      const input: Input<"updateCalendar"> = {
         ...base,
         calendarId: c.calendarId,
         expectedRevision: c.expectedRevision,
-        ...(c.name !== undefined ? { name: c.name } : {}),
-        ...(c.color !== undefined ? { color: c.color } : {}),
-        ...(c.visible !== undefined ? { visible: c.visible } : {}),
-      });
+      };
+
+      if (c.name !== undefined) input.name = c.name;
+
+      if (c.color !== undefined) input.color = c.color;
+
+      if (c.visible !== undefined) input.visible = c.visible;
+
+      return store.updateCalendar(input);
+    }
+
     case "DeleteCalendar":
       return store.deleteCalendar({ ...base, calendarId: c.calendarId });
     case "GrantCalendar":
@@ -81,8 +128,8 @@ export const calendarExecute = (
       });
     case "RevokeCalendar":
       return store.revokeCalendar({ ...base, calendarId: c.calendarId, grantee: c.grantee });
-    case "CreateEvent":
-      return store.createEvent({
+    case "CreateEvent": {
+      const input: Input<"createEvent"> = {
         ...base,
         calendarId: c.calendarId,
         series: {
@@ -93,35 +140,55 @@ export const calendarExecute = (
           exdates: c.exdates,
           data: c.data,
         },
-        ...(c.attendees ? { attendees: c.attendees } : {}),
-        ...(c.alarms ? { alarms: c.alarms } : {}),
-        ...(c.highlight !== undefined ? { highlight: c.highlight } : {}),
-        ...(c.countdown !== undefined ? { countdown: c.countdown } : {}),
-        ...(c.privateNote !== undefined ? { privateNote: c.privateNote } : {}),
-      });
-    case "UpdateEvent":
-      return store.updateEvent({
+      };
+
+      if (c.attendees) input.attendees = c.attendees;
+
+      if (c.alarms) input.alarms = c.alarms;
+
+      if (c.highlight !== undefined) input.highlight = c.highlight;
+
+      if (c.countdown !== undefined) input.countdown = c.countdown;
+
+      if (c.privateNote !== undefined) input.privateNote = c.privateNote;
+
+      return store.createEvent(input);
+    }
+
+    case "UpdateEvent": {
+      const input: Input<"updateEvent"> = {
         ...base,
         eventId: c.eventId,
         expectedRevision: c.expectedRevision,
         scope: c.scope,
-        ...(c.occurrenceKey ? { occurrenceKey: c.occurrenceKey } : {}),
         changes: c.changes,
-      });
-    case "DeleteEvent":
-      return store.deleteEvent({
-        ...base,
-        eventId: c.eventId,
-        scope: c.scope,
-        ...(c.occurrenceKey ? { occurrenceKey: c.occurrenceKey } : {}),
-      });
-    case "RespondInvitation":
-      return store.respondToInvitation({
+      };
+
+      if (c.occurrenceKey) input.occurrenceKey = c.occurrenceKey;
+
+      return store.updateEvent(input);
+    }
+
+    case "DeleteEvent": {
+      const input: Input<"deleteEvent"> = { ...base, eventId: c.eventId, scope: c.scope };
+
+      if (c.occurrenceKey) input.occurrenceKey = c.occurrenceKey;
+
+      return store.deleteEvent(input);
+    }
+
+    case "RespondInvitation": {
+      const input: Input<"respondToInvitation"> = {
         ...base,
         eventId: c.eventId,
         partstat: c.partstat,
-        ...(c.occurrenceKey ? { occurrenceKey: c.occurrenceKey } : {}),
-      });
+      };
+
+      if (c.occurrenceKey) input.occurrenceKey = c.occurrenceKey;
+
+      return store.respondToInvitation(input);
+    }
+
     case "AddWeekTask":
       return store.addWeekTask({
         ...base,
@@ -129,13 +196,16 @@ export const calendarExecute = (
         firstWeekday: c.firstWeekday,
         title: c.title,
       });
-    case "ReorderWeekTask":
-      return store.reorderWeekTask({
-        ...base,
-        taskId: c.taskId,
-        ...(c.afterId ? { afterId: c.afterId } : {}),
-        ...(c.beforeId ? { beforeId: c.beforeId } : {}),
-      });
+    case "ReorderWeekTask": {
+      const input: Input<"reorderWeekTask"> = { ...base, taskId: c.taskId };
+
+      if (c.afterId) input.afterId = c.afterId;
+
+      if (c.beforeId) input.beforeId = c.beforeId;
+
+      return store.reorderWeekTask(input);
+    }
+
     case "MoveWeekTask":
       return store.moveWeekTask({
         ...base,
@@ -168,8 +238,14 @@ export const calendarExecute = (
       return store.archiveHabit({ ...base, habitId: c.habitId });
     case "StartTimer":
       return store.startTimer({ ...base, label: c.label });
-    case "StopTimer":
-      return store.stopTimer({ ...base, ...(c.entryId ? { entryId: c.entryId } : {}) });
+    case "StopTimer": {
+      const input: Input<"stopTimer"> = { ...base };
+
+      if (c.entryId) input.entryId = c.entryId;
+
+      return store.stopTimer(input);
+    }
+
     case "AddTimeEntry":
       return store.addTimeEntry({
         ...base,
@@ -199,14 +275,19 @@ export const calendarExecute = (
           Object.entries(c.preferences).filter(([, v]) => v !== undefined),
         ),
       });
-    case "AddSubscription":
-      return store.addSubscription({
+    case "AddSubscription": {
+      const input: Input<"addSubscription"> = {
         ...base,
         name: c.name,
         color: c.color,
         url: c.url,
-        ...(c.itemLimit !== undefined ? { itemLimit: c.itemLimit } : {}),
-      });
+      };
+
+      if (c.itemLimit !== undefined) input.itemLimit = c.itemLimit;
+
+      return store.addSubscription(input);
+    }
+
     case "RevokeFeedToken":
       return store.revokeFeedToken({ ...base, tokenHash: c.tokenHash });
     case "ImportIcs":
@@ -253,10 +334,11 @@ export const calendarRead = (
   store: CalendarStore,
   actor: string | null,
   q: CalendarAuthorityQuery,
-): unknown => {
+) => {
   authorizeCalendar(store, actor, q);
-  checkTimeInputs(q as unknown as Record<string, unknown>);
+  checkTimeInputs(q);
   const who = actor ?? "";
+
   switch (q.type) {
     case "Calendars":
       return store.listCalendars(who);
@@ -268,6 +350,7 @@ export const calendarRead = (
         .map((d) => ({ date: d.date, occurrences: d.occurrences.map(calendarOccurrenceWire) }));
     case "Day": {
       const day = store.day(who, q.date, q.viewerZone);
+
       return {
         ...day,
         occurrences: day.occurrences.map(calendarOccurrenceWire),
@@ -276,6 +359,7 @@ export const calendarRead = (
           : undefined,
       };
     }
+
     case "Month":
       return store.month(who, q.year, q.month, q.viewerZone);
     case "Year":
@@ -312,12 +396,16 @@ export const calendarRead = (
       return store.timeEntries(q.from, q.to);
     case "DayContext": {
       const context = store.dayContext(q.date, q.viewerZone);
+
       return { ...context, highlights: context.highlights.map(calendarOccurrenceWire) };
     }
+
     case "Widget": {
       const w = store.widgetSnapshot(q.viewerZone);
+
       return { ...w, upcoming: w.upcoming.map(calendarOccurrenceWire) };
     }
+
     case "FeedTokens":
       return store.listFeedTokens();
     case "Feed":
@@ -327,55 +415,63 @@ export const calendarRead = (
   }
 };
 
-export const calendarOccurrenceWire = (o: CalendarOccurrenceView): OccurrenceWire => ({
-  eventId: o.eventId,
-  calendarId: o.calendarId,
-  uid: o.uid,
-  key: o.key,
-  start: o.start,
-  end: o.end,
-  startMs: o.startMs,
-  endMs: o.endMs,
-  allDay: o.allDay,
-  recurring: o.recurring,
-  isException: o.isException,
-  highlight: o.highlight,
-  countdown: o.countdown,
-  revision: o.revision,
-  ...(o.invitation
-    ? {
-        invitation: {
-          organizer: {
-            address: o.invitation.organizer.address,
-            ...(o.invitation.organizer.name !== undefined
-              ? { name: o.invitation.organizer.name }
-              : {}),
-          },
-          partstat: o.invitation.partstat,
-        },
-      }
-    : {}),
-  data: {
+export const calendarOccurrenceWire = (o: CalendarOccurrenceView): OccurrenceWire => {
+  const data: MutableOccurrenceData = {
     summary: o.data.summary,
-    ...(o.data.description !== undefined ? { description: o.data.description } : {}),
-    ...(o.data.location !== undefined ? { location: o.data.location } : {}),
-    ...(o.data.url !== undefined ? { url: o.data.url } : {}),
-    ...(o.data.transparent !== undefined ? { transparent: o.data.transparent } : {}),
-    ...(o.data.status !== undefined ? { status: o.data.status } : {}),
-  },
-});
+  };
+
+  if (o.data.description !== undefined) data.description = o.data.description;
+
+  if (o.data.location !== undefined) data.location = o.data.location;
+
+  if (o.data.url !== undefined) data.url = o.data.url;
+
+  if (o.data.transparent !== undefined) data.transparent = o.data.transparent;
+
+  if (o.data.status !== undefined) data.status = o.data.status;
+
+  const wire: OccurrenceWire = {
+    eventId: o.eventId,
+    calendarId: o.calendarId,
+    uid: o.uid,
+    key: o.key,
+    start: o.start,
+    end: o.end,
+    startMs: o.startMs,
+    endMs: o.endMs,
+    allDay: o.allDay,
+    recurring: o.recurring,
+    isException: o.isException,
+    highlight: o.highlight,
+    countdown: o.countdown,
+    revision: o.revision,
+    data,
+  };
+
+  if (!o.invitation) return wire;
+
+  const organizer: OccurrenceOrganizer = {
+    address: o.invitation.organizer.address,
+  };
+
+  if (o.invitation.organizer.name !== undefined) organizer.name = o.invitation.organizer.name;
+
+  return { ...wire, invitation: { organizer, partstat: o.invitation.partstat } };
+};
 
 /** Occurrences on the wire, with overlap columns for day/week grids (C01) on timed ones. */
 const withLayout = (occurrences: ReadonlyArray<CalendarOccurrenceView>): Array<OccurrenceWire> => {
   const layout = new Map(
     calLayoutOverlaps(
-      occurrences
-        .filter((o) => !o.allDay)
-        .map((o) => ({ id: `${o.eventId}:${o.key}`, startMs: o.startMs, endMs: o.endMs })),
+      occurrences.flatMap((o) =>
+        o.allDay ? [] : [{ id: `${o.eventId}:${o.key}`, startMs: o.startMs, endMs: o.endMs }],
+      ),
     ).map((l) => [l.id, l]),
   );
+
   return occurrences.map((o) => {
     const l = layout.get(`${o.eventId}:${o.key}`);
+
     return l
       ? { ...calendarOccurrenceWire(o), column: l.column, columns: l.columns }
       : calendarOccurrenceWire(o);
@@ -385,13 +481,11 @@ const withLayout = (occurrences: ReadonlyArray<CalendarOccurrenceView>): Array<O
 const calendarFailure = (r: {
   readonly code: CalendarFailure["code"];
   readonly message: string;
-  readonly details?: Readonly<Record<string, unknown>> | undefined;
+  readonly details?: CalendarFailure["details"] | undefined;
 }): CalendarFailure =>
-  new CalendarFailure({
-    code: r.code,
-    message: r.message,
-    ...(r.details ? { details: r.details } : {}),
-  });
+  r.details
+    ? new CalendarFailure({ code: r.code, message: r.message, details: r.details })
+    : new CalendarFailure({ code: r.code, message: r.message });
 
 /** Run a store call, mapping expected rejections to CalendarFailure; anything else is a defect. */
 export const calendarAttempt = <T>(fn: () => T): Effect.Effect<T, CalendarFailure> =>
@@ -400,6 +494,7 @@ export const calendarAttempt = <T>(fn: () => T): Effect.Effect<T, CalendarFailur
       return Effect.succeed(fn());
     } catch (error) {
       if (isRejection(error)) return Effect.fail(calendarFailure(error));
+
       return Effect.die(error);
     }
   });
@@ -412,7 +507,7 @@ export const calendarAttempt = <T>(fn: () => T): Effect.Effect<T, CalendarFailur
 const requireOwnPhoto = (spaceId: string, command: CalendarAuthorityCommand): void => {
   if (
     command.type === "SetDayDecoration" &&
-    typeof command.photoKey === "string" &&
+    Predicate.isString(command.photoKey) &&
     !command.photoKey.startsWith(`cal/${spaceId}/photo/`)
   )
     throw calendarError("bad_request", "photoKey must reference a photo uploaded to this calendar");
@@ -427,6 +522,7 @@ export const calendarRepositoryLocal = (resolve: (spaceId: string) => CalendarSt
     execute: (spaceId, actor, command) =>
       calendarAttempt(() => {
         requireOwnPhoto(spaceId, command);
+
         return calendarExecute(resolve(spaceId), actor, command);
       }) as never,
     read: (spaceId, actor, query) =>
@@ -458,3 +554,9 @@ export const calendarRepositoryRpc = (resolve: (spaceId: string) => CalendarRpc)
     read: (spaceId, actor, query) =>
       calendarRpcCall(() => resolve(spaceId).read(actor, query)) as never,
   });
+
+type MutableOccurrenceData = {
+  -readonly [K in keyof OccurrenceWire["data"]]: OccurrenceWire["data"][K];
+};
+
+type OccurrenceOrganizer = { address: string; name?: string };

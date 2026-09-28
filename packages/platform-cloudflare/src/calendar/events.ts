@@ -71,11 +71,14 @@ const RANGE_COUNT_CAP = 5000;
  */
 const untilInstant = (until: string, dtstart: CalTime): number | undefined => {
   const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z?))?$/.exec(until);
+
   if (!m) return undefined;
   const date = { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
   const zone = dtstart.kind === "timed" ? dtstart.tzid : "UTC";
+
   if (m[4] === undefined) return calStartOfDay(calAddDays(date, 1), zone) - 1;
   const local = { ...date, hour: Number(m[4]), minute: Number(m[5]), second: Number(m[6]) };
+
   return m[7] === "Z"
     ? Date.UTC(date.year, date.month - 1, date.day, local.hour, local.minute, local.second)
     : calZonedToInstant(local, zone);
@@ -100,12 +103,16 @@ const shiftLike = (time: CalTime, from: CalTime, to: CalTime): CalTime => {
       kind: "date",
       date: calAddDays(time.date, calDateToDays(to.date) - calDateToDays(from.date)),
     };
+
   if (time.kind !== "timed" || from.kind !== "timed" || to.kind !== "timed") return to;
+
   const minutes = (t: CalLocalDateTime) =>
     calDateToDays(calDateOf(t)) * 1440 + t.hour * 60 + t.minute + t.second / 60;
+
   const shifted = minutes(time.local) + minutes(to.local) - minutes(from.local);
   const days = Math.floor(shifted / 1440);
   const rest = shifted - days * 1440;
+
   return {
     kind: "timed",
     tzid: to.tzid,
@@ -121,6 +128,7 @@ const shiftLike = (time: CalTime, from: CalTime, to: CalTime): CalTime => {
 export abstract class CalendarEvents extends CalendarBase {
   protected parseRule(rrule: string | undefined | null): CalRRule | undefined {
     if (!rrule) return undefined;
+
     try {
       return calParseRRule(rrule);
     } catch (error) {
@@ -141,6 +149,7 @@ export abstract class CalendarEvents extends CalendarBase {
   protected validateTime(t: CalTime | undefined, what: string): void {
     if (t === undefined) return;
     const problem = calTimeProblem(t);
+
     if (problem) throw calendarError("bad_request", `${what}: ${problem}`);
   }
 
@@ -152,14 +161,19 @@ export abstract class CalendarEvents extends CalendarBase {
   private validateSeries(series: CalSeries, exceptions: ReadonlyArray<CalException>): void {
     this.validateTime(series.dtstart, "start");
     this.validateTime(series.dtend, "end");
+
     for (const t of series.rdates ?? []) this.validateTime(t, "rdate");
+
     for (const t of series.exdates ?? []) this.validateTime(t, "exdate");
+
     for (const e of exceptions) {
       this.validateTime(e.start, "occurrence start");
       this.validateTime(e.end, "occurrence end");
     }
+
     if (series.dtstart.kind !== series.dtend.kind)
       throw calendarError("bad_request", "start and end must both be dates or both be timed");
+
     if (calInstant(series.dtend) < calInstant(series.dtstart))
       throw calendarError("bad_request", "end precedes start");
   }
@@ -170,30 +184,34 @@ export abstract class CalendarEvents extends CalendarBase {
    * expansion only for COUNT rules; a COUNT the cap cannot confirm is stored as unbounded rather
    * than truncated, so no occurrence ever falls outside its row's range.
    */
-  private range(
-    series: CalSeries,
-    exceptions: ReadonlyArray<CalException>,
-  ): { start: number; end: number | null } {
+  private range(series: CalSeries, exceptions: ReadonlyArray<CalException>): CalendarEventRange {
     const slack = 14 * 3_600_000; // widest UTC offset, so all-day dates match any viewer zone
     const duration = Math.max(0, calInstant(series.dtend) - calInstant(series.dtstart));
     let start = calInstant(series.dtstart);
     let end = calInstant(series.dtend);
+
     const include = (from: number, to: number): void => {
       if (from < start) start = from;
+
       if (to > end) end = to;
     };
+
     for (const e of exceptions) {
       if (!e.start) continue;
       const s = calInstant(e.start);
       include(s, e.end ? Math.max(s + duration, calInstant(e.end)) : s + duration);
     }
+
     for (const r of series.rdates ?? []) {
       const s = calInstant(r);
       include(s, s + duration);
     }
+
     const rule = series.rule;
+
     if (rule) {
       const last = rule.until !== undefined ? untilInstant(rule.until, series.dtstart) : undefined;
+
       if (last !== undefined) {
         end = Math.max(end, last + duration);
       } else if (rule.count !== undefined && rule.count <= RANGE_COUNT_CAP) {
@@ -205,6 +223,7 @@ export abstract class CalendarEvents extends CalendarBase {
             maxOccurrences: rule.count,
           },
         );
+
         // Fewer than COUNT means the expansion hit its period bound: the true end is unknown.
         if (all.length < rule.count) return { start: start - slack, end: null };
         const lastStart = all.at(-1)!.startMs;
@@ -213,16 +232,15 @@ export abstract class CalendarEvents extends CalendarBase {
         return { start: start - slack, end: null };
       }
     }
+
     return { start: start - slack, end: end + slack };
   }
 
-  protected writeEvent(
-    record: CalendarEventWrite,
-    isNew: boolean,
-  ): { revision: number; generation: number } {
+  protected writeEvent(record: CalendarEventWrite, isNew: boolean): CalendarEventRevision {
     this.validateSeries(record.series, record.exceptions);
     const now = this.clock.now();
     const range = this.range(record.series, record.exceptions);
+
     const columns = [
       JSON.stringify(record.series),
       record.organizer ? JSON.stringify(record.organizer) : null,
@@ -238,6 +256,7 @@ export abstract class CalendarEvents extends CalendarBase {
       range.start,
       range.end,
     ] as const;
+
     if (isNew) {
       this.sql.run(
         `INSERT INTO cal_events (id, calendar_id, uid, series, organizer, we_are_organizer, attendees, alarms, sequence, dtstamp,
@@ -262,7 +281,9 @@ export abstract class CalendarEvents extends CalendarBase {
         record.id,
       );
     }
+
     this.sql.run("DELETE FROM cal_exceptions WHERE event_id = ?", record.id);
+
     for (const e of record.exceptions) {
       this.sql.run(
         "INSERT INTO cal_exceptions (event_id, recurrence_key, body) VALUES (?, ?, ?)",
@@ -271,16 +292,19 @@ export abstract class CalendarEvents extends CalendarBase {
         JSON.stringify(e),
       );
     }
+
     const row = this.sql.one<{ revision: number; generation: number }>(
       "SELECT revision, generation FROM cal_events WHERE id = ?",
       record.id,
     )!;
+
     this.indexEvent(record);
     this.scheduleReminder(record.id);
     this.kernel.change("event", isNew ? "created" : "updated", {
       eventId: record.id,
       calendarId: record.calendarId,
     });
+
     return { revision: Number(row.revision), generation: Number(row.generation) };
   }
 
@@ -307,6 +331,7 @@ export abstract class CalendarEvents extends CalendarBase {
     ]
       .filter(Boolean)
       .join("\n");
+
     this.index(`event:${r.id}`, "event", r.calendarId, text);
   }
 
@@ -383,6 +408,7 @@ export abstract class CalendarEvents extends CalendarBase {
   }): { eventId: string; uid: string } {
     return this.command(input.commandId, "CreateEvent", () => {
       this.writableCalendar(input.calendarId);
+
       // Owner-only fields: a grantee with write access can't annotate or backlink the owner's data.
       if (
         (input.privateNote !== undefined || input.sourceRef !== undefined) &&
@@ -391,6 +417,7 @@ export abstract class CalendarEvents extends CalendarBase {
         throw calendarError("forbidden", "private calendar data is owner-only");
       const id = this.clock.id("evt");
       const uid = `${id}@bye.calendar`;
+
       const series: CalSeries = {
         uid,
         dtstart: input.series.start,
@@ -400,14 +427,18 @@ export abstract class CalendarEvents extends CalendarBase {
         exdates: input.series.exdates ?? [],
         data: { status: "confirmed", ...input.series.data },
       };
+
       const attendees = (input.attendees ?? []).filter(
         (a) => !this.self.includes(calNormAddress(a.address)),
       );
+
       this.checkInvitees(input.actor, attendees.length);
+
       const organizer =
         attendees.length > 0
           ? { address: calNormAddress(this.config.selfAddresses[0]) }
           : undefined;
+
       const record: CalendarEventWrite = {
         id,
         calendarId: input.calendarId,
@@ -424,8 +455,11 @@ export abstract class CalendarEvents extends CalendarBase {
         privateNote: input.privateNote,
         sourceRef: input.sourceRef,
       };
+
       this.writeEvent(record, true);
+
       if (organizer) this.itipRequest(id, record);
+
       return { eventId: id, uid };
     });
   }
@@ -460,26 +494,33 @@ export abstract class CalendarEvents extends CalendarBase {
   }): { eventId: string; revision: number; splitEventId?: string } {
     return this.command(input.commandId, "UpdateEvent", () => {
       const row = this.eventRow(input.eventId);
+
       if (!row) throw calendarError("not_found", "event not found");
       this.writableCalendar(row.calendar_id);
       const current = this.toRecord(row);
+
       if (current.revision !== input.expectedRevision)
         throw calendarError("conflict", "event revision changed", current.revision);
       const c = input.changes;
+
       if (!current.weAreOrganizer && current.organizer) {
         // Attendee copies accept only personal fields; the organizer owns shared event data.
         const allowed = ["alarms", "highlight", "countdown", "privateNote"];
+
         if (Object.keys(c).some((k) => !allowed.includes(k)))
           throw calendarError("forbidden", "only the organizer can change this event");
       }
+
       if (c.privateNote !== undefined && !this.isOwner(input.actor))
         throw calendarError("forbidden", "private calendar data is owner-only");
+
       const personal = {
         alarms: c.alarms ? [...new Set(c.alarms)] : current.alarms,
         highlight: c.highlight ?? current.highlight,
         countdown: c.countdown ?? current.countdown,
         privateNote: c.privateNote === null ? undefined : (c.privateNote ?? current.privateNote),
       };
+
       const attendees: ReadonlyArray<CalAttendee> = c.attendees
         ? c.attendees
             .filter((a) => !this.self.includes(calNormAddress(a.address)))
@@ -489,9 +530,11 @@ export abstract class CalendarEvents extends CalendarBase {
                 newAttendee(a),
             )
         : current.attendees;
+
       const removed = current.attendees.filter(
         (a) => !attendees.some((x) => x.address === a.address),
       );
+
       const significant =
         c.start !== undefined ||
         c.end !== undefined ||
@@ -499,6 +542,7 @@ export abstract class CalendarEvents extends CalendarBase {
         c.data?.location !== undefined ||
         c.data?.summary !== undefined ||
         c.attendees !== undefined;
+
       if (!this.isOwner(input.actor)) {
         // Outbound iTIP is mail from the owner's address, so only the owner may invite, re-invite
         // or cancel: a write grantee can't change who is invited, nor the shared fields of an
@@ -506,8 +550,10 @@ export abstract class CalendarEvents extends CalendarBase {
         const inviteesChanged =
           removed.length > 0 ||
           attendees.some((a) => !current.attendees.some((x) => x.address === a.address));
+
         if (inviteesChanged)
           throw calendarError("forbidden", "only the calendar owner can invite attendees");
+
         if (
           current.weAreOrganizer &&
           current.attendees.length > 0 &&
@@ -515,30 +561,40 @@ export abstract class CalendarEvents extends CalendarBase {
         )
           throw calendarError("forbidden", "only the calendar owner can change an invitation");
       }
+
       if (attendees.length > MAX_CALENDAR_ATTENDEES)
         throw calendarError("bad_request", `at most ${MAX_CALENDAR_ATTENDEES} attendees`);
+
       const organizer = current.weAreOrganizer
         ? (current.organizer ?? { address: calNormAddress(this.config.selfAddresses[0]) })
         : current.organizer;
+
       const weAreOrganizer = current.weAreOrganizer || (!current.organizer && attendees.length > 0);
       const sequence = weAreOrganizer && significant ? current.sequence + 1 : current.sequence;
+
       // A whole-series time change made from one occurrence (the occurrence key names it) moves
       // the series by the same wall-clock amount, rather than making that occurrence the first.
       const anchorKey =
         input.scope === "series" && current.series.rule ? input.occurrenceKey : undefined;
+
       const anchor = anchorKey
         ? current.exceptions.find((e) => e.recurrenceKey === anchorKey)
         : undefined;
+
       const anchorStart = anchorKey
         ? (anchor?.start ?? this.timeFromKey(current.series, anchorKey))
         : undefined;
+
       const duration = calSeriesDuration(current.series);
+
       const start =
         c.start && anchorStart ? shiftLike(current.series.dtstart, anchorStart, c.start) : c.start;
+
       const end =
         c.end && anchorStart
           ? shiftLike(current.series.dtend, anchor?.end ?? calEndFor(anchorStart, duration), c.end)
           : c.end;
+
       // `null` (or an empty rule) removes the recurrence; `undefined` keeps it.
       const seriesChanges = {
         start,
@@ -552,6 +608,7 @@ export abstract class CalendarEvents extends CalendarBase {
         const key = this.requireKey(input.occurrenceKey);
         const original = this.timeFromKey(current.series, key);
         const prior = current.exceptions.find((e) => e.recurrenceKey === key);
+
         const exception: CalException = {
           recurrenceKey: key,
           cancelled: false,
@@ -559,16 +616,20 @@ export abstract class CalendarEvents extends CalendarBase {
           end: c.end ?? prior?.end,
           data: { ...prior?.data, ...c.data },
         };
+
         const next = {
           ...current,
           ...personal,
           sequence,
           exceptions: [...current.exceptions.filter((e) => e.recurrenceKey !== key), exception],
         };
+
         const { revision } = this.writeEvent(next, false);
+
         if (weAreOrganizer && significant) {
           const start = exception.start ?? original;
           const end = exception.end ?? calEndFor(start, calSeriesDuration(current.series));
+
           const occurrence: CalSeries = {
             ...current.series,
             dtstart: start,
@@ -578,8 +639,10 @@ export abstract class CalendarEvents extends CalendarBase {
             exdates: [],
             data: { ...current.series.data, ...exception.data },
           };
+
           this.itipRequest(current.id, { ...next, series: occurrence }, { recurrenceId: original });
         }
+
         return { eventId: current.id, revision };
       }
 
@@ -587,12 +650,14 @@ export abstract class CalendarEvents extends CalendarBase {
         // Split at the occurrence: the head keeps the UID, the tail becomes a new linked series.
         const key = this.requireKey(input.occurrenceKey);
         const newId = this.clock.id("evt");
+
         const split = calSplitSeries(
           current.series,
           current.exceptions,
           { key, start: this.timeFromKey(current.series, key) },
           `${newId}@bye.calendar`,
         );
+
         this.sql.run(
           "INSERT INTO cal_series_links (original_uid, new_uid, split_key, created_at) VALUES (?, ?, ?, ?)",
           split.mapping.originalUid,
@@ -600,6 +665,7 @@ export abstract class CalendarEvents extends CalendarBase {
           split.mapping.splitKey,
           this.clock.now(),
         );
+
         const tail = {
           ...current,
           ...personal,
@@ -612,8 +678,10 @@ export abstract class CalendarEvents extends CalendarBase {
           weAreOrganizer,
           sequence: 0,
         };
+
         this.writeEvent(tail, true);
         let revision = current.revision;
+
         if (split.head) {
           const head = {
             ...current,
@@ -621,17 +689,22 @@ export abstract class CalendarEvents extends CalendarBase {
             exceptions: split.headExceptions,
             sequence: weAreOrganizer ? current.sequence + 1 : current.sequence,
           };
+
           revision = this.writeEvent(head, false).revision;
+
           if (weAreOrganizer) this.itipRequest(current.id, head);
         } else {
           this.removeEventRow(current.id);
         }
+
         if (weAreOrganizer) this.itipRequest(newId, tail);
+
         return { eventId: current.id, revision, splitEventId: newId };
       }
 
       // The whole series. Moving its start or rule invalidates occurrence keys: overrides are dropped.
       const exceptions = c.start || c.rrule !== undefined ? [] : current.exceptions;
+
       const next = {
         ...current,
         ...personal,
@@ -642,11 +715,15 @@ export abstract class CalendarEvents extends CalendarBase {
         weAreOrganizer,
         sequence,
       };
+
       const { revision } = this.writeEvent(next, false);
+
       if (weAreOrganizer && significant) {
         this.itipRequest(current.id, next);
+
         if (removed.length) this.itipCancel(current.id, { ...next, attendees: removed });
       }
+
       return { eventId: current.id, revision };
     });
   }
@@ -660,20 +737,27 @@ export abstract class CalendarEvents extends CalendarBase {
   }): { deleted: boolean } {
     return this.command(input.commandId, "DeleteEvent", () => {
       const row = this.eventRow(input.eventId);
+
       if (!row) return { deleted: false };
       this.writableCalendar(row.calendar_id);
       const current = this.toRecord(row);
       const organizerView = current.weAreOrganizer;
+
       // Deleting an invitation the owner organizes mails a CANCEL from the owner's address.
       if (organizerView && current.attendees.length > 0 && !this.isOwner(input.actor))
         throw calendarError("forbidden", "only the calendar owner can cancel an invitation");
       const bumped = organizerView ? current.sequence + 1 : current.sequence;
+
       if (input.scope === "series" || !current.series.rule) {
         this.removeEventRow(current.id);
+
         if (organizerView) this.itipCancel(current.id, { ...current, sequence: bumped });
+
         return { deleted: true };
       }
+
       const key = this.requireKey(input.occurrenceKey);
+
       if (input.scope === "this") {
         this.writeEvent(
           {
@@ -686,31 +770,37 @@ export abstract class CalendarEvents extends CalendarBase {
           },
           false,
         );
+
         if (organizerView)
           this.itipCancel(current.id, current, {
             recurrenceId: this.timeFromKey(current.series, key),
             sequence: bumped,
           });
+
         return { deleted: true };
       }
+
       const split = calSplitSeries(
         current.series,
         current.exceptions,
         { key, start: this.timeFromKey(current.series, key) },
         `${current.uid}-cut`,
       );
+
       if (!split.head) this.removeEventRow(current.id);
       else
         this.writeEvent(
           { ...current, series: split.head, exceptions: split.headExceptions, sequence: bumped },
           false,
         );
+
       if (organizerView)
         this.itipRequest(current.id, {
           ...current,
           series: split.head ?? current.series,
           sequence: bumped,
         });
+
       return { deleted: true };
     });
   }
@@ -718,14 +808,17 @@ export abstract class CalendarEvents extends CalendarBase {
   /** Invitees make the owner's address send mail: owner-only, and bounded. */
   private checkInvitees(actor: string, count: number): void {
     if (count === 0) return;
+
     if (!this.isOwner(actor))
       throw calendarError("forbidden", "only the calendar owner can invite attendees");
+
     if (count > MAX_CALENDAR_ATTENDEES)
       throw calendarError("bad_request", `at most ${MAX_CALENDAR_ATTENDEES} attendees`);
   }
 
   private requireKey(occurrenceKey: string | undefined): string {
     if (!occurrenceKey) throw calendarError("bad_request", "occurrenceKey required");
+
     return occurrenceKey;
   }
 
@@ -743,54 +836,67 @@ export abstract class CalendarEvents extends CalendarBase {
     if (input.to <= input.from || input.to - input.from > MAX_WINDOW_MS)
       throw calendarError("bad_request", "window must be positive and at most 400 days");
     this.validateZone(input.viewerZone);
+
     const calendars = this.listCalendars(input.actor).filter(
       (c) =>
         (!input.calendarIds || input.calendarIds.includes(c.id)) &&
         (!input.visibleOnly || c.visible),
     );
+
     if (calendars.length === 0) return [];
+
     const rows = this.sql.all<EventRow>(
       "SELECT * FROM cal_events WHERE calendar_id IN (SELECT value FROM json_each(?)) AND deleted = 0 AND range_start < ? AND (range_end IS NULL OR range_end > ?)",
       JSON.stringify(calendars.map((c) => c.id)),
       input.to,
       input.from,
     );
+
     const viewerZone = input.viewerZone ?? this.zone;
     const records = this.toRecords(rows);
     // Invitation state is the owner's own business: shared readers see the event, not the answer.
     const self = new Set(this.self);
+
     const invited = new Map(
       this.isOwner(input.actor)
         ? records.flatMap((r) => {
             const me = this.invitedAs(r, self);
+
             return me ? [[r.id, me] as const] : [];
           })
         : [],
     );
+
     const answers = this.occurrenceResponses([...invited.keys()]);
+
     return records
       .flatMap((record) => {
         const me = invited.get(record.id);
+
         return calExpandSeries(record.series, record.exceptions, {
           from: input.from,
           to: input.to,
           viewerZone,
-        }).map((o) => ({
-          ...o,
-          eventId: record.id,
-          calendarId: record.calendarId,
-          highlight: record.highlight,
-          countdown: record.countdown,
-          revision: record.revision,
-          ...(me
-            ? {
-                invitation: {
-                  organizer: record.organizer!,
-                  partstat: answers.get(`${record.id}\u0000${o.key}`) ?? me.partstat,
-                },
-              }
-            : {}),
-        }));
+        }).map((o) => {
+          const base = {
+            ...o,
+            eventId: record.id,
+            calendarId: record.calendarId,
+            highlight: record.highlight,
+            countdown: record.countdown,
+            revision: record.revision,
+          };
+
+          if (!me) return base;
+
+          return {
+            ...base,
+            invitation: {
+              organizer: record.organizer!,
+              partstat: answers.get(`${record.id}\u0000${o.key}`) ?? me.partstat,
+            },
+          };
+        });
       })
       .sort((a, b) => a.startMs - b.startMs || a.eventId.localeCompare(b.eventId));
   }
@@ -806,12 +912,14 @@ export abstract class CalendarEvents extends CalendarBase {
     self: ReadonlySet<string> = new Set(this.self),
   ): CalAttendee | undefined {
     if (record.weAreOrganizer || !record.organizer) return undefined;
+
     return record.attendees.find((a) => self.has(a.address));
   }
 
   /** Per-occurrence answers for these events, keyed `eventId\0occurrenceKey`. */
   protected occurrenceResponses(eventIds: ReadonlyArray<string>): Map<string, CalPartstat> {
     if (eventIds.length === 0) return new Map();
+
     return new Map(
       this.sql
         .all<{ event_id: string; occurrence_key: string; partstat: CalPartstat }>(
@@ -832,18 +940,25 @@ export abstract class CalendarEvents extends CalendarBase {
   protected scheduleReminder(eventId: string, after?: number): void {
     const row = this.eventRow(eventId);
     const record = row ? this.toRecord(row) : undefined;
+
     if (!record || record.series.data.status === "cancelled") {
       this.kernel.cancelJob(REMINDER_JOB, eventId);
+
       return;
     }
+
     const from = after ?? this.clock.now();
     const args = [record.series, record.exceptions, record.alarms, from, this.zone] as const;
     const next = calNextReminder(eventId, record.generation, ...args);
+
     if (next) {
-      this.kernel.schedule(REMINDER_JOB, eventId, next.dueAt, next);
+      this.kernel.schedule(REMINDER_JOB, eventId, next.dueAt, { ...next });
+
       return;
     }
+
     const recheckAt = calReminderRecheckAt(...args);
+
     if (recheckAt !== undefined)
       this.kernel.schedule(REMINDER_JOB, eventId, recheckAt, {
         eventId,
@@ -858,17 +973,15 @@ export abstract class CalendarEvents extends CalendarBase {
    * Alarm handler body: drain a bounded batch of due jobs, revalidating generations, and
    * return the next wake-up. Notifications leave through the outbox.
    */
-  runDueJobs(limit = 100): {
-    fired: Array<{ eventId: string; occurrenceKey: string; offsetMinutes: number }>;
-    refreshes: Array<string>;
-    nextAlarm: number | null;
-  } {
+  runDueJobs(limit = 100): CalendarDueJobs {
     const now = this.clock.now();
-    const fired: Array<{ eventId: string; occurrenceKey: string; offsetMinutes: number }> = [];
+    const fired: Array<CalendarFiredReminder> = [];
     const refreshes: Array<string> = [];
+
     for (const job of this.kernel.dueJobs(now, limit)) {
       this.sql.tx(() => {
         if (!this.kernel.completeJob(job)) return;
+
         if (job.kind === REMINDER_JOB) {
           const payload = job.payload as {
             eventId: string;
@@ -878,13 +991,18 @@ export abstract class CalendarEvents extends CalendarBase {
             dueAt: number;
             recheck?: boolean;
           };
+
           const row = this.eventRow(payload.eventId);
+
           if (!row || Number(row.generation) !== payload.generation) return;
+
           if (payload.recheck) {
             // Horizon reached with nothing due yet: look ahead again from here.
             this.scheduleReminder(payload.eventId, payload.dueAt);
+
             return;
           }
+
           const series = JSON.parse(row.series) as CalSeries;
           this.kernel.emit("calendar.notify", this.config.ownerId, {
             kind: "reminder",
@@ -906,6 +1024,33 @@ export abstract class CalendarEvents extends CalendarBase {
         }
       });
     }
+
     return { fired, refreshes, nextAlarm: this.kernel.nextDueAt() };
   }
+}
+
+/** The epoch-ms window an event series can occupy (`end` null: unbounded). */
+export interface CalendarEventRange {
+  start: number;
+  end: number | null;
+}
+
+/** Revision and generation stamps of a written event. */
+export interface CalendarEventRevision {
+  revision: number;
+  generation: number;
+}
+
+/** A fired reminder. */
+export interface CalendarFiredReminder {
+  eventId: string;
+  occurrenceKey: string;
+  offsetMinutes: number;
+}
+
+/** What one pass over the due jobs produced. */
+export interface CalendarDueJobs {
+  fired: Array<CalendarFiredReminder>;
+  refreshes: Array<string>;
+  nextAlarm: number | null;
 }

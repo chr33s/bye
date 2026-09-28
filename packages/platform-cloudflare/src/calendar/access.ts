@@ -7,7 +7,9 @@ import { calendarError } from "./types.ts";
 // compile, so a new read kind can never ship unguarded.
 
 export type CalendarMessage = CalendarAuthorityCommand | CalendarAuthorityQuery;
+
 export type CalendarMessageType = CalendarMessage["type"];
+
 type Of<K extends CalendarMessageType> = Extract<CalendarMessage, { type: K }>;
 
 export type CalendarPolicy<M> =
@@ -26,12 +28,13 @@ const calendarWrite = <M extends { readonly calendarId: string }>(): CalendarPol
   calendar: (m) => m.calendarId,
   need: "write",
 });
+
 const eventWrite = <M extends { readonly eventId: string }>(): CalendarPolicy<M> => ({
   event: (m) => m.eventId,
   need: "write",
 });
 
-export const CALENDAR_ACCESS: { readonly [K in CalendarMessageType]: CalendarPolicy<Of<K>> } = {
+export const CALENDAR_ACCESS = {
   // ---- commands
   CreateCalendar: "owner",
   UpdateCalendar: "owner",
@@ -87,7 +90,7 @@ export const CALENDAR_ACCESS: { readonly [K in CalendarMessageType]: CalendarPol
   // ---- authority-internal reads
   Feed: "system",
   Subscription: "system",
-};
+} satisfies { readonly [K in CalendarMessageType]: CalendarPolicy<Of<K>> };
 
 /** Enforce the message's policy for `actor` (`null`: trusted Worker code with no principal). */
 export const authorizeCalendar = (
@@ -96,21 +99,31 @@ export const authorizeCalendar = (
   message: CalendarMessage,
 ): void => {
   const policy = CALENDAR_ACCESS[message.type] as CalendarPolicy<CalendarMessage>;
+
   if (policy === "system") {
     if (actor !== null) throw calendarError("forbidden", "internal calendar operation");
+
     return;
   }
+
   if (actor === null) throw calendarError("forbidden", "a principal is required");
+
   if (policy === "readable") return;
+
   if (policy === "owner") {
     if (!store.isOwner(actor))
       throw calendarError("forbidden", "private calendar data is owner-only");
+
     return;
   }
+
   if ("calendar" in policy) {
     store.requireRole(policy.calendar(message), actor, policy.need);
+
     return;
   }
+
   const calendarId = store.calendarOfEvent(policy.event(message));
+
   if (calendarId) store.requireRole(calendarId, actor, policy.need);
 };

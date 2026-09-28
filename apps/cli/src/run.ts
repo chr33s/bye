@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Predicate } from "effect";
 import { CliOutput, Command } from "effect/unstable/cli";
 import { execute, Invocation, NotSignedIn, report, root, signedIn, UsageError } from "./args.ts";
 import { CliApi, CliApiError, EXIT, exitCodeFor } from "./client.ts";
@@ -25,6 +25,7 @@ const tui = Command.make("tui", {}, () =>
     yield* report(signedIn, (signedInApi) => {
       api = signedInApi;
     });
+
     if (api) {
       const layer = Layer.succeed(CliApi, api);
       invocation.exit(yield* Effect.promise(() => runTui(layer, invocation.newCommandId)));
@@ -45,12 +46,13 @@ export const runCli = async (
 ): Promise<number> => {
   let code: number = EXIT.ok;
   const formatter = CliOutput.defaultFormatter();
+
   const result = await execute(BYE, argv, {
     api,
     newCommandId: io.newCommandId,
     verbose: io.verbose === true,
     stderr: io.stderr,
-    ...(io.instance ? { instance: io.instance } : {}),
+    instance: io.instance,
     succeed: (value, json) => io.stdout(formatOutput(value, json)),
     fail: (failure, json) => {
       if (failure instanceof UsageError) {
@@ -84,27 +86,36 @@ export const runCli = async (
       code = exit;
     },
   });
+
   // Help asked for goes to stdout; help after a usage error goes to stderr, after the errors.
   if (result.usage) {
     if (result.usage.errors.length > 0) {
       io.stderr(formatter.formatErrors(result.usage.errors));
+
       if (
-        result.usage.errors.some((e) => e._tag === "UnrecognizedOption" && /^-[^-]/.test(e.option))
+        result.usage.errors.some(
+          (e) => Predicate.isTagged(e, "UnrecognizedOption") && /^-[^-]/.test(e.option),
+        )
       )
         io.stderr(`hint: ${DASH_HINT}`);
       io.stderr(`see \`${result.usage.commandPath.join(" ")} --help\``);
     } else {
       for (const text of result.printed) io.stdout(text);
     }
+
     return EXIT.usage;
   }
+
   for (const text of result.printed) io.stdout(text);
+
   if (result.failure !== undefined) {
     const failure: unknown = result.failure;
     io.stderr(
       `unexpected failure: ${failure instanceof Error ? failure.message : String(failure)}`,
     );
+
     return EXIT.failure;
   }
+
   return code;
 };

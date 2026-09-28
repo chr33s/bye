@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import {
   type AuthorizationAttempt,
   createAuthorizationAttempt,
@@ -133,13 +134,16 @@ export class SessionClient {
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     listener(this.stateValue);
+
     return () => this.listeners.delete(listener);
   }
 
   private set(state: SessionState): SessionState {
     if (this.disposed) return state;
     this.stateValue = state;
+
     for (const l of this.listeners) l(state);
+
     return state;
   }
 
@@ -175,12 +179,14 @@ export class SessionClient {
       return await this.options.store.read(this.key);
     } catch (error) {
       const base = this.options.instance.baseUrl;
+
       if (toSecureStoreError(error).kind !== "MissingCredential" || !/^https:\/\/[^/]+$/.test(base))
         throw error;
       const legacy = legacySessionKey(base);
       const raw = await this.options.store.read(legacy);
       await this.options.store.write(this.key, raw);
       await this.options.store.remove(legacy).catch(() => undefined);
+
       return raw;
     }
   }
@@ -188,50 +194,73 @@ export class SessionClient {
   /** Launch: restore the device session from secure storage (DS02). */
   async restore(): Promise<SessionState> {
     if (this.disposed) return this.stateValue;
+
     if (!this.persist) {
       await this.discardStored();
+
       return this.set({ _tag: "SignedOut" });
     }
+
     let stored: StoredSession;
+
     try {
       stored = decodeSession(await this.readStored());
     } catch (error) {
       const e = toSecureStoreError(error);
+
       if (e.kind === "MissingCredential") return this.set({ _tag: "SignedOut" });
+
       if (e.kind === "CorruptCredential") {
         await this.discardStored();
+
         return this.set({ _tag: "SignedOut", reason: "corrupt-credential" });
       }
+
       // Locked/denied/unavailable: keep whatever is stored and let the user retry.
+      const failure: StorageFailureFields = {};
+
+      if (e.nativeCode) failure.nativeCode = e.nativeCode;
+
       return this.set({
         _tag: "StorageError",
         kind: e.kind,
-        ...(e.nativeCode ? { nativeCode: e.nativeCode } : {}),
+        ...failure,
       });
     }
+
     if (stored.pendingRevoke) {
       await this.finishPendingRevoke(stored.refreshToken);
+
       return this.stateValue;
     }
+
     this.refreshToken = stored.refreshToken;
     this.scope = stored.scope;
     await this.refreshNow();
+
     return this.stateValue;
   }
 
   /** Start browser sign-in. A new attempt supersedes any earlier one (DS04). */
   async beginSignIn(): Promise<AuthorizationAttempt> {
     if (this.disposed) throw new Error("this server is no longer selected");
+
+    const extra: RandomFields = {};
+
+    if (this.options.random) extra.random = this.options.random;
+
     const attempt = createAuthorizationAttempt({
       instance: this.options.instance,
       redirectUri: this.options.redirectUri,
       deviceName: this.options.deviceName,
       clientId: this.options.clientId ?? DESKTOP_CLIENT_ID,
       now: this.now(),
-      ...(this.options.random ? { random: this.options.random } : {}),
+      ...extra,
     });
+
     this.attempt = attempt;
     this.set({ _tag: "Authorizing", attemptId: attempt.id });
+
     try {
       await this.options.openBrowser(attempt.url);
     } catch {
@@ -239,6 +268,7 @@ export class SessionClient {
       this.set({ _tag: "SignedOut", reason: "failed" });
       throw new Error("could not open the browser");
     }
+
     return attempt;
   }
 
@@ -254,32 +284,42 @@ export class SessionClient {
    */
   async handleCallback(url: string): Promise<boolean> {
     const result = parseCallback(url, this.attempt, this.now());
-    if (result._tag === "Ignored") return result.reason !== "not-a-callback";
+
+    if (Predicate.isTagged(result, "Ignored")) return result.reason !== "not-a-callback";
     const attempt = this.attempt!;
     this.attempt = null; // single use, whatever the outcome
+
     if (attempt.instanceKey !== this.options.instance.key) {
       // Never redeem a code anywhere but the instance whose attempt produced it.
       this.set({ _tag: "SignedOut", reason: "failed" });
+
       return true;
     }
-    if (result._tag === "Denied") {
+
+    if (Predicate.isTagged(result, "Denied")) {
       this.set({
         _tag: "SignedOut",
         reason: result.error === "access_denied" ? "denied" : "failed",
       });
+
       return true;
     }
-    if (result._tag === "Invalid") {
+
+    if (Predicate.isTagged(result, "Invalid")) {
       this.set({ _tag: "SignedOut", reason: "failed" });
+
       return true;
     }
+
     const generation = this.generation;
+
     try {
       const tokens = await this.tokens.exchangeCode({
         code: result.code,
         verifier: attempt.verifier,
         redirectUri: attempt.redirectUri,
       });
+
       // Switched away or signed out while exchanging: the result must not restore a session.
       if (this.disposed || generation !== this.generation) return true;
       this.clearMemory();
@@ -288,6 +328,7 @@ export class SessionClient {
       // Codes are single-use; a failed exchange always requires a fresh browser attempt.
       this.set({ _tag: "SignedOut", reason: "failed" });
     }
+
     return true;
   }
 
@@ -295,8 +336,11 @@ export class SessionClient {
   async accessToken(): Promise<string | null> {
     if (this.disposed) return null;
     const skew = this.options.refreshSkewMs ?? 60_000;
+
     if (this.access && this.access.expiresAt - skew > this.now()) return this.access.token;
+
     if (!this.refreshToken) return null;
+
     return this.refreshNow();
   }
 
@@ -304,6 +348,7 @@ export class SessionClient {
   async onUnauthorized(): Promise<string | null> {
     if (this.disposed) return null;
     this.access = null;
+
     return this.refreshToken ? this.refreshNow() : null;
   }
 
@@ -312,20 +357,26 @@ export class SessionClient {
     if (this.inflight) return this.inflight;
     const generation = this.generation;
     const token = this.refreshToken;
+
     if (!token) return Promise.resolve(null);
     this.inflight = (async () => {
       try {
         const next = await this.tokens.refresh(token);
+
         if (generation !== this.generation) return null; // signed out or replaced meanwhile
         await this.adopt(next);
+
         return next.accessToken;
       } catch (error) {
         if (generation !== this.generation) return null;
+
         if (error instanceof TransientAuthError) {
           // Keep the refresh credential; an unexpired access token remains usable (DS08).
           this.set({ _tag: "Offline", detail: error.detail });
+
           return this.access && this.access.expiresAt > this.now() ? this.access.token : null;
         }
+
         if (error instanceof OAuthError) {
           // Expired, revoked, or a replayed (rotated) credential: the device session is over.
           this.clearMemory();
@@ -334,13 +385,16 @@ export class SessionClient {
             _tag: "SignedOut",
             reason: error.code === "invalid_grant" ? "revoked" : "expired",
           });
+
           return null;
         }
+
         throw error;
       } finally {
         this.inflight = null;
       }
     })();
+
     return this.inflight;
   }
 
@@ -349,10 +403,13 @@ export class SessionClient {
     this.access = { token: tokens.accessToken, expiresAt: tokens.expiresAt };
     this.refreshToken = tokens.refreshToken;
     this.scope = tokens.scope;
+
     if (!this.persist) {
       this.set({ _tag: "SignedIn", persisted: false });
+
       return;
     }
+
     try {
       await this.writeStored(tokens.refreshToken, tokens.scope);
       this.set({ _tag: "SignedIn", persisted: true });
@@ -364,8 +421,10 @@ export class SessionClient {
   /** Retry a failed secure-storage write without another server rotation. */
   async retryPersist(): Promise<SessionState> {
     if (!this.refreshToken || !this.persist) return this.stateValue;
+
     try {
       await this.writeStored(this.refreshToken, this.scope);
+
       return this.set({ _tag: "SignedIn", persisted: true });
     } catch (error) {
       return this.set({ _tag: "NotPersisted", kind: toSecureStoreError(error).kind });
@@ -381,6 +440,7 @@ export class SessionClient {
     const token = this.refreshToken;
     this.attempt = null;
     this.clearMemory();
+
     if (token) {
       try {
         await this.tokens.revoke(token);
@@ -388,14 +448,18 @@ export class SessionClient {
         if (error instanceof RevocationUnsupported) {
           await this.discardStored();
           this.set({ _tag: "SignedOut", reason: "logged-out" });
+
           return "local-only";
         }
+
         // An OAuthError means the credential is already invalid server-side: nothing to revoke.
         if (!(error instanceof OAuthError)) return this.deferRevoke(token);
       }
     }
+
     await this.discardStored();
     this.set({ _tag: "SignedOut", reason: "logged-out" });
+
     return "revoked";
   }
 
@@ -415,7 +479,9 @@ export class SessionClient {
         )
         .catch(() => undefined);
     }
+
     this.set({ _tag: "SignedOut", reason: "logged-out", logoutPending: true });
+
     return "pending";
   }
 
@@ -427,6 +493,7 @@ export class SessionClient {
     options: { readonly revoke?: boolean } = {},
   ): Promise<"revoked" | "unconfirmed" | "local-only"> {
     let token = this.refreshToken;
+
     // Local-only: the instance's credential destinations changed, so the old token is sent nowhere.
     if (options.revoke === false) {
       this.attempt = null;
@@ -434,8 +501,10 @@ export class SessionClient {
       await this.discardStored();
       this.set({ _tag: "SignedOut", reason: "logged-out" });
       this.dispose();
+
       return "local-only";
     }
+
     if (!token) {
       try {
         token = decodeSession(await this.options.store.read(this.key)).refreshToken;
@@ -443,9 +512,11 @@ export class SessionClient {
         token = null;
       }
     }
+
     this.attempt = null;
     this.clearMemory();
     let outcome: "revoked" | "unconfirmed" | "local-only" = "revoked";
+
     if (token) {
       try {
         await this.tokens.revoke(token);
@@ -458,9 +529,11 @@ export class SessionClient {
               : "unconfirmed";
       }
     }
+
     await this.discardStored();
     this.set({ _tag: "SignedOut", reason: "logged-out" });
     this.dispose();
+
     return outcome;
   }
 
@@ -470,12 +543,22 @@ export class SessionClient {
     } catch (error) {
       if (!(error instanceof OAuthError) && !(error instanceof RevocationUnsupported)) {
         this.set({ _tag: "SignedOut", reason: "logged-out", logoutPending: true });
+
         return;
       }
     }
+
     await this.discardStored();
     this.set({ _tag: "SignedOut", reason: "logged-out" });
   }
 }
 
 export { SecureStoreError };
+
+interface StorageFailureFields {
+  nativeCode?: string;
+}
+
+interface RandomFields {
+  random?: RandomBytes;
+}

@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Predicate } from "effect";
 import {
   CalendarFeedFetcher,
   CalendarFetchFailure,
@@ -20,18 +20,24 @@ import { calendarError } from "./types.ts";
  */
 export const calendarValidateFeedUrl = (raw: string): string => {
   let url: URL;
+
   try {
     url = new URL(raw.trim().replace(/^webcals?:\/\//i, "https://"));
   } catch {
     throw calendarError("bad_request", "invalid subscription URL");
   }
+
   if (url.protocol !== "https:") throw calendarError("bad_request", "subscriptions require https");
+
   if (url.username || url.password)
     throw calendarError("bad_request", "credentials in URL are not allowed");
+
   if (url.port && url.port !== "443")
     throw calendarError("bad_request", "non-standard ports are not allowed");
+
   if (isForbiddenProxyTarget(url.toString()))
     throw calendarError("bad_request", "private destinations are not allowed");
+
   return url.toString();
 };
 
@@ -45,26 +51,35 @@ export const readBounded = async (
   maxBytes: number,
 ): Promise<Uint8Array | null> => {
   if (Number(source.headers.get("content-length") ?? "0") > maxBytes) return null;
+
   if (!source.body) return new Uint8Array(0);
   const reader = source.body.getReader();
   const chunks: Array<Uint8Array> = [];
   let total = 0;
+
   for (;;) {
     const { done, value } = await reader.read();
+
     if (done) break;
     total += value.byteLength;
+
     if (total > maxBytes) {
       await reader.cancel().catch(() => undefined);
+
       return null;
     }
+
     chunks.push(value);
   }
+
   const out = new Uint8Array(total);
   let offset = 0;
+
   for (const c of chunks) {
     out.set(c, offset);
     offset += c.byteLength;
   }
+
   return out;
 };
 
@@ -91,9 +106,11 @@ export const calendarResolvingFetch = (
 ): typeof fetch =>
   (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(
-      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
+      Predicate.isString(input) ? input : input instanceof URL ? input.toString() : input.url,
     );
+
     const host = url.hostname.replace(/^\[|\]$/g, "");
+
     if (/^[\d.]+$/.test(host) || host.includes(":")) {
       if (isForbiddenIp(host)) throw new CalendarSsrfBlocked("destination address is not allowed");
     } else {
@@ -102,15 +119,21 @@ export const calendarResolvingFetch = (
           `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=${type}`,
           { headers: { accept: "application/dns-json" } },
         );
+
         if (!response.ok) throw new CalendarSsrfBlocked("destination could not be resolved");
         const body = (await response.json()) as { Answer?: ReadonlyArray<DohAnswer> };
+
         return (body.Answer ?? []).filter((a) => a.type === 1 || a.type === 28).map((a) => a.data);
       };
+
       const answers = (await Promise.all([lookup("A"), lookup("AAAA")])).flat();
+
       if (answers.length === 0) throw new CalendarSsrfBlocked("destination did not resolve");
+
       if (answers.some((ip) => isForbiddenIp(ip)))
         throw new CalendarSsrfBlocked("destination resolves to a forbidden address");
     }
+
     return fetchFn(input, init);
   }) as typeof fetch;
 
@@ -128,6 +151,7 @@ export const calendarFeedFetcherLive = (
       Effect.tryPromise({
         try: async (): Promise<CalendarFetchOutcome | CalendarFetchFailure> => {
           let url = request.url;
+
           for (let hop = 0; hop <= (options.maxRedirects ?? 3); hop++) {
             try {
               url = calendarValidateFeedUrl(url);
@@ -137,16 +161,24 @@ export const calendarFeedFetcherLive = (
                 detail: error instanceof Error ? error.message : "blocked",
               });
             }
-            const headers: Record<string, string> = { accept: "text/calendar, text/plain;q=0.5" };
+
+            const headers: ConditionalRequestHeaders = {
+              accept: "text/calendar, text/plain;q=0.5",
+            };
+
             if (request.etag) headers["if-none-match"] = request.etag;
+
             if (request.lastModified) headers["if-modified-since"] = request.lastModified;
+
             const response = await fetchFn(url, {
               headers,
               redirect: "manual",
               signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
             });
+
             if (response.status >= 300 && response.status < 400 && response.status !== 304) {
               const location = response.headers.get("location");
+
               if (!location)
                 return new CalendarFetchFailure({
                   reason: "http",
@@ -155,19 +187,23 @@ export const calendarFeedFetcherLive = (
               url = new URL(location, url).toString();
               continue;
             }
+
             if (response.status === 304) return { status: "not-modified" };
+
             if (!response.ok)
               return new CalendarFetchFailure({
                 reason: "http",
                 detail: `status ${response.status}`,
               });
             const type = (response.headers.get("content-type") ?? "").toLowerCase();
+
             if (type && !/text\/calendar|text\/plain|application\/octet-stream/.test(type))
               return new CalendarFetchFailure({
                 reason: "content-type",
                 detail: type.split(";")[0] ?? type,
               });
             const bytes = await readBounded(response, request.maxBytes);
+
             if (bytes === null)
               return new CalendarFetchFailure({
                 reason: "too-large",
@@ -175,13 +211,19 @@ export const calendarFeedFetcherLive = (
               });
             const etag = response.headers.get("etag") ?? undefined;
             const lastModified = response.headers.get("last-modified") ?? undefined;
-            return {
+
+            const fetched: FetchedCalendarBody = {
               status: "ok",
               body: new TextDecoder().decode(bytes),
-              ...(etag ? { etag } : {}),
-              ...(lastModified ? { lastModified } : {}),
             };
+
+            if (etag) fetched.etag = etag;
+
+            if (lastModified) fetched.lastModified = lastModified;
+
+            return fetched;
           }
+
           return new CalendarFetchFailure({ reason: "http", detail: "too many redirects" });
         },
         catch: (error) =>
@@ -226,14 +268,18 @@ export const calendarLocationSearchLive = (
               url.searchParams.set("q", query.text);
               url.searchParams.set("limit", String(Math.min(Math.max(query.limit, 1), 10)));
               url.searchParams.set("autocomplete", "true");
+
               if (query.near)
                 url.searchParams.set("proximity", `${query.near.longitude},${query.near.latitude}`);
               url.searchParams.set("access_token", apiKey);
+
               const response = await fetchFn(url.toString(), {
                 headers: { accept: "application/json" },
                 signal: AbortSignal.timeout(5_000),
               });
+
               if (!response.ok) throw new Error(`geocoder status ${response.status}`);
+
               const body = (await response.json()) as {
                 features?: ReadonlyArray<{
                   id?: string;
@@ -246,21 +292,25 @@ export const calendarLocationSearchLive = (
                   };
                 }>;
               };
+
               return (body.features ?? []).slice(0, query.limit).map((f) => {
                 const p = f.properties ?? {};
-                return {
-                  label: p.name ?? p.full_address ?? "Unknown place",
-                  ...((p.full_address ?? p.place_formatted)
-                    ? { address: p.full_address ?? p.place_formatted }
-                    : {}),
-                  ...(p.coordinates?.latitude !== undefined
-                    ? { latitude: p.coordinates.latitude }
-                    : {}),
-                  ...(p.coordinates?.longitude !== undefined
-                    ? { longitude: p.coordinates.longitude }
-                    : {}),
-                  ...((p.mapbox_id ?? f.id) ? { providerId: p.mapbox_id ?? f.id } : {}),
-                };
+
+                const place: GeocodedPlace = { label: p.name ?? p.full_address ?? "Unknown place" };
+
+                const address = p.full_address ?? p.place_formatted;
+                const providerId = p.mapbox_id ?? f.id;
+
+                if (address) place.address = address;
+
+                if (p.coordinates?.latitude !== undefined) place.latitude = p.coordinates.latitude;
+
+                if (p.coordinates?.longitude !== undefined)
+                  place.longitude = p.coordinates.longitude;
+
+                if (providerId) place.providerId = providerId;
+
+                return place;
               });
             },
             catch: (error) =>
@@ -270,3 +320,24 @@ export const calendarLocationSearchLive = (
           })
         : Effect.succeed([]),
   });
+
+type ConditionalRequestHeaders = {
+  accept: string;
+  "if-none-match"?: string;
+  "if-modified-since"?: string;
+};
+
+type FetchedCalendarBody = {
+  status: "ok";
+  body: string;
+  etag?: string;
+  lastModified?: string;
+};
+
+type GeocodedPlace = {
+  label: string;
+  address?: string;
+  latitude?: number;
+  longitude?: number;
+  providerId?: string;
+};

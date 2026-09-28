@@ -14,32 +14,38 @@ const setup = async () => {
   const clock = new TestClock();
   const dir = new ControlDirectory(d1, clock);
   const orgs = new ControlOrganizations(d1, clock);
+
   const auth = new ControlAuth(d1, clock, {
     rp: { rpId: "x", origins: [], requireUserVerification: true },
     totpKeys: { current: 1, keys: { 1: new Uint8Array(32) } },
     recoveryPepper: "p",
   });
+
   return { d1, clock, dir, orgs, auth };
 };
 
-const code = (e: unknown) => (e instanceof Rejection ? e.code : String(e));
+const code = <Caught>(e: Caught) => (e instanceof Rejection ? e.code : String(e));
 
 describe("address directory", () => {
   it("resolves exact aliases before plus-address fallback and catch-all", async () => {
     const { dir, d1, orgs, clock } = await setup();
+
     const alice = await dir.provisionPersonalAccount({
       address: "alice@acme.test",
       displayName: "Alice",
     });
+
     const bob = await dir.provisionPersonalAccount({
       address: "bob@acme.test",
       displayName: "Bob",
     });
+
     const orgId = await orgs.createOrganization(alice.userId, {
       name: "Acme",
       kind: "domain",
       seatLimit: 5,
     });
+
     await q(
       d1,
       "INSERT INTO domains (id, org_id, name, state, verification_token, catch_all_mailbox_id, created_at, updated_at) VALUES ('dom_1', ?, 'acme.test', 'active', 't', ?, ?, ?)",
@@ -80,15 +86,18 @@ describe("address directory", () => {
 
   it("[O01] catch-all never grants sending authority for arbitrary local parts", async () => {
     const { dir, d1, orgs, clock } = await setup();
+
     const alice = await dir.provisionPersonalAccount({
       address: "alice@acme.test",
       displayName: "Alice",
     });
+
     const orgId = await orgs.createOrganization(alice.userId, {
       name: "Acme",
       kind: "domain",
       seatLimit: 5,
     });
+
     await q(
       d1,
       "INSERT INTO domains (id, org_id, name, state, verification_token, catch_all_mailbox_id, created_at, updated_at) VALUES ('dom_1', ?, 'acme.test', 'active', 't', ?, ?, ?)",
@@ -116,19 +125,23 @@ describe("address directory", () => {
 
   it("provisions catalog entries atomically with the exposing route", async () => {
     const { dir, d1 } = await setup();
+
     const a = await dir.provisionPersonalAccount({
       address: "alice@bye.test",
       displayName: "Alice",
     });
+
     const listed = await dir.listCatalog("mailbox", catalogShard(a.mailboxId), "", 10);
     expect(listed.map((x) => x.id)).toContain(a.mailboxId);
     await expect(
       dir.provisionPersonalAccount({ address: "alice@bye.test", displayName: "Dup" }),
     ).rejects.toSatisfy((e) => code(e) === "conflict");
     const users = await q(d1, "SELECT COUNT(*) AS n FROM users").first<{ n: number }>();
+
     const catalog = await q(d1, "SELECT COUNT(*) AS n FROM resource_catalog").first<{
       n: number;
     }>();
+
     expect(users?.n).toBe(1);
     expect(catalog?.n).toBe(2);
   });
@@ -137,29 +150,35 @@ describe("address directory", () => {
 describe("team administration", () => {
   const team = async () => {
     const env = await setup();
+
     const owner = await env.dir.provisionPersonalAccount({
       address: "owner@acme.test",
       displayName: "Owner",
     });
+
     const member = await env.dir.provisionPersonalAccount({
       address: "member@acme.test",
       displayName: "Member",
     });
+
     const orgId = await env.orgs.createOrganization(owner.userId, {
       name: "Acme",
       kind: "domain",
       seatLimit: 3,
       reassignmentPolicy: "reassign-to-admin",
     });
+
     const { token } = await env.orgs.invite(
       orgId,
       await env.orgs.verifiedActor(orgId, owner.userId),
       "member@acme.test",
       "member",
     );
+
     await env.orgs.acceptInvitation(token, member.userId);
     // Move the member's mailbox into the team organization.
     await q(env.d1, "UPDATE mailboxes SET org_id = ? WHERE id = ?", orgId, member.mailboxId).run();
+
     return { ...env, owner, member, orgId };
   };
 
@@ -190,10 +209,12 @@ describe("team administration", () => {
     const asOwner = async () => orgs.verifiedActor(orgId, owner.userId);
     // A second owner, and an admin who must not be able to restore an owner.
     await orgs.setRole(orgId, await asOwner(), member.userId, "owner");
+
     const admin = await dir.provisionPersonalAccount({
       address: "dana@acme.test",
       displayName: "A",
     });
+
     const inv = await orgs.invite(orgId, await asOwner(), "dana@acme.test", "admin");
     await orgs.acceptInvitation(inv.token, admin.userId);
     await orgs.suspend(orgId, await asOwner(), member.userId);
@@ -237,16 +258,19 @@ describe("team administration", () => {
     await expect(
       orgs.setRole(orgId, await orgs.verifiedActor(orgId, member.userId), owner.userId, "member"),
     ).rejects.toSatisfy((e) => code(e) === "forbidden");
+
     const third = await dir.provisionPersonalAccount({
       address: "third@acme.test",
       displayName: "T",
     });
+
     const inv = await orgs.invite(
       orgId,
       await orgs.verifiedActor(orgId, owner.userId),
       "third@acme.test",
       "member",
     );
+
     await orgs.acceptInvitation(inv.token, third.userId);
     await expect(
       orgs.invite(
@@ -261,16 +285,19 @@ describe("team administration", () => {
 
   it("[O02] invitations are bound to the invited address and single-use", async () => {
     const { orgs, dir, owner, orgId } = await team();
+
     const other = await dir.provisionPersonalAccount({
       address: "other@acme.test",
       displayName: "O",
     });
+
     const inv = await orgs.invite(
       orgId,
       await orgs.verifiedActor(orgId, owner.userId),
       "invited@acme.test",
       "member",
     );
+
     await expect(orgs.acceptInvitation(inv.token, other.userId)).rejects.toSatisfy(
       (e) => code(e) === "forbidden",
     );
@@ -281,11 +308,13 @@ describe("team administration", () => {
 
   it("[O02] removal applies the mailbox reassignment policy", async () => {
     const { orgs, auth, owner, member, orgId } = await team();
+
     const result = await orgs.remove(
       orgId,
       await orgs.verifiedActor(orgId, owner.userId),
       member.userId,
     );
+
     expect(result).toEqual({ policy: "reassign-to-admin", mailboxes: [member.mailboxId] });
     const { token } = await auth.issueSession(owner.userId, "x");
     expect((await auth.principal(await auth.authenticate(token))).mailboxIds).toContain(
@@ -299,25 +328,30 @@ describe("team administration", () => {
 
   it("[A01] family organizations share billing but never grant mailbox or calendar access", async () => {
     const { orgs, dir, auth } = await setup();
+
     const parent = await dir.provisionPersonalAccount({
       address: "parent@bye.test",
       displayName: "P",
     });
+
     const child = await dir.provisionPersonalAccount({
       address: "child@bye.test",
       displayName: "C",
     });
+
     const family = await orgs.createOrganization(parent.userId, {
       name: "Family",
       kind: "family",
       seatLimit: 5,
     });
+
     const inv = await orgs.invite(
       family,
       await orgs.verifiedActor(family, parent.userId),
       "child@bye.test",
       "member",
     );
+
     await orgs.acceptInvitation(inv.token, child.userId);
     const { token } = await auth.issueSession(parent.userId, "x");
     const p = await auth.principal(await auth.authenticate(token));

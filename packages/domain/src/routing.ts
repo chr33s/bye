@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import type { Destination, Disposition, SenderDecision } from "./state.ts";
 
 /** Authenticated-transport safety verdict. Never derived from sender-supplied headers (§10). */
@@ -72,12 +73,15 @@ const fromPolicy = (policy: SenderPolicy, decidedBy: RoutingStep): RoutingDecisi
  */
 export const route = (input: RoutingInput): RoutingDecision => {
   const { safety, exact, domain } = input;
-  if (safety._tag === "Malware" || safety._tag === "Spoofed") {
+
+  if (Predicate.isTagged(safety, "Malware") || Predicate.isTagged(safety, "Spoofed")) {
     return { ...defaults, disposition: "spam", decidedBy: "safety", quarantine: true };
   }
-  if (safety._tag === "Spam") {
+
+  if (Predicate.isTagged(safety, "Spam")) {
     return { ...defaults, disposition: "spam", decidedBy: "safety", quarantine: false };
   }
+
   if (exact?.decision === "blocked") {
     return {
       ...defaults,
@@ -86,7 +90,9 @@ export const route = (input: RoutingInput): RoutingDecision => {
       quarantine: false,
     };
   }
+
   if (exact?.decision === "allowed") return fromPolicy(exact, "exact-allow");
+
   if (domain?.decision === "blocked") {
     return {
       ...defaults,
@@ -95,11 +101,15 @@ export const route = (input: RoutingInput): RoutingDecision => {
       quarantine: false,
     };
   }
+
   if (domain?.decision === "allowed") return fromPolicy(domain, "domain-allow");
+
   if (input.speakeasy)
     return { ...defaults, disposition: "active", decidedBy: "speakeasy", quarantine: false };
+
   if (input.knownThread)
     return { ...defaults, disposition: "active", decidedBy: "known-thread", quarantine: false };
+
   return { ...defaults, disposition: "screening", decidedBy: "screener", quarantine: false };
 };
 
@@ -108,18 +118,25 @@ export const normalizeAddress = (address: string): string => address.trim().toLo
 
 export const domainOf = (address: string): string => {
   const at = address.lastIndexOf("@");
+
   return at < 0 ? "" : normalizeAddress(address.slice(at + 1));
 };
 
+export interface PlusAddress {
+  readonly base: string;
+  readonly tag: string | undefined;
+}
+
 /** Split plus-addressing: "alice+news@example.com" → { base: "alice@example.com", tag: "news" }. */
-export const splitPlusAddress = (
-  address: string,
-): { readonly base: string; readonly tag: string | undefined } => {
+export const splitPlusAddress = (address: string): PlusAddress => {
   const normalized = normalizeAddress(address);
   const at = normalized.lastIndexOf("@");
+
   if (at < 0) return { base: normalized, tag: undefined };
   const local = normalized.slice(0, at);
   const plus = local.indexOf("+");
+
   if (plus <= 0) return { base: normalized, tag: undefined };
+
   return { base: `${local.slice(0, plus)}${normalized.slice(at)}`, tag: local.slice(plus + 1) };
 };

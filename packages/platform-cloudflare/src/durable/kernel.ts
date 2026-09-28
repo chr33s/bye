@@ -1,4 +1,5 @@
 import type { PropagatePayload, PropagateTopic } from "@bye/contracts";
+import { Predicate } from "effect";
 import { reject } from "./rpc.ts";
 import { json, type Migration, Sql } from "./sql.ts";
 
@@ -94,31 +95,64 @@ export const KERNEL_PRUNE_BATCH = 500;
 /** Attempts before a throwing scheduled job is parked as `failed` (dead-lettered). */
 export const JOB_MAX_ATTEMPTS = 3;
 
+/** A JSON-serializable command or event payload. */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | ReadonlyArray<JsonValue>
+  | { readonly [key: string]: JsonValue };
+
 /**
  * Stable, order-insensitive fingerprint of a command payload: canonical JSON (sorted keys) run
  * through two FNV-1a 32-bit lanes. It detects accidental command-ID reuse; it is not a MAC.
  */
-export const payloadHash = (payload: unknown): string => {
+export const payloadHash = (payload: JsonValue): string => {
   const text = canonicalJson(payload);
   let a = 0x811c9dc5;
   let b = 0x01000193 ^ text.length;
+
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
     a = Math.imul(a ^ c, 0x01000193);
     b = Math.imul(b ^ c, 0x5bd1e995);
   }
+
   return `${(a >>> 0).toString(16).padStart(8, "0")}${(b >>> 0).toString(16).padStart(8, "0")}`;
 };
 
-const canonicalJson = (value: unknown): string => {
+const canonicalJson = (value: JsonValue): string => {
   if (value === undefined) return "null";
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+
+  if (value === null || !Predicate.isObjectKeyword(value) || Predicate.isFunction(value))
+    return JSON.stringify(value) ?? "null";
+
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
+
+  const entries = Object.entries(value)
     .filter(([, v]) => v !== undefined)
     .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
+
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
 };
+
+export interface ReceiptOutcome<T> {
+  readonly result: T;
+  readonly replayed: boolean;
+}
+
+export interface ChangeFeed {
+  readonly changes: ReadonlyArray<ChangeEvent>;
+  readonly cursor: number;
+  readonly expired: boolean;
+}
+
+export interface PruneResult {
+  readonly deleted: number;
+  readonly more: boolean;
+}
 
 export interface OutboxEvent {
   readonly eventId: string;
@@ -161,7 +195,7 @@ const toOutboxEvent = (r: OutboxRow): OutboxEvent => ({
   eventId: r.event_id,
   topic: r.topic,
   target: r.target,
-  payload: json<unknown>(r.payload, null),
+  payload: json<JsonValue>(r.payload, null),
   createdAt: Number(r.created_at),
 });
 
@@ -196,22 +230,27 @@ export class Kernel {
     kind: string,
     fn: () => T,
     /** The command's payload; when given, a replay with a different payload is a conflict. */
-    payload?: unknown,
-  ): { readonly result: T; readonly replayed: boolean } {
+    payload?: JsonValue,
+  ): ReceiptOutcome<T> {
     const hash = payload === undefined ? null : payloadHash(payload);
+
     const existing = this.sql.one<{ kind: string; result: string; payload_hash: string | null }>(
       "SELECT kind, result, payload_hash FROM command_receipts WHERE command_id = ?",
       commandId,
     );
+
     if (existing) {
       // Reusing a command ID for a different command is a client error, never a replay.
       if (existing.kind !== kind)
         reject("conflict", `command ${commandId} was already used for ${existing.kind}`);
+
       // Receipts written before payload hashing (or without a payload) replay unchecked.
       if (hash !== null && existing.payload_hash !== null && existing.payload_hash !== hash)
         reject("conflict", `command ${commandId} was already used with a different payload`);
+
       return { result: JSON.parse(existing.result) as T, replayed: true };
     }
+
     const result = fn();
     this.sql.run(
       "INSERT INTO command_receipts (command_id, kind, result, created_at, payload_hash) VALUES (?, ?, ?, ?, ?)",
@@ -221,20 +260,18 @@ export class Kernel {
       this.clock.now(),
       hash,
     );
+
     return { result, replayed: false };
   }
 
   /** Consumer-side deduplication by (eventId, targetId) (§6). */
-  consume<T>(
-    eventId: string,
-    target: string,
-    fn: () => T,
-  ): { readonly result: T; readonly replayed: boolean } {
+  consume<T>(eventId: string, target: string, fn: () => T): ReceiptOutcome<T> {
     const existing = this.sql.one<{ result: string }>(
       "SELECT result FROM inbound_receipts WHERE event_id = ? AND target = ?",
       eventId,
       target,
     );
+
     if (existing) return { result: JSON.parse(existing.result) as T, replayed: true };
     const result = fn();
     this.sql.run(
@@ -244,10 +281,11 @@ export class Kernel {
       JSON.stringify(result ?? null),
       this.clock.now(),
     );
+
     return { result, replayed: false };
   }
 
-  change(resource: string, kind: string, payload: unknown): number {
+  change(resource: string, kind: string, payload: JsonValue): number {
     this.sql.run(
       "INSERT INTO change_events (resource, kind, payload, created_at) VALUES (?, ?, ?, ?)",
       resource,
@@ -255,21 +293,17 @@ export class Kernel {
       JSON.stringify(payload),
       this.clock.now(),
     );
+
     return this.currentSeq();
   }
 
-  changesSince(
-    cursor: number,
-    limit: number,
-  ): {
-    readonly changes: ReadonlyArray<ChangeEvent>;
-    readonly cursor: number;
-    readonly expired: boolean;
-  } {
+  changesSince(cursor: number, limit: number): ChangeFeed {
     const oldest = Number(
       this.sql.one<{ seq: number | null }>("SELECT MIN(seq) AS seq FROM change_events")?.seq ?? 0,
     );
+
     const expired = cursor > 0 && oldest > 0 && cursor < oldest - 1;
+
     const rows = this.sql.all<{
       seq: number;
       resource: string;
@@ -281,6 +315,7 @@ export class Kernel {
       cursor,
       limit,
     );
+
     const changes = rows.map((r) => ({
       seq: Number(r.seq),
       resource: r.resource,
@@ -288,6 +323,7 @@ export class Kernel {
       payload: json<unknown>(r.payload, null),
       createdAt: Number(r.created_at),
     }));
+
     return { changes, cursor: changes.at(-1)?.seq ?? Math.max(cursor, this.currentSeq()), expired };
   }
 
@@ -315,27 +351,28 @@ export class Kernel {
    * and done/cancelled jobs older than `ttlMs`. Dead-lettered outbox rows, pending work and
    * failed jobs are kept. `more` reports whether any table still had rows past the cutoff.
    */
-  prune(options: { readonly ttlMs?: number; readonly batch?: number } = {}): {
-    readonly deleted: number;
-    readonly more: boolean;
-  } {
+  prune(options: { readonly ttlMs?: number; readonly batch?: number } = {}): PruneResult {
     const cutoff = this.clock.now() - (options.ttlMs ?? KERNEL_RETENTION_MS);
     const batch = Math.max(1, Math.floor(options.batch ?? KERNEL_PRUNE_BATCH));
+
     const statements = [
       "DELETE FROM command_receipts WHERE rowid IN (SELECT rowid FROM command_receipts WHERE created_at < ? LIMIT ?)",
       "DELETE FROM inbound_receipts WHERE rowid IN (SELECT rowid FROM inbound_receipts WHERE created_at < ? LIMIT ?)",
       "DELETE FROM outbox WHERE rowid IN (SELECT rowid FROM outbox WHERE published_at IS NOT NULL AND published_at < ? LIMIT ?)",
       "DELETE FROM scheduled_jobs WHERE rowid IN (SELECT rowid FROM scheduled_jobs WHERE state IN ('done','cancelled') AND due_at < ? LIMIT ?)",
     ];
+
     let deleted = 0;
     let more = false;
     this.sql.tx(() => {
       for (const statement of statements) {
         const n = this.sql.run(statement, cutoff, batch);
         deleted += n;
+
         if (n >= batch) more = true;
       }
     });
+
     return { deleted, more };
   }
 
@@ -351,7 +388,7 @@ export class Kernel {
     return this.outbox(topic, target, fields);
   }
 
-  outbox(topic: string, target: string, payload: unknown): string {
+  outbox<P>(topic: string, target: string, payload: P): string {
     const eventId = this.clock.id("evt");
     this.sql.run(
       "INSERT INTO outbox (event_id, topic, target, payload, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -361,6 +398,7 @@ export class Kernel {
       JSON.stringify(payload),
       this.clock.now(),
     );
+
     return eventId;
   }
 
@@ -392,6 +430,7 @@ export class Kernel {
   /** Attempts so far for pending rows (used to dead-letter repeatedly refused rows). */
   outboxAttempts(eventIds: ReadonlyArray<string>): ReadonlyMap<string, number> {
     const out = new Map<string, number>();
+
     for (const id of eventIds)
       out.set(
         id,
@@ -400,6 +439,7 @@ export class Kernel {
             ?.attempts ?? 0,
         ),
       );
+
     return out;
   }
 
@@ -442,12 +482,13 @@ export class Kernel {
    * Upsert a persisted job; returns the new generation. Any previously scheduled generation for
    * the same (kind, key) becomes stale, so an old alarm cannot resurrect a cancelled action (§4.2).
    */
-  schedule(kind: string, key: string, dueAt: number, payload: unknown): number {
+  schedule(kind: string, key: string, dueAt: number, payload: JsonValue): number {
     const prior = this.sql.one<{ generation: number }>(
       "SELECT generation FROM scheduled_jobs WHERE kind = ? AND job_key = ?",
       kind,
       key,
     );
+
     const generation = Number(prior?.generation ?? 0) + 1;
     this.sql.run(
       `INSERT INTO scheduled_jobs (kind, job_key, due_at, generation, payload, state) VALUES (?, ?, ?, ?, ?, 'pending')
@@ -459,6 +500,7 @@ export class Kernel {
       generation,
       JSON.stringify(payload),
     );
+
     return generation;
   }
 
@@ -479,6 +521,7 @@ export class Kernel {
       kind,
       key,
     );
+
     return r ? toDueJob(r) : undefined;
   }
 
@@ -514,7 +557,7 @@ export class Kernel {
    */
   failJob(
     job: Pick<DueJob, "kind" | "key" | "generation">,
-    error: unknown,
+    cause: unknown,
   ): "retry" | "failed" | "stale" {
     const row = this.sql.one<{ attempts: number }>(
       "SELECT attempts FROM scheduled_jobs WHERE kind = ? AND job_key = ? AND generation = ? AND state = 'pending'",
@@ -522,11 +565,14 @@ export class Kernel {
       job.key,
       job.generation,
     );
+
     if (!row) return "stale";
     const attempts = Number(row.attempts) + 1;
+
     const reason = (
-      error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)
     ).slice(0, 500);
+
     const failed = attempts >= JOB_MAX_ATTEMPTS;
     this.sql.run(
       "UPDATE scheduled_jobs SET attempts = ?, last_error = ?, state = ?, due_at = ? WHERE kind = ? AND job_key = ? AND generation = ?",
@@ -538,6 +584,7 @@ export class Kernel {
       job.key,
       job.generation,
     );
+
     return failed ? "failed" : "retry";
   }
 
@@ -555,6 +602,7 @@ export class Kernel {
     const r = this.sql.one<{ due: number | null }>(
       "SELECT MIN(due_at) AS due FROM scheduled_jobs WHERE state = 'pending'",
     );
+
     return r?.due == null ? null : Number(r.due);
   }
 

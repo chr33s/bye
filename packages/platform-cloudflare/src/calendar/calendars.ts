@@ -23,6 +23,7 @@ export abstract class CalendarCalendars extends CalendarEvents {
         this.clock.now(),
       );
       this.kernel.change("calendar", "created", { calendarId: id });
+
       return { calendarId: id };
     });
   }
@@ -38,7 +39,9 @@ export abstract class CalendarCalendars extends CalendarEvents {
   }): { revision: number } {
     return this.command(input.commandId, "UpdateCalendar", () => {
       const cal = this.calendar(input.calendarId);
+
       if (!cal) throw calendarError("not_found", "calendar not found");
+
       if (cal.revision !== input.expectedRevision)
         throw calendarError("conflict", "calendar revision changed", cal.revision);
       this.sql.run(
@@ -49,6 +52,7 @@ export abstract class CalendarCalendars extends CalendarEvents {
         cal.id,
       );
       this.kernel.change("calendar", "updated", { calendarId: cal.id });
+
       return { revision: cal.revision + 1 };
     });
   }
@@ -58,7 +62,9 @@ export abstract class CalendarCalendars extends CalendarEvents {
   } {
     return this.command(input.commandId, "DeleteCalendar", () => {
       const cal = this.calendar(input.calendarId);
+
       if (!cal) return { deleted: false };
+
       for (const e of this.sql.all<{ id: string }>(
         "SELECT id FROM cal_events WHERE calendar_id = ? AND deleted = 0",
         cal.id,
@@ -68,15 +74,18 @@ export abstract class CalendarCalendars extends CalendarEvents {
         "UPDATE cal_calendars SET deleted = 1, revision = revision + 1 WHERE id = ?",
         cal.id,
       );
+
       for (const g of this.sql.all<{ grantee: string }>(
         "SELECT grantee FROM cal_grants WHERE calendar_id = ?",
         cal.id,
       )) {
         this.kernel.emit("calendar.grant", g.grantee, { calendarId: cal.id, role: null });
       }
+
       this.sql.run("DELETE FROM cal_grants WHERE calendar_id = ?", cal.id);
       this.kernel.cancelJob(SUBSCRIPTION_JOB, cal.id);
       this.kernel.change("calendar", "deleted", { calendarId: cal.id });
+
       return { deleted: true };
     });
   }
@@ -90,6 +99,7 @@ export abstract class CalendarCalendars extends CalendarEvents {
   }): void {
     this.command(input.commandId, "GrantCalendar", () => {
       if (!this.calendar(input.calendarId)) throw calendarError("not_found", "calendar not found");
+
       if (input.grantee === this.config.ownerId)
         throw calendarError("bad_request", "owner already has access");
       this.sql.run(
@@ -110,6 +120,7 @@ export abstract class CalendarCalendars extends CalendarEvents {
         calendarId: input.calendarId,
         role: input.role,
       });
+
       return null;
     });
   }
@@ -134,6 +145,7 @@ export abstract class CalendarCalendars extends CalendarEvents {
         calendarId: input.calendarId,
         role: null,
       });
+
       return null;
     });
   }
@@ -142,6 +154,7 @@ export abstract class CalendarCalendars extends CalendarEvents {
     const existing = this.sql.one<{ id: string }>(
       "SELECT id FROM cal_calendars WHERE kind = 'invitations' AND deleted = 0",
     );
+
     if (existing) return existing.id;
     const id = this.clock.id("cal");
     this.sql.run(
@@ -150,6 +163,7 @@ export abstract class CalendarCalendars extends CalendarEvents {
       this.clock.now(),
     );
     this.kernel.change("calendar", "created", { calendarId: id });
+
     return id;
   }
 }

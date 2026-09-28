@@ -32,9 +32,11 @@ describe("interrupted deploy recovery drill", () => {
     await applyPlan(b, "staging", DRILL_MANIFEST, await planDeploy(b, "staging", DRILL_MANIFEST), {
       newId: () => `id-${++n}`,
     });
+
     const changed = DRILL_MANIFEST.map((r) =>
       r.fqn === "Storage/Directory" ? { ...r, type: "Cloudflare.D1.DatabaseV2" } : r,
     );
+
     const plan = await planDeploy(b, "staging", changed);
     expect(plan.find((s) => s.fqn === "Storage/Directory")?.op).toBe("replace");
   });

@@ -32,30 +32,39 @@ export const calLayoutOverlaps = (items: ReadonlyArray<CalLayoutInput>): Array<C
   const sorted = [...items].sort(
     (a, b) => a.startMs - b.startMs || b.endMs - a.endMs || a.id.localeCompare(b.id),
   );
+
   const out: Array<CalLayoutItem> = [];
   let cluster: Array<{ id: string; column: number }> = [];
   let columnsEnd: Array<number> = [];
   let clusterEnd = -Infinity;
+
   const flush = (): void => {
     const columns = columnsEnd.length;
+
     for (const c of cluster) out.push({ id: c.id, column: c.column, columns });
     cluster = [];
     columnsEnd = [];
   };
+
   for (const item of sorted) {
     const end = Math.max(item.endMs, item.startMs + 1);
+
     if (item.startMs >= clusterEnd) flush();
     let column = columnsEnd.findIndex((e) => e <= item.startMs);
+
     if (column < 0) {
       column = columnsEnd.length;
       columnsEnd.push(end);
     } else {
       columnsEnd[column] = end;
     }
+
     cluster.push({ id: item.id, column });
     clusterEnd = Math.max(clusterEnd, end);
   }
+
   flush();
+
   return out;
 };
 
@@ -72,19 +81,24 @@ export const calAgenda = (
   days: number,
 ): Array<CalAgendaDay> => {
   const out: Array<CalAgendaDay> = [];
+
   for (let i = 0; i < days; i++) {
     const date = calAddDays(from, i);
     const dayStart = calStartOfDay(date, viewerZone);
     const dayEnd = calStartOfDay(calAddDays(date, 1), viewerZone);
     const dayKey = calDateToDays(date);
+
     const list = occurrences.filter((o) => {
       if (o.allDay && o.start.kind === "date" && o.end.kind === "date") {
         return calDateToDays(o.start.date) <= dayKey && dayKey < calDateToDays(o.end.date);
       }
+
       return o.startMs < dayEnd && Math.max(o.endMs, o.startMs + 1) > dayStart;
     });
+
     if (list.length) out.push({ date: calFormatDate(date), occurrences: list });
   }
+
   return out;
 };
 
@@ -93,24 +107,33 @@ export const calYearOverview = (
   occurrences: ReadonlyArray<CalOccurrence>,
   viewerZone: string,
   year: number,
-): Record<string, number> => {
-  const counts: Record<string, number> = {};
+): CalDayCounts => {
+  const counts: CalDayCounts = {};
+
   for (const o of occurrences) {
     const start =
       o.allDay && o.start.kind === "date" ? o.start.date : calDateInZone(o.startMs, viewerZone);
+
     const endExclusive =
       o.allDay && o.end.kind === "date"
         ? o.end.date
         : calAddDays(calDateInZone(Math.max(o.startMs, o.endMs - 1), viewerZone), 1);
+
     for (let d = calDateToDays(start); d < calDateToDays(endExclusive); d++) {
       const date = calDaysToDate(d);
+
       if (date.year !== year) continue;
       const key = calFormatDate(date);
       counts[key] = (counts[key] ?? 0) + 1;
     }
   }
+
   return counts;
 };
+
+export interface CalDayCounts {
+  [dateKey: string]: number;
+}
 
 export interface CalWakingWindow {
   /** Minutes after local midnight. */
@@ -129,6 +152,7 @@ export const calNightHoursBusy = (
   const dayEnd = calStartOfDay(calAddDays(date, 1), viewerZone);
   const wakeStart = dayStart + waking.startMinute * 60_000;
   const wakeEnd = dayStart + waking.endMinute * 60_000;
+
   return occurrences.some(
     (o) =>
       !o.allDay &&
@@ -161,6 +185,7 @@ export const calFreeTime = (
   const windowStart = dayStart + options.waking.startMinute * 60_000;
   const windowEnd = dayStart + options.waking.endMinute * 60_000;
   const dayKey = calDateToDays(date);
+
   const busy = occurrences
     .filter((o) => !o.data.transparent && o.data.status !== "cancelled")
     .filter(
@@ -172,22 +197,28 @@ export const calFreeTime = (
     .flatMap((o) => {
       if (o.allDay) {
         if (!options.allDayBlocks || o.start.kind !== "date" || o.end.kind !== "date") return [];
+
         return calDateToDays(o.start.date) <= dayKey && dayKey < calDateToDays(o.end.date)
           ? [{ s: windowStart, e: windowEnd }]
           : [];
       }
+
       return [{ s: Math.max(o.startMs, windowStart), e: Math.min(o.endMs, windowEnd) }];
     })
     .filter((b) => b.e > b.s)
     .sort((a, b) => a.s - b.s);
+
   const free: Array<{ startMs: number; endMs: number }> = [];
   let cursor = windowStart;
+
   for (const b of busy) {
     if (b.s > cursor) free.push({ startMs: cursor, endMs: b.s });
     cursor = Math.max(cursor, b.e);
   }
+
   if (cursor < windowEnd) free.push({ startMs: cursor, endMs: windowEnd });
   const min = (options.minimumMinutes ?? 0) * 60_000;
+
   return free.filter((f) => f.endMs - f.startMs >= Math.max(min, 1));
 };
 
@@ -201,19 +232,26 @@ const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const midpoint = (a: string, b: string | undefined): string => {
   if (b !== undefined) {
     let n = 0;
+
     while ((a[n] ?? "0") === b[n]) n++;
+
     if (n > 0) return b.slice(0, n) + midpoint(a.slice(n), b.slice(n));
   }
+
   const digitA = a ? DIGITS.indexOf(a[0]!) : 0;
   const digitB = b !== undefined ? DIGITS.indexOf(b[0]!) : DIGITS.length;
+
   if (digitB - digitA > 1) return DIGITS[Math.round(0.5 * (digitA + digitB))]!;
+
   if (b !== undefined && b.length > 1) return b.slice(0, 1);
+
   return DIGITS[digitA]! + midpoint(a.slice(1), undefined);
 };
 
 /** Fractional ordering key strictly between `a` and `b` (either may be undefined); keys never end in "0". */
 export const calOrderKeyBetween = (a: string | undefined, b: string | undefined): string => {
   if (a !== undefined && b !== undefined && a >= b) throw new Error("order keys must be ascending");
+
   return midpoint(a ?? "", b);
 };
 
@@ -239,12 +277,14 @@ export const calDisplayTime = (
 ): CalDisplayTime => {
   const v = calWallClock(instant, viewerZone);
   const text = calFormatClock(v.hour, v.minute, hour12);
+
   if (
     eventZone === viewerZone ||
     calOffsetAt(instant, eventZone) === calOffsetAt(instant, viewerZone)
   )
     return { text };
   const e = calWallClock(instant, eventZone);
+
   return { text, originalText: `${calFormatClock(e.hour, e.minute, hour12)} ${eventZone}` };
 };
 

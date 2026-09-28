@@ -38,13 +38,17 @@ describe("harness fidelity", () => {
     const state = h.namespaces.CALENDARS.state("cal_x");
     const order: Array<string> = [];
     let release!: () => void;
+
     const first = state.blockConcurrencyWhile(
       () => new Promise<void>((r) => (release = () => (order.push("first"), r()))),
     );
+
     const second = state.blockConcurrencyWhile(async () => void order.push("second"));
+
     const rpc = h.env.CALENDARS.getByName("cal_x")
       .mayObserve("usr_x")
       .then(() => order.push("rpc"));
+
     await new Promise((r) => setTimeout(r, 5));
     expect(order).toEqual([]);
     release();
@@ -66,6 +70,7 @@ describe("harness fidelity", () => {
     const put = await r2.put("a/1", "one");
     expect(put.etag).toBe(md5("one"));
     expect(put.httpEtag).toBe(`"${md5("one")}"`);
+
     for (const k of ["a/2", "a/3", "a/4", "b/1"]) await r2.put(k, k);
     const page1 = await r2.list({ prefix: "a/", limit: 2 });
     expect(page1.objects.map((o) => o.key)).toEqual(["a/1", "a/2"]);
@@ -125,19 +130,23 @@ describe("harness fidelity", () => {
     expect(h.deadLettered).toEqual([
       { queue: "NOTIFY", body: { not: "a valid message" }, attempts: 3 },
     ]);
+
     // The DLQ consumer captured it into D1 for operator replay.
     const held = await h.d1
       .prepare("SELECT queue, attempts, state FROM dead_letters")
       .all<{ queue: string; attempts: number; state: string }>();
+
     expect(held.results).toEqual([{ queue: "notifydlq", attempts: 3, state: "held" }]);
   });
 
   it("the auth rate limiter records keys and can be told to deny", async () => {
     const h = makeHarness();
     h.rateLimit.deny = (key) => key.startsWith("login:");
-    const limiter = h.env.AUTH_RATE_LIMIT as unknown as {
+
+    const limiter = h.env.AUTH_RATE_LIMIT as {
       limit(o: { key: string }): Promise<{ success: boolean }>;
     };
+
     expect(await limiter.limit({ key: "login:1.2.3.4" })).toEqual({ success: false });
     expect(await limiter.limit({ key: "signup:1.2.3.4" })).toEqual({ success: true });
     expect(h.rateLimit.keys).toEqual(["login:1.2.3.4", "signup:1.2.3.4"]);

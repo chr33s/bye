@@ -33,13 +33,16 @@ export const parseInstanceHandoff = (
   const input = raw.trim();
   const link = /^bye:\/\/add-instance\/?(?:\?([^#]*))?(#.*)?$/i.exec(input);
   let candidate: string;
+
   if (link) {
     if (link[2] !== undefined) return { _tag: "Rejected", reason: "fragment" };
     const pairs = (link[1] ?? "").split("&").filter(Boolean);
+
     // Exactly one `url`: codes, tokens, state or credentials are never accepted here.
     if (pairs.length !== 1 || !pairs[0]!.startsWith("url="))
       return { _tag: "Rejected", reason: "unexpected-parameters" };
     const value = decode(pairs[0]!.slice(4));
+
     if (!value) return { _tag: "Rejected", reason: "malformed" };
     candidate = value;
   } else if (options.scanned && /^https:\/\//i.test(input)) {
@@ -47,6 +50,8 @@ export const parseInstanceHandoff = (
   } else {
     return { _tag: "NotHandoff" };
   }
+
   const n = normalizeInstanceUrl(candidate);
+
   return n.ok ? { _tag: "AddInstance", url: n.url } : { _tag: "Rejected", reason: n.reason };
 };

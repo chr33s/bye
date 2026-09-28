@@ -11,6 +11,7 @@ export type StateBackend = "cloudflare" | "http";
 
 export const stateBackendFrom = (value: string | undefined): StateBackend => {
   if (value === undefined || value === "" || value === "cloudflare") return "cloudflare";
+
   if (value === "http") return "http";
   throw new Error(`STATE_BACKEND must be "cloudflare" or "http", got ${JSON.stringify(value)}`);
 };
@@ -23,6 +24,7 @@ export const byeHttpState = () =>
       const url = yield* Config.String("BYE_STATE_URL");
       const token = yield* Config.Redacted("BYE_STATE_TOKEN");
       const context = yield* Effect.context<HttpClient.HttpClient>();
+
       return yield* Effect.cached(
         makeHttpStateStore({ url, authToken: Redacted.value(token), id: "bye-http" }).pipe(
           Effect.provideContext(context),

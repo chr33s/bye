@@ -1,3 +1,4 @@
+import type { QueueMessage } from "@bye/contracts";
 import { Context, Effect, Schema } from "effect";
 
 // Infrastructure enters application code only through these services (§7.1).
@@ -27,11 +28,12 @@ export const ALL_SCOPES: ReadonlyArray<Scope> = [
   "publish",
   "admin",
 ];
+
 /** Default agent credentials are read/draft only (§8). */
 export const DEFAULT_AGENT_SCOPES: ReadonlyArray<Scope> = ["read", "draft"];
 
 /** Verified principal constructed from credentials, never from client JSON (§3.2). Per-request only. */
-export interface PrincipalShape {
+export interface PrincipalContext {
   readonly userId: string;
   readonly sessionId: string;
   readonly kind: "user" | "agent" | "cli";
@@ -41,7 +43,7 @@ export interface PrincipalShape {
   readonly organizationIds: ReadonlyArray<string>;
 }
 
-export class Principal extends Context.Service<Principal, PrincipalShape>()("app/Principal") {}
+export class Principal extends Context.Service<Principal, PrincipalContext>()("app/Principal") {}
 
 export class Forbidden extends Schema.TaggedError<Forbidden>()("Forbidden", {
   reason: Schema.String,
@@ -64,24 +66,30 @@ export class Unavailable extends Schema.TaggedError<Unavailable>()("Unavailable"
 export const requireScope = (scope: Scope) =>
   Effect.gen(function* () {
     const principal = yield* Principal;
+
     if (!principal.scopes.includes(scope))
       return yield* new Forbidden({ reason: `missing scope ${scope}` });
+
     return principal;
   });
 
 export const requireMailbox = (mailboxId: string, scope: Scope) =>
   Effect.gen(function* () {
     const principal = yield* requireScope(scope);
+
     if (!principal.mailboxIds.includes(mailboxId))
       return yield* new Forbidden({ reason: "mailbox not granted" });
+
     return principal;
   });
 
 export const requireCalendar = (calendarId: string, scope: Scope) =>
   Effect.gen(function* () {
     const principal = yield* requireScope(scope);
+
     if (!principal.calendarIds.includes(calendarId))
       return yield* new Forbidden({ reason: "calendar not granted" });
+
     return principal;
   });
 
@@ -121,13 +129,26 @@ export class QueueFailure extends Schema.TaggedError<QueueFailure>()("QueueFailu
 
 export type QueueName = "ingest" | "dispatch" | "index" | "notify" | "propagate";
 
+/** Small message that stands in for an oversize body stored elsewhere. */
+export interface QueueRefBody {
+  readonly schemaVersion: 1;
+  readonly type: "ref";
+  readonly key: string;
+}
+
+/** A wire message body: a decoded queue message or a small offload reference. */
+export type QueueWireBody = QueueMessage | QueueRefBody;
+
+/** A JSON request payload as received over HTTP or RPC, decoded by the use case that owns it. */
+export type RequestPayload = object | string | number | boolean | null | undefined;
+
 export class QueuePublisher extends Context.Service<
   QueuePublisher,
   {
-    readonly send: (queue: QueueName, body: unknown) => Effect.Effect<void, QueueFailure>;
+    readonly send: (queue: QueueName, body: QueueWireBody) => Effect.Effect<void, QueueFailure>;
     readonly sendBatch: (
       queue: QueueName,
-      bodies: ReadonlyArray<unknown>,
+      bodies: ReadonlyArray<QueueWireBody>,
     ) => Effect.Effect<void, QueueFailure>;
   }
 >()("app/QueuePublisher") {}

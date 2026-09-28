@@ -1,4 +1,5 @@
 import { normalizeAddress } from "@bye/domain";
+import { Predicate } from "effect";
 import type { KernelClock } from "../durable/kernel.ts";
 import type { EntitlementRecord, PlanInterval } from "./billing.ts";
 import { base32Encode } from "./totp.ts";
@@ -32,7 +33,7 @@ export interface PlanDefinition {
 }
 
 /** Prices are our own product decisions (A02); the catalog is data, not processor state. */
-export const PLAN_CATALOG: Readonly<Record<string, PlanDefinition>> = {
+const PLAN_DEFINITIONS = {
   personal: {
     id: "personal",
     kind: "personal",
@@ -65,21 +66,30 @@ export const PLAN_CATALOG: Readonly<Record<string, PlanDefinition>> = {
     perSeat: false,
     closure: { reserveAddressDays: 3650, forwardingDays: 3650 },
   },
-};
+} satisfies Readonly<Record<string, PlanDefinition>>;
+
+export const PLAN_CATALOG: Readonly<Record<string, PlanDefinition>> = Object.fromEntries(
+  Object.entries(PLAN_DEFINITIONS),
+);
 
 /** Closure terms for accounts without a paid plan (trial or lapsed). */
 export const UNPAID_CLOSURE = { reserveAddressDays: 90, forwardingDays: 0 } as const;
 
 export const TRIAL_DAYS = 14;
+
 /** Service continues this long after a lapse (past due, expiry) before scopes drop to read-only. */
 export const ENTITLEMENT_GRACE_MS = 14 * 86_400_000;
+
 /** Local parts at or below this length are premium (configurable short-address pricing, A02). */
 export const SHORT_ADDRESS_MAX_LOCAL = 2;
+
 export const REFERRAL_CREDIT_CENTS = 1000;
+
 export const CHECKOUT_TTL_MS = 60 * 60_000;
 
 export const isShortAddress = (address: string): boolean => {
   const local = normalizeAddress(address).split("@")[0] ?? "";
+
   return local.length > 0 && local.length <= SHORT_ADDRESS_MAX_LOCAL;
 };
 
@@ -95,13 +105,18 @@ export const entitlementState = (
   graceMs = ENTITLEMENT_GRACE_MS,
 ): EntitlementState => {
   if (!e) return "entitled";
+
   const withinGrace = (since: number): EntitlementState =>
     since + graceMs > now ? "grace" : "lapsed";
+
   const byDeadline = (deadline: number | null): EntitlementState => {
     if (deadline === null) return "lapsed";
+
     if (deadline > now) return "entitled";
+
     return withinGrace(deadline);
   };
+
   switch (e.status) {
     case "trialing":
       return byDeadline(e.trial_ends_at);
@@ -143,26 +158,37 @@ export interface BillingProvider {
   cancel(input: { readonly orgId: string; readonly atPeriodEnd: boolean }): Promise<void>;
 }
 
+/** The processor's JSON reply; fields are validated before use. */
+interface ProviderReply {
+  readonly id?: unknown;
+  readonly url?: unknown;
+}
+
 /** Generic HTTPS processor adapter (`BILLING_CHECKOUT_URL` + `BILLING_API_KEY`). */
 export const httpBillingProvider = (
   endpoint: string,
   apiKey: string,
   fetchFn: typeof fetch,
 ): BillingProvider => {
-  const call = async (action: string, body: unknown) => {
+  const call = async <B extends object>(action: string, body: B): Promise<ProviderReply> => {
     const response = await fetchFn(endpoint, {
       method: "POST",
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ action, ...(body as object) }),
+      body: JSON.stringify({ action, ...body }),
     });
+
     if (!response.ok) throw new Error(`billing provider ${action} failed: ${response.status}`);
-    return (await response.json().catch(() => ({}))) as Record<string, unknown>;
+
+    return (await response.json().catch(() => ({}))) as ProviderReply;
   };
+
   return {
     createCheckout: async (request) => {
       const r = await call("checkout.create", request);
-      if (typeof r.id !== "string" || typeof r.url !== "string")
+
+      if (!Predicate.isString(r.id) || !Predicate.isString(r.url))
         throw new Error("billing provider returned no session");
+
       return { providerSessionId: r.id, url: r.url };
     },
     changePlan: async (input) => void (await call("subscription.change", input)),
@@ -185,11 +211,14 @@ const planSeatsFor = (
   requestedSeats: number,
 ): number => {
   if (orgKind === undefined) return reject("not_found", "organization");
+
   if (plan.kind !== orgKind)
     return reject("bad_request", `the ${plan.id} plan is not available for a ${orgKind} account`);
   const seats = Math.max(1, Math.floor(requestedSeats));
+
   if (!plan.perSeat && seats > 1)
     return reject("bad_request", `the ${plan.id} plan is not priced per seat`);
+
   return seats;
 };
 
@@ -234,6 +263,7 @@ export class ControlCommerce {
         kind: string;
       }>(),
     );
+
     return row?.kind;
   }
 
@@ -256,6 +286,7 @@ export class ControlCommerce {
         `checkout-return:${sessionId}`,
       ),
     );
+
     return version === 1 ? mac : tagVersion(version, mac);
   }
 
@@ -272,11 +303,14 @@ export class ControlCommerce {
   }): Promise<{ readonly sessionId: string; readonly url: string }> {
     const plan = PLAN_CATALOG[input.plan] ?? reject("bad_request", "unknown plan");
     const address = input.address ? normalizeAddress(input.address) : null;
+
     if (input.purpose === "short-address") {
       if (plan.id !== "short-address")
         reject("bad_request", "short-address checkout requires the short-address plan");
+
       if (!input.address || !isShortAddress(input.address))
         reject("bad_request", "not a short address");
+
       const taken = await guardD1("address", () =>
         q(
           primary(this.db),
@@ -285,22 +319,27 @@ export class ControlCommerce {
           address,
         ).first(),
       );
+
       if (taken) reject("conflict", "address unavailable");
     } else if (!input.orgId) {
       reject("bad_request", "organization required");
     } else if (plan.id === "short-address") {
       reject("bad_request", "short addresses are purchased separately");
     }
+
     const seats =
       input.purpose === "short-address"
         ? 1
         : planSeatsFor(plan, await this.orgKind(input.orgId!), input.seats);
+
     const provider = this.requireProvider();
     const sessionId = this.clock.id("chk");
     const now = this.clock.now();
     const sig = await this.returnSignature(sessionId);
+
     const back = (state: string) =>
       `${input.returnUrl}${input.returnUrl.includes("?") ? "&" : "?"}checkout=${encodeURIComponent(sessionId)}&sig=${sig}&state=${state}`;
+
     await q(
       this.db,
       "INSERT INTO checkout_sessions (id, org_id, user_id, purpose, plan, interval, seats, address, referral_code, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
@@ -316,6 +355,7 @@ export class ControlCommerce {
       now,
       now + CHECKOUT_TTL_MS,
     ).run();
+
     const created = await provider.createCheckout({
       sessionId,
       purpose: input.purpose,
@@ -328,12 +368,14 @@ export class ControlCommerce {
       successUrl: back("success"),
       cancelUrl: back("cancel"),
     });
+
     await q(
       this.db,
       "UPDATE checkout_sessions SET provider_session_id = ? WHERE id = ?",
       created.providerSessionId,
       sessionId,
     ).run();
+
     return { sessionId, url: created.url };
   }
 
@@ -349,14 +391,18 @@ export class ControlCommerce {
       )
     )
       return reject("forbidden", "invalid checkout signature");
+
     const row = await q(
       primary(this.db),
       "SELECT status, purpose, expires_at FROM checkout_sessions WHERE id = ?",
       sessionId,
     ).first<{ status: string; purpose: string; expires_at: number }>();
+
     if (!row) return reject("not_found", "checkout");
+
     const status =
       row.status === "open" && row.expires_at < this.clock.now() ? "expired" : row.status;
+
     return { status, purpose: row.purpose };
   }
 
@@ -376,11 +422,13 @@ export class ControlCommerce {
   /** A short address may be provisioned only with a completed, unexpired short-address checkout. */
   async shortAddressPaid(address: string, sessionId: string | undefined): Promise<boolean> {
     if (!sessionId) return false;
+
     const row = await q(
       primary(this.db),
       "SELECT address, status, purpose FROM checkout_sessions WHERE id = ?",
       sessionId,
     ).first<{ address: string | null; status: string; purpose: string }>();
+
     return (
       row?.purpose === "short-address" &&
       row.status === "completed" &&
@@ -394,6 +442,7 @@ export class ControlCommerce {
     input: { readonly plan: string; readonly interval: PlanInterval; readonly seats: number },
   ): Promise<{ readonly requested: true }> {
     const plan = PLAN_CATALOG[input.plan] ?? reject("bad_request", "unknown plan");
+
     if (plan.id === "short-address")
       reject("bad_request", "short addresses are purchased separately");
     const seats = planSeatsFor(plan, await this.orgKind(orgId), input.seats);
@@ -412,6 +461,7 @@ export class ControlCommerce {
         actorId,
       ),
     ]);
+
     return { requested: true };
   }
 
@@ -436,6 +486,7 @@ export class ControlCommerce {
         orgId,
       ),
     ]);
+
     return { requested: true };
   }
 
@@ -473,6 +524,7 @@ export class ControlCommerce {
       "SELECT kind, amount_cents, reason, created_at FROM billing_ledger WHERE org_id = ? ORDER BY created_at DESC, id DESC LIMIT 200",
       orgId,
     ).all<{ kind: string; amount_cents: number; reason: string; created_at: number }>();
+
     return rows.results.map((r) => ({
       kind: r.kind,
       amountCents: Number(r.amount_cents),
@@ -489,6 +541,7 @@ export class ControlCommerce {
       "SELECT code FROM referral_codes WHERE owner_user_id = ? AND disabled_at IS NULL",
       userId,
     ).first<{ code: string }>();
+
     if (existing) return existing.code;
     const code = base32Encode(randomBytes(5)).slice(0, 8);
     await q(
@@ -498,18 +551,22 @@ export class ControlCommerce {
       userId,
       this.clock.now(),
     ).run();
+
     return code;
   }
 
   /** Record a referral at signup. Self-referral and double redemption are refused silently. */
   async redeemReferral(userId: string, code: string): Promise<boolean> {
     const normalized = code.trim().toUpperCase();
+
     const c = await q(
       primary(this.db),
       "SELECT owner_user_id FROM referral_codes WHERE code = ? AND disabled_at IS NULL",
       normalized,
     ).first<{ owner_user_id: string }>();
+
     if (!c || c.owner_user_id === userId) return false;
+
     try {
       await q(
         this.db,
@@ -518,6 +575,7 @@ export class ControlCommerce {
         normalized,
         this.clock.now(),
       ).run();
+
       return true;
     } catch {
       return false;
@@ -533,24 +591,29 @@ export class ControlCommerce {
     providerEventId: string,
   ): Promise<Array<D1StatementLike>> {
     const db = primary(this.db);
+
     const r = await q(
       db,
       `SELECT rr.user_id, rc.owner_user_id AS referrer FROM memberships m JOIN referral_redemptions rr ON rr.user_id = m.user_id
        JOIN referral_codes rc ON rc.code = rr.code WHERE m.org_id = ? AND m.role = 'owner' AND rr.credited_at IS NULL LIMIT 1`,
       orgId,
     ).first<{ user_id: string; referrer: string }>();
+
     if (!r) return [];
+
     const referrerOrg = await q(
       db,
       "SELECT o.id FROM organizations o JOIN memberships m ON m.org_id = o.id WHERE m.user_id = ? AND o.kind = 'personal' LIMIT 1",
       r.referrer,
     ).first<{ id: string }>();
+
     const now = this.clock.now();
     // The redemption compare-and-set gates every credit: two concurrent activations (or a
     // replayed event) both read `credited_at IS NULL`, but only the batch whose CAS changes the
     // row writes the referee ledger row, and every other credit is keyed to that row existing.
     const refereeLedgerId = this.clock.id("led");
     const credited = "EXISTS (SELECT 1 FROM billing_ledger WHERE id = ?)";
+
     const ledgerIf = (ledgerOrgId: string, reason: string, id: string, afterCas: boolean) =>
       q(
         this.db,
@@ -563,6 +626,7 @@ export class ControlCommerce {
         now,
         ...(afterCas ? [] : [refereeLedgerId]),
       );
+
     const creditIf = (creditOrgId: string) =>
       q(
         this.db,
@@ -571,6 +635,7 @@ export class ControlCommerce {
         creditOrgId,
         refereeLedgerId,
       );
+
     const out: Array<D1StatementLike> = [
       q(
         this.db,
@@ -581,10 +646,12 @@ export class ControlCommerce {
       ledgerIf(orgId, "referee", refereeLedgerId, true),
       creditIf(orgId),
     ];
+
     if (referrerOrg) {
       out.push(ledgerIf(referrerOrg.id, "referrer", this.clock.id("led"), false));
       out.push(creditIf(referrerOrg.id));
     }
+
     return out;
   }
 
@@ -595,19 +662,25 @@ export class ControlCommerce {
     readonly forwardingDays: number;
   }> {
     const db = primary(this.db);
+
     const row = await q(
       db,
       `SELECT e.* FROM organizations o JOIN memberships m ON m.org_id = o.id JOIN entitlements e ON e.org_id = o.id
        WHERE m.user_id = ? AND o.kind = 'personal' LIMIT 1`,
       userId,
     ).first<EntitlementRecord>();
+
     const now = this.clock.now();
+
     const paid =
       row !== null && row.status !== "trialing" && entitlementState(row, now) !== "lapsed";
+
     const plan = paid ? PLAN_CATALOG[row!.plan] : undefined;
     const terms = plan ? plan.closure : UNPAID_CLOSURE;
+
     const shortAddress =
       row?.short_address === 1 ? PLAN_CATALOG["short-address"]!.closure : undefined;
+
     return {
       plan: paid ? row!.plan : null,
       reserveAddressDays: Math.max(terms.reserveAddressDays, shortAddress?.reserveAddressDays ?? 0),

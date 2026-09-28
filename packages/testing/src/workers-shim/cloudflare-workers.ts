@@ -4,7 +4,7 @@
 export abstract class DurableObject<Env = unknown> {
   protected ctx: any;
   protected env: Env;
-  constructor(ctx: unknown, env: Env) {
+  constructor(ctx: any, env: Env) {
     this.ctx = ctx;
     this.env = env;
   }
@@ -13,7 +13,7 @@ export abstract class DurableObject<Env = unknown> {
 export abstract class WorkerEntrypoint<Env = unknown> {
   protected ctx: any;
   protected env: Env;
-  constructor(ctx: unknown, env: Env) {
+  constructor(ctx: any, env: Env) {
     this.ctx = ctx;
     this.env = env;
   }
@@ -22,7 +22,7 @@ export abstract class WorkerEntrypoint<Env = unknown> {
 export abstract class WorkflowEntrypoint<Env = unknown> {
   protected ctx: any;
   protected env: Env;
-  constructor(ctx: unknown, env: Env) {
+  constructor(ctx: any, env: Env) {
     this.ctx = ctx;
     this.env = env;
   }

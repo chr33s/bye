@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { describe, expect, it } from "vitest";
 import { applyMailboxCommand } from "@bye/platform-cloudflare";
 import { cmd, deliveryFixture, makeTestMailbox, summaryFixture } from "@bye/testing";
@@ -5,15 +6,19 @@ import { Rejection } from "@bye/platform-cloudflare";
 
 const setup = () => {
   const m = makeTestMailbox();
+
   const deliver = (
     over: Parameters<typeof summaryFixture>[0] = {},
     extra: Parameters<typeof deliveryFixture>[2] = {},
   ) => {
     m.clock.advance(1000);
+
     return m.store.ingest.commitDelivery(deliveryFixture(m.clock, summaryFixture(over), extra));
   };
+
   const allow = (sender: string, destination: "imbox" | "feed" | "paper-trail" = "imbox") =>
     m.store.screener.screen([{ sender, decision: "allow", destination }]);
+
   return { ...m, deliver, allow };
 };
 
@@ -36,11 +41,13 @@ describe("screening and routing", () => {
     const a = m.deliver({ fromAddress: "a@example.com" });
     m.deliver({ fromAddress: "b@example.com" });
     const c = m.deliver({ fromAddress: "c@example.com" });
+
     const out = m.store.screener.screen([
       { sender: "a@example.com", decision: "allow", asSeen: true },
       { sender: "b@example.com", decision: "block" },
       { sender: "c@example.com", decision: "allow", reply: true },
     ]);
+
     expect(out.moved).toBe(3);
     expect(out.draftIds).toHaveLength(1);
     const imbox = m.store.views.imbox();
@@ -108,10 +115,12 @@ describe("screening and routing", () => {
   it("[E02] domain allow versus exact block, and approved-sender spoof goes to spam", () => {
     const m = setup();
     m.allow("friend@example.com");
+
     const spoof = m.deliver(
       { fromAddress: "friend@example.com" },
       { safety: { _tag: "Spoofed", reason: "dmarc fail" } },
     );
+
     expect(spoof).toMatchObject({ disposition: "spam", decidedBy: "safety" });
     expect(m.store.views.getThread(spoof.threadId).thread.quarantined).toBe(true);
   });
@@ -140,11 +149,13 @@ describe("screening and routing", () => {
     m.allow("alice@example.com");
     const first = m.deliver({ messageIdHeader: "root@example.com" });
     expect(m.store.views.markSeen(first.threadId, 1).newForYou).toBe(false);
+
     const reply = m.deliver({
       subject: "Re: Hello",
       inReplyTo: ["root@example.com"],
       references: ["root@example.com"],
     });
+
     expect(reply.threadId).toBe(first.threadId);
     expect(m.store.views.imbox().newForYou.map((t) => t.threadId)).toEqual([first.threadId]);
     // Device observed revision 2; a concurrent third message stays new.
@@ -229,17 +240,20 @@ describe("attention piles", () => {
     m.store.triage.setAttention(t.threadId, "setAside", true);
     expect(m.store.views.listView({ view: "set-aside" }).items).toHaveLength(1);
     expect(m.store.views.getThread(t.threadId).thread.disposition).toBe("active");
+
     const draftId = m.store.drafts.createReplyDraft(
       t.threadId,
       "reply",
       m.store.views.getThread(t.threadId).deliveries,
     );
+
     const sent = m.store.sends.send(draftId, {
       expectedRevision: 1,
       afterSend: { _tag: "MarkDone" },
       undoMs: 0,
     });
-    if (sent._tag !== "Queued") throw new Error("expected queued");
+
+    if (!Predicate.isTagged(sent, "Queued")) throw new Error("expected queued");
     m.store.runDueJobs(m.clock.now());
     m.store.sends.claim(sent.sendJobIds[0]!);
     m.store.sends.accepted(sent.sendJobIds[0]!, { providerId: "p1" });
@@ -279,18 +293,22 @@ describe("attention piles", () => {
     const m = setup();
     m.allow("alice@example.com");
     const t = m.deliver({ messageIdHeader: "snp@example.com" });
+
     const draftId = m.store.drafts.createReplyDraft(
       t.threadId,
       "reply",
       m.store.views.getThread(t.threadId).deliveries,
     );
+
     const at = m.clock.now() + 86_400_000;
+
     const sent = m.store.sends.send(draftId, {
       expectedRevision: 1,
       afterSend: { _tag: "BubbleUp", at },
       undoMs: 0,
     });
-    if (sent._tag !== "Queued") throw new Error();
+
+    if (!Predicate.isTagged(sent, "Queued")) throw new Error();
     m.store.runDueJobs(m.clock.now());
     m.store.sends.claim(sent.sendJobIds[0]!);
     m.store.sends.accepted(sent.sendJobIds[0]!, { providerId: "p" });
@@ -313,14 +331,17 @@ describe("attention piles", () => {
       "reply",
       m.store.views.getThread(threadId).deliveries,
     );
-    const sent = m.store.sends.send(draftId, {
-      expectedRevision: 1,
-      ...(afterSend ? { afterSend } : {}),
-      undoMs: 0,
-    });
-    if (sent._tag !== "Queued") throw new Error("expected queued");
+
+    const options: Parameters<typeof m.store.sends.send>[1] = afterSend
+      ? { expectedRevision: 1, afterSend, undoMs: 0 }
+      : { expectedRevision: 1, undoMs: 0 };
+
+    const sent = m.store.sends.send(draftId, options);
+
+    if (!Predicate.isTagged(sent, "Queued")) throw new Error("expected queued");
     m.store.runDueJobs(m.clock.now());
     m.store.sends.claim(sent.sendJobIds[0]!);
+
     return sent.sendJobIds[0]!;
   };
 
@@ -483,15 +504,18 @@ describe("thread controls and organization", () => {
   it("[E13] workflow boards with stages, ordered cards, completion, and extension enrollment", () => {
     const m = setup();
     m.allow("client@example.com");
+
     const { boardId, stageIds } = m.store.organize.createBoard(
       "Hiring",
       ["New", "Interview", "Offer"],
       "jobs@bye.test",
     );
+
     const t = m.deliver({
       fromAddress: "client@example.com",
       to: [{ name: undefined, address: "jobs@bye.test" }],
     });
+
     const board = m.store.organize.board(boardId);
     expect(board.stages[0]!.cards.map((c) => c.threadId)).toEqual([t.threadId]);
     const cardId = board.stages[0]!.cards[0]!.cardId;
@@ -521,13 +545,16 @@ describe("thread controls and organization", () => {
     const m = setup();
     m.allow("alice@example.com");
     const t = m.deliver({});
+
     const saved = m.store.organize.putNote({
       kind: "thread",
       threadId: t.threadId,
       body: "call back",
       fileKeys: ["t/x/upload/u1"],
     });
-    if (saved._tag !== "Saved") throw new Error();
+
+    if (!Predicate.isTagged(saved, "Saved")) throw new Error();
+
     const stale = m.store.organize.putNote({
       noteId: saved.noteId,
       kind: "thread",
@@ -535,6 +562,7 @@ describe("thread controls and organization", () => {
       body: "other device",
       expectedRevision: 0,
     });
+
     expect(stale._tag).toBe("Conflict");
     m.store.organize.putNote({ kind: "sticky", body: "pay rent" });
     expect(m.store.organize.notes({ kind: "sticky" })).toHaveLength(1);
@@ -548,12 +576,14 @@ describe("thread controls and organization", () => {
     const m = setup();
     m.allow("alice@example.com");
     m.deliver({});
+
     const id = m.store.organize.putContact({
       name: "Alice Liddell",
       emails: ["Alice@Example.com"],
       notes: "met at conf",
       groups: ["friends"],
     });
+
     expect(m.store.organize.contact(id)).toMatchObject({
       emails: ["alice@example.com"],
       groups: ["friends"],
@@ -625,9 +655,11 @@ describe("retention, delivery semantics, operations", () => {
     const first = m.store.ingest.commitDelivery(input);
     const replay = m.store.ingest.commitDelivery(input);
     expect(replay).toMatchObject({ replayed: true, deliveryId: first.deliveryId });
+
     const independent = m.store.ingest.commitDelivery(
       deliveryFixture(m.clock, summaryFixture({ messageIdHeader: "same@x" })),
     );
+
     expect(independent.deliveryId).not.toBe(first.deliveryId);
     const second = m.store.ingest.commitDelivery({ ...input, recipient: "alias@bye.test" });
     expect(second.replayed).toBe(false);
@@ -636,8 +668,10 @@ describe("retention, delivery semantics, operations", () => {
   it("invitations from screened senders do not reach the calendar until approval", () => {
     const m = setup();
     m.deliver({ fromAddress: "org@example.com", hasCalendar: true, calendarMethod: "REQUEST" });
+
     const invites = () =>
       m.store.kernel.pendingOutbox(100).filter((e) => e.topic === "calendar.invitation");
+
     expect(invites()).toHaveLength(0);
     m.allow("org@example.com");
     expect(invites()).toHaveLength(1);
@@ -651,6 +685,7 @@ describe("retention, delivery semantics, operations", () => {
     const page = m.store.changes(start);
     expect(page.changes.length).toBeGreaterThan(0);
     expect(page.cursor).toBeGreaterThan(start);
+
     for (let i = 0; i < 20; i++) m.deliver({});
     m.store.kernel.compactChanges(5);
     expect(m.store.changes(page.cursor).expired).toBe(true);
@@ -672,6 +707,7 @@ describe("retention, delivery semantics, operations", () => {
   it("view pagination keeps a snapshot boundary; new arrivals don't shift later pages", () => {
     const m = setup();
     m.allow("alice@example.com");
+
     for (let i = 0; i < 5; i++) m.deliver({ subject: `S${i}` });
     const p1 = m.store.views.listView({ view: "imbox", limit: 2 });
     m.deliver({ subject: "late" });
@@ -694,6 +730,7 @@ describe("retention, delivery semantics, operations", () => {
     const b = applyMailboxCommand(m.store, { _tag: "CreateLabel", commandId: id, name: "x" });
     expect(b).toEqual(a);
     expect(m.store.organize.listLabels().map((l) => l.name)).toEqual(["x"]);
+
     // The same command ID with a different payload is a conflict, not a silent replay.
     const changed = () =>
       applyMailboxCommand(m.store, {
@@ -701,12 +738,15 @@ describe("retention, delivery semantics, operations", () => {
         commandId: id,
         name: "renamed on replay",
       });
+
     expect(changed).toThrow(/different payload/);
     expect(changed).toThrow(expect.objectContaining({ code: "conflict" }));
     expect(m.store.organize.listLabels().map((l) => l.name)).toEqual(["x"]);
+
     // Reusing a command ID for a different command is a client error (conflict), not a replay.
     const reuse = () =>
       applyMailboxCommand(m.store, { _tag: "CreateCollection", commandId: id, name: "y" });
+
     expect(reuse).toThrow(/already used for CreateLabel/);
     expect(reuse).toThrow(expect.objectContaining({ code: "conflict" }));
     expect(m.store.organize.listCollections()).toHaveLength(0);

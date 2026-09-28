@@ -4,7 +4,13 @@ import { stepUpWithPasskey } from "../auth.ts";
 
 // Session-scoped client state and command helpers shared by every view.
 
-export const state: { me: Me | null; mailboxId: string | null; calendarId: string | null } = {
+interface SessionState {
+  me: Me | null;
+  mailboxId: string | null;
+  calendarId: string | null;
+}
+
+export const state: SessionState = {
   me: null,
   mailboxId: null,
   calendarId: null,
@@ -12,11 +18,13 @@ export const state: { me: Me | null; mailboxId: string | null; calendarId: strin
 
 export const mb = (): string => {
   if (!state.mailboxId) throw new Error("No mailbox on this account");
+
   return state.mailboxId;
 };
 
 export const cal = (): string => {
   if (!state.calendarId) throw new Error("No calendar on this account");
+
   return state.calendarId;
 };
 
@@ -32,7 +40,10 @@ export const calendarCommand = <T = unknown>(command: CalendarCommandInput): Pro
  * Consequential actions (new identities, forwarding, credentials, sharing, admin) require a recent
  * passkey step-up (§10). On a 403 the user confirms with their passkey and the action is retried once.
  */
-export const withStepUp = async <T>(fn: () => Promise<T>): Promise<T> => {
+export const withStepUp = async <T>(
+  fn: () => Promise<T>,
+  ceremony: () => Promise<void> = stepUpWithPasskey,
+): Promise<T> => {
   try {
     return await fn();
   } catch (error) {
@@ -45,7 +56,8 @@ export const withStepUp = async <T>(fn: () => Promise<T>): Promise<T> => {
       )
     )
       throw error;
-    await stepUpWithPasskey();
+    await ceremony();
+
     return fn();
   }
 };

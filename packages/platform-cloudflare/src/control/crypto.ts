@@ -1,4 +1,5 @@
 // WebCrypto helpers shared by auth, links, billing, and subscriptions. No Node APIs.
+import { Predicate } from "effect";
 
 export {
   concatBytes,
@@ -12,6 +13,7 @@ export {
   toHex,
   utf8,
 } from "@bye/domain";
+
 import { fromBase64Url, toBase64Url } from "@bye/domain";
 
 export const randomBytes = (n: number): Uint8Array<ArrayBuffer> =>
@@ -31,10 +33,12 @@ export const sealWithKey = async (
   plaintext: Uint8Array<ArrayBuffer>,
 ): Promise<{ keyVersion: number; iv: string; ciphertext: string }> => {
   const raw = keys.keys[keys.current];
+
   if (!raw) throw new Error("missing current key version");
   const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt"]);
   const iv = randomBytes(12);
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext));
+
   return { keyVersion: keys.current, iv: toBase64Url(iv), ciphertext: toBase64Url(ct) };
 };
 
@@ -43,8 +47,10 @@ export const openWithKey = async (
   sealed: { keyVersion: number; iv: string; ciphertext: string },
 ): Promise<Uint8Array<ArrayBuffer>> => {
   const raw = keys.keys[sealed.keyVersion];
+
   if (!raw) throw new UnknownKeyVersion("seal", sealed.keyVersion);
   const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
+
   return new Uint8Array(
     await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: fromBase64Url(sealed.iv) },
@@ -80,24 +86,30 @@ export class UnknownKeyVersion extends Error {
 const RING_ENTRY = /^v(\d+):(.+)$/s;
 
 export const parseSecretRing = (value: string | SecretRing): SecretRing => {
-  if (typeof value !== "string") return value;
+  if (!Predicate.isString(value)) return value;
   const entries = value.split(",").map((s) => s.trim());
   const parsed = entries.map((e) => RING_ENTRY.exec(e));
+
   if (entries.length === 0 || parsed.some((m) => m === null || Number(m[1]) < 1))
     return { current: 1, secrets: { 1: value } };
   const secrets: Record<number, string> = {};
+
   for (const m of parsed) {
     const version = Number(m![1]);
+
     if (secrets[version] !== undefined) throw new Error(`duplicate key version v${version}`);
     secrets[version] = m![2]!;
   }
+
   return { current: Number(parsed[0]![1]), secrets };
 };
 
 /** The ring's secret for `version`, or a tagged `UnknownKeyVersion`. */
 export const secretFor = (ring: SecretRing, version: number, purpose: string): string => {
   const secret = ring.secrets[version];
+
   if (secret === undefined) throw new UnknownKeyVersion(purpose, version);
+
   return secret;
 };
 
@@ -118,5 +130,6 @@ export const tagVersion = (version: number, value: string): string => `v${versio
 
 export const untagVersion = (tagged: string): { version: number; value: string } => {
   const m = /^v(\d+)\.(.*)$/s.exec(tagged);
+
   return m ? { version: Number(m[1]), value: m[2]! } : { version: 1, value: tagged };
 };

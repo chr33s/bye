@@ -51,27 +51,36 @@ import { QUALIFICATION_FILE, releaseQualification } from "../onboarding/release.
 import { FileStore, MemoryStore, type OnboardingStore } from "../onboarding/store.ts";
 
 const KEYS = parseKeyRing(`v1:${"ab".repeat(32)}`);
+
 const ACCOUNT: Account = { id: "acc0000000000000000000000000001", name: "Operator Co" };
+
 const OTHER: Account = { id: "acc0000000000000000000000000002", name: "Someone Else" };
+
 const ZONE: Zone = {
   id: "zone00000000000000000000000000001",
   name: "example.com",
   status: "active",
 };
+
 const PENDING_ZONE: Zone = {
   id: "zone00000000000000000000000000002",
   name: "pending.test",
   status: "pending",
 };
+
 const OTHER_ZONE: Zone = {
   id: "zone00000000000000000000000000003",
   name: "other.test",
   status: "active",
 };
+
 /** The repository itself stands in for the pinned release checkout. */
 const REPO = join(import.meta.dirname, "../..");
+
 const RELEASE = { version: "v1.0.0", commit: "c".repeat(40), lockfileDigest: "d".repeat(64) };
+
 const ACCESS = "cf-access-token-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
 const REFRESH = "cf-refresh-token-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
 const coreBindings = INVENTORY.filter((e) => e.owner === "stack" && e.binding !== undefined).map(
@@ -82,13 +91,18 @@ const row = (
   logicalId: string,
   resourceType: string,
   action: ExportedPlanRow["action"],
-): ExportedPlanRow => ({
-  fqn: `MailboxPlatform/${logicalId}`,
-  logicalId,
-  resourceType,
-  action,
-  ...(logicalId === "MailCore" ? { envBindings: coreBindings } : {}),
-});
+): ExportedPlanRow => {
+  const planRow: ExportedPlanRow = {
+    fqn: `MailboxPlatform/${logicalId}`,
+    logicalId,
+    resourceType,
+    action,
+  };
+
+  if (logicalId === "MailCore") return { ...planRow, envBindings: coreBindings };
+
+  return planRow;
+};
 
 const RESOURCES: ReadonlyArray<readonly [string, string]> = [
   ["MailCore", "Cloudflare.Worker"],
@@ -130,14 +144,18 @@ class FakeExecutor implements DeployExecutor {
   applied = false;
   async plan(ctx: ExecutionContext) {
     this.planCalls++;
+
     if (this.applied && this.plans.length === 0) return allNoop(ctx.stage);
+
     return (this.plans.shift() ?? this.defaultPlan)(ctx);
   }
   async apply(ctx: ExecutionContext, onLine: (l: string) => void) {
     this.applies.push(ctx);
     onLine(`deploying with ${ctx.apiToken}`); // must be redacted downstream
     const r = await this.applyBehavior(ctx);
+
     if (r.ok) this.applied = true;
+
     return r;
   }
 }
@@ -167,6 +185,7 @@ const fakeCloudflare = (
       return cf.workers;
     },
   };
+
   return cf;
 };
 
@@ -182,35 +201,48 @@ interface World {
   now: number;
 }
 
-const json = (v: unknown, status = 200) =>
+const json = <T>(v: T, status = 200) =>
   new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
 
 /** A healthy deployed instance at the workers.dev URLs onboarding computes. */
 const healthyInstance = (app: string) => {
   const probes = new Map<string, number>();
+
   return (url: string, init?: RequestInit): Response | null => {
     const u = new URL(url);
     const probe = (init?.headers as Record<string, string> | undefined)?.["x-bye-probe-token"];
+
     if (u.origin === app) {
       if (u.pathname === "/.well-known/bye-instance")
         return json({ schema: "bye.instance/1", baseUrl: app, issuer: app });
+
       if (u.pathname === "/.well-known/oauth-authorization-server") return json({ issuer: app });
+
       if (u.pathname === "/v1/me") return json({ error: { code: "unauthenticated" } }, 401);
+
       if (u.pathname.startsWith("/__probe/")) {
         if (!probe) return json({}, 404);
         const kind = u.pathname.split("/")[2]!;
+
         if (init?.method === "POST") {
           if (kind === "calendar") return json({ ok: true, starts: [] });
           probes.set(kind, 1);
+
           return json({}, 202);
         }
+
         if (kind === "queue") return json({ receivedAt: "now" });
+
         if (kind === "alarm") return json({ firedAt: 1 });
+
         if (kind === "workflow") return json({ status: "complete", marker: "m" });
       }
     }
+
     if (u.hostname.includes("-render.")) return new Response("not found", { status: 404 });
+
     if (u.hostname.includes("-site.")) return new Response("ok");
+
     return null;
   };
 };
@@ -230,6 +262,7 @@ const world = (
   const store = options.store ?? new MemoryStore();
   const executor = new FakeExecutor();
   const cf = fakeCloudflare(options.accounts);
+
   const w: World = {
     store,
     executor,
@@ -242,12 +275,15 @@ const world = (
       migrations: async () => ["d1:0001_identity.sql", "do:MailCore:v1"],
     },
     now: Date.parse("2026-09-26T12:00:00Z"),
-    service: null as unknown as OnboardingService,
+    service: null as never,
   };
+
   const fetcher: Fetch = async (url, init) => {
     calls.push(url);
+
     if (url === "https://dash.cloudflare.com/oauth2/token") {
       const form = new URLSearchParams(init?.body as string);
+
       if (form.get("grant_type") === "authorization_code" && form.get("code") === "good-code")
         return json({
           access_token: ACCESS,
@@ -255,6 +291,7 @@ const world = (
           expires_in: 3600,
           scope: requestedScopes().join(" "),
         });
+
       if (form.get("grant_type") === "refresh_token" && form.get("refresh_token") === REFRESH)
         return json({
           access_token: ACCESS,
@@ -262,6 +299,7 @@ const world = (
           expires_in: 3600,
           scope: requestedScopes().join(" "),
         });
+
       if (form.get("code") === "narrow-code")
         return json({
           access_token: ACCESS,
@@ -269,22 +307,30 @@ const world = (
           expires_in: 3600,
           scope: "memberships.read",
         });
+
       if (form.get("code") === "broad-code")
         return json({
           access_token: ACCESS,
           expires_in: 3600,
           scope: [...requestedScopes(), "dns.write"].join(" "),
         });
+
       return json({ error: "invalid_grant" }, 400);
     }
+
     if (url === "https://dash.cloudflare.com/oauth2/revoke") {
       revoked.push(new URLSearchParams(init?.body as string).get("token_type_hint")!);
+
       return new Response(null, { status: 200 });
     }
+
     const r = await w.health(url, init);
+
     if (r) return r;
+
     return new Response("unexpected", { status: 599 });
   };
+
   const service = new OnboardingService({
     store,
     keys: KEYS,
@@ -296,9 +342,11 @@ const world = (
     dataDir: mkdtempSync(join(tmpdir(), "bye-onboarding-")),
     now: () => w.now,
     healthTimeouts: { request: 200, async: 300 },
-    ...(options.verifiedScopes ? { scopeMatrix: VERIFIED } : {}),
+    scopeMatrix: options.verifiedScopes ? VERIFIED : undefined,
   });
-  (w as { service: OnboardingService }).service = service;
+
+  Object.assign(w, { service });
+
   return w;
 };
 
@@ -310,6 +358,7 @@ const connect = async (
 ) => {
   const { url } = await w.service.startAuthorization(operator, session);
   const state = new URL(url).searchParams.get("state")!;
+
   return w.service.completeAuthorization(operator, session, new URLSearchParams({ state, code }));
 };
 
@@ -321,6 +370,7 @@ const ready = async (w: World, stage = "dev-trial01", operator = "op@example.com
   const approval = await w.service.approve(operator, review.id, review.digest);
   const op = await w.service.deploy(operator, approval.id);
   await w.service.settled(op.id);
+
   return { inst, review, approval, op: (await w.store.getOperation(op.id))! };
 };
 
@@ -329,6 +379,7 @@ describe("onboarding OAuth and credentials", () => {
     expect(forbiddenScopes(requestedScopes())).toEqual([]);
     expect(requestedScopes()).toContain("zone.read");
     expect(requestedScopes()).toContain("workers-routes.write");
+
     const refused = [
       "dns-records.write",
       "dns.write",
@@ -342,6 +393,7 @@ describe("onboarding OAuth and credentials", () => {
       "memberships.write",
       "account-settings.write",
     ];
+
     expect(forbiddenScopes(refused)).toEqual(refused);
     // Zone read covers discovery only; the custom hostname is the only zone-level write.
     const zoneRead = ONBOARDING_SCOPES.find((g) => g.scope === "zone.read")!;
@@ -378,10 +430,12 @@ describe("onboarding OAuth and credentials", () => {
       ok: false,
       reason: "unknown or already used authorization state",
     });
+
     // Valid once, then replay fails.
     const again = new URL((await w.service.startAuthorization("op", "s1")).url).searchParams.get(
       "state",
     )!;
+
     expect(
       await w.service.completeAuthorization(
         "op",
@@ -396,6 +450,7 @@ describe("onboarding OAuth and credentials", () => {
         new URLSearchParams({ state: again, code: "good-code" }),
       ),
     ).toMatchObject({ ok: false });
+
     // Expiry.
     const pending = {
       state: "x",
@@ -405,6 +460,7 @@ describe("onboarding OAuth and credentials", () => {
       createdAt: 0,
       expiresAt: 10,
     };
+
     expect(checkCallback(pending, new URLSearchParams({ code: "c" }), "s", 11)).toMatchObject({
       ok: false,
       reason: "authorization expired; start again",
@@ -422,8 +478,10 @@ describe("onboarding OAuth and credentials", () => {
 
   it("lists accounts through memberships, falling back to /accounts", async () => {
     const seen: Array<string> = [];
+
     const reader = cloudflareReader(async (url) => {
       seen.push(new URL(url).pathname);
+
       if (url.includes("/memberships"))
         return json({
           result: [
@@ -431,12 +489,16 @@ describe("onboarding OAuth and credentials", () => {
             { status: "pending", account: OTHER },
           ],
         });
+
       return json({ result: [] });
     });
+
     expect(await reader.accounts("t")).toEqual([ACCOUNT]);
+
     const fallback = cloudflareReader(async (url) =>
       url.includes("/memberships") ? json({ result: [] }) : json({ result: [OTHER] }),
     );
+
     expect(await fallback.accounts("t")).toEqual([OTHER]);
     expect(seen).toEqual(["/client/v4/memberships"]);
   });
@@ -602,10 +664,12 @@ describe("spec.md §15.11 acceptance", () => {
     w.executor.applyBehavior = () =>
       new Promise((r) => (release = () => r({ ok: true, detail: "applied", aborted: false })));
     const first = await w.service.deploy("op@example.com", approval.id);
+
     const [second, third] = await Promise.all([
       w.service.deploy("op@example.com", approval.id),
       w.service.deploy("op@example.com", approval.id),
     ]);
+
     expect(second.id).toBe(first.id);
     expect(third.id).toBe(first.id);
     await new Promise((r) => setTimeout(r, 20));
@@ -663,6 +727,7 @@ describe("spec.md §15.11 acceptance", () => {
     // Half-applied: two resources exist, MailCore resumes as an update; the rest are still creates.
     const partial = (ctx: ExecutionContext) =>
       planOf(ctx.stage, { Directory: "noop", Originals: "noop", MailCore: "update" });
+
     w2.executor.plans.push(partial);
     const retry = await w2.service.deploy("op@example.com", approval.id);
     await w2.service.settled(retry.id);
@@ -713,14 +778,17 @@ describe("spec.md §15.11 acceptance", () => {
     const healthy = healthyInstance(inst.urls!.app);
     w.health = (url, init) => {
       if (url.endsWith("/.well-known/bye-instance")) return json({}, 500);
+
       if (url.includes("/__probe/alarm/") && init?.method !== "POST")
         return new Promise<Response>((_r, reject) =>
           init?.signal?.addEventListener("abort", () =>
             reject(Object.assign(new Error("t"), { name: "TimeoutError" })),
           ),
         );
+
       return healthy(url, init);
     };
+
     const review = await w.service.review("op@example.com");
     const approval = await w.service.approve("op@example.com", review.id, review.digest);
     const op = await w.service.deploy("op@example.com", approval.id);
@@ -787,7 +855,7 @@ describe("spec.md §15.11 acceptance", () => {
   it("OB07: a failed provider revocation is reported without restoring access", async () => {
     const w = world();
     await connect(w);
-    const failing = w.service as unknown as { deps: { fetch: Fetch } };
+    const failing: { deps: { fetch: Fetch } } = w.service as never;
     const original = failing.deps.fetch;
     (failing.deps as { fetch: Fetch }).fetch = async (url, init) =>
       url.endsWith("/revoke") ? new Response(null, { status: 503 }) : original(url, init);
@@ -809,6 +877,7 @@ describe("spec.md §15.11 acceptance", () => {
     );
     const review = await w.service.review("op@example.com");
     expect(review.blockers.filter((b) => b.includes("outside onboarding"))).toHaveLength(3);
+
     for (const t of [
       "Cloudflare.Email.Routing",
       "Cloudflare.Email.CatchAll",
@@ -837,6 +906,7 @@ describe("spec.md §15.11 acceptance", () => {
         PATH: "/bin",
       },
     );
+
     for (const k of [
       "MAIL_ZONE",
       "BYE_MX_CUTOVER",
@@ -845,6 +915,7 @@ describe("spec.md §15.11 acceptance", () => {
       "CF_DNS_API_TOKEN",
     ])
       expect(env[k]).toBe("");
+
     // The installation's own chosen hostname is the one domain input that reaches the stack.
     const withHost = childEnv(
       {
@@ -859,6 +930,7 @@ describe("spec.md §15.11 acceptance", () => {
       },
       { PUBLIC_DOMAIN: "example.com" },
     );
+
     expect(withHost.APP_DOMAIN).toBe("bye.example.com");
     expect(withHost.MAIL_ZONE).toBe("");
     expect(withHost.PUBLIC_DOMAIN).toBe("");
@@ -883,6 +955,7 @@ describe("spec.md §15.11 acceptance", () => {
 
     // Destruction of a persistent type on a persistent stage is a policy violation (no decommission records).
     const persistentInst = { ...inst, stage: "prod", firstWriteAt: "x" };
+
     const destroy = buildReview({
       installation: persistentInst,
       release: RELEASE,
@@ -892,6 +965,7 @@ describe("spec.md §15.11 acceptance", () => {
       prerequisiteBlockers: [],
       grantedScopes: requestedScopes(),
     });
+
     expect(
       destroy.blockers.some((b) => b.includes("requires an approved decommission record")),
     ).toBe(true);
@@ -916,6 +990,7 @@ describe("spec.md §15.11 acceptance", () => {
       (await w.store.getInstallation(inst.id))!.runtimeSecrets!,
       inst.id,
     );
+
     const visible = JSON.stringify([
       await w.service.status("op@example.com"),
       await w.store.events(inst.id),
@@ -923,6 +998,7 @@ describe("spec.md §15.11 acceptance", () => {
       review,
       ok.approval,
     ]);
+
     for (const s of [ACCESS, REFRESH, ...Object.values(secrets)]) expect(visible).not.toContain(s);
     expect(visible).toContain("[redacted]"); // the executor's progress line had the token
     expect(redactor([ACCESS])(`Authorization: Bearer ${ACCESS}`)).not.toContain(ACCESS);
@@ -982,6 +1058,7 @@ describe("recovery kit and first account", () => {
     );
     const log = JSON.stringify(await w.store.events(inst.id));
     expect(log).toContain("recovery-kit.issued");
+
     for (const v of Object.values(secrets)) expect(log).not.toContain(v);
   });
 
@@ -994,11 +1071,13 @@ describe("recovery kit and first account", () => {
     });
     const { inst } = await ready(w);
     const { link } = await w.service.firstAccountLink("op@example.com");
+
     const token = open<Record<string, string>>(
       KEYS,
       inst.runtimeSecrets!,
       inst.id,
     ).BOOTSTRAP_TOKEN!;
+
     expect(token.length).toBeGreaterThanOrEqual(32);
     expect(link).toBe(`${inst.urls!.app}/#bootstrap=${token}`);
     // The instance receives it as BOOTSTRAP_TOKEN; the native handoff still carries only the URL.
@@ -1053,7 +1132,9 @@ const createBye = async (w: World, label = "bye", zoneId = ZONE.id, accountId = 
   await connect(w);
   w.health = healthyInstance(`https://${label}.${ZONE.name}`);
   const result = await w.service.install("op@example.com", { accountId, zoneId, label });
+
   if (result.status === "deploying") await w.service.settled(result.operationId);
+
   return result;
 };
 
@@ -1067,9 +1148,11 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     await expect(w.service.zones("op@example.com", "acc-not-reachable")).rejects.toMatchObject({
       code: "invalid",
     });
+
     // The HTTP reader filters by account again, even if the API ignored the filter.
     const reader = cloudflareReader(async (url) => {
       expect(url).toContain(`account.id=${ACCOUNT.id}`);
+
       return json({
         result: [
           { ...ZONE, account: { id: ACCOUNT.id } },
@@ -1077,6 +1160,7 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
         ],
       });
     });
+
     expect(await reader.zones("t", ACCOUNT.id)).toEqual([ZONE]);
   });
 
@@ -1087,6 +1171,7 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     expect(ONBOARDING_PAGE).not.toMatch(/id="stage"/);
     const w = world({ verifiedScopes: true });
     await connect(w);
+
     for (const label of ["", "-bye", "bye-", "b_y", "a".repeat(64), "bye.mail", "by e"])
       await expect(
         w.service.install("op@example.com", { accountId: ACCOUNT.id, zoneId: ZONE.id, label }),
@@ -1098,6 +1183,7 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
   it("refuses a zone from another account or an inactive zone", async () => {
     const w = world({ accounts: [ACCOUNT, OTHER], verifiedScopes: true });
     await connect(w);
+
     for (const zoneId of [OTHER_ZONE.id, PENDING_ZONE.id, "zone-unknown"])
       await expect(
         w.service.install("op@example.com", { accountId: ACCOUNT.id, zoneId, label: "bye" }),
@@ -1153,6 +1239,7 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     expect(config.MAIL_DKIM_PUBLIC_KEY).toMatch(/^[A-Za-z0-9+/]+=*$/);
     expect(config.MAIL_DKIM_PUBLIC_KEY).toBe(dkimPublicKey(config.MAIL_DKIM_PRIVATE_KEY!));
     expect(config).not.toHaveProperty("PERSONAL_MAIL_API_KEY");
+
     for (const k of ["PUBLIC_DOMAIN", "MAIL_ZONE", "BYE_MX_CUTOVER", "CF_DNS_API_TOKEN"])
       expect(config[k] ?? "").toBe("");
     // The approval was recorded by policy against the install intent.
@@ -1188,6 +1275,7 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
         result.status === "needs-review" ? result.reviewId : null,
       );
     }
+
     const replaced = world({ verifiedScopes: true });
     replaced.executor.defaultPlan = (ctx) => planOf(ctx.stage, { PublicSite: "replace" });
     expect((await createBye(replaced)).status).toBe("needs-review");
@@ -1202,6 +1290,7 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     const w = world();
     const result = await createBye(w);
     expect(result.status).toBe("needs-review");
+
     if (result.status !== "needs-review") return;
     expect(result.reasons.join(" ")).toMatch(/review blockers/);
     expect(w.executor.applies).toHaveLength(0);
@@ -1230,6 +1319,7 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     const w = world({ verifiedScopes: true });
     w.executor.defaultPlan = (ctx) =>
       planOf(ctx.stage, {}, [row("MailCore.domain", "Cloudflare.Workers.CustomDomain", "create")]);
+
     return createBye(w).then((r) => expect(r.status).toBe("deploying"));
   });
 
@@ -1242,6 +1332,7 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     });
     const first = await createBye(w);
     expect(first.status).toBe("deploying");
+
     for (const change of [
       { accountId: ACCOUNT.id, zoneId: ZONE.id, label: "mail" },
       { accountId: OTHER.id, zoneId: OTHER_ZONE.id, label: "bye" },
@@ -1254,9 +1345,11 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     });
     // Retrying the failed deployment resumes the same approval and target.
     w.executor.applyBehavior = async () => ({ ok: true, detail: "applied", aborted: false });
+
     const failed = (
       await w.store.operations((await w.service.installation("op@example.com")).id)
     )[0]!;
+
     const retry = await w.service.deploy("op@example.com", failed.approvalId);
     await w.service.settled(retry.id);
     expect((await w.store.getOperation(retry.id))!.status).toBe("succeeded");
@@ -1271,11 +1364,13 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     const w = world({ verifiedScopes: true });
     await createBye(w);
     const inst = await w.service.installation("op@example.com");
+
     const token = open<Record<string, string>>(
       KEYS,
       inst.runtimeSecrets!,
       inst.id,
     ).BOOTSTRAP_TOKEN!;
+
     const { link } = await w.service.firstAccountLink("op@example.com");
     expect(link).toBe(`https://bye.example.com/#bootstrap=${token}&domain=example.com`);
     expect(new URL(link).search).toBe("");
@@ -1305,9 +1400,12 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
       "Cloudflare.Turnstile.Widget",
       "Cloudflare.Ruleset",
     ]);
+
     const inventoryTypes = new Set(INVENTORY.map((e) => e.type));
+
     for (const t of inventoryTypes)
       expect(STANDARD_FIRST_INSTALL_TYPES.has(t) || KEPT_OUT.has(t), t).toBe(true);
+
     for (const t of KEPT_OUT) expect(STANDARD_FIRST_INSTALL_TYPES.has(t)).toBe(false);
   });
 
@@ -1315,8 +1413,10 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     const doh = (answered: (name: string) => boolean) => (url: string) => {
       if (!url.startsWith("https://cloudflare-dns.com/dns-query")) return null;
       const name = new URL(url).searchParams.get("name")!;
+
       return json({ Status: 0, Answer: answered(name) ? [{ data: "192.0.2.1" }] : [] });
     };
+
     const taken = world({ verifiedScopes: true });
     await connect(taken);
     taken.health = doh((n) => n === "bye.example.com");
@@ -1338,11 +1438,13 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     const healthy = healthyInstance("https://bye.example.com");
     const answers = doh(() => true);
     wildcard.health = (url, init) => answers(url) ?? healthy(url, init);
+
     const r = await wildcard.service.install("op@example.com", {
       accountId: ACCOUNT.id,
       zoneId: ZONE.id,
       label: "bye",
     });
+
     expect(r.status).toBe("deploying");
   });
 
@@ -1351,11 +1453,13 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     const first = await createBye(w);
     expect(first.status).toBe("needs-review");
     const before = await w.service.installation("op@example.com");
+
     const moved = await w.service.install("op@example.com", {
       accountId: ACCOUNT.id,
       zoneId: ZONE.id,
       label: "mail",
     });
+
     expect(moved.status).toBe("needs-review");
     const after = await w.service.installation("op@example.com");
     expect(after.appHostname).toBe("mail.example.com");

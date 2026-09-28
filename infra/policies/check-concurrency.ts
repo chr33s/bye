@@ -28,18 +28,22 @@ export const scanSource = (file: string, source: string): ReadonlyArray<Finding>
   const out: Array<Finding> = [];
   lines.forEach((text, i) => {
     const bounded = /\/\/\s*bounded:/.test(text) || /\/\/\s*bounded:/.test(lines[i - 1] ?? "");
+
     if (bounded) return;
     const unboundedEffect = /concurrency:\s*"unbounded"/.test(text);
     // A call split after `Promise.all(` keeps its argument on the next line.
     const call = /Promise\.all(Settled)?\(\s*$/.test(text) ? `${text} ${lines[i + 1] ?? ""}` : text;
     // Chunked fan-out (`xs.slice(i, i + N)`) is bounded by the chunk size.
     const chunked = /\.slice\(\s*\w+\s*,\s*\w+\s*\+\s*[\w.]+\s*\)/.test(call);
+
     const promiseAll =
       /Promise\.all(Settled)?\(/.test(text) &&
       !/Promise\.all(Settled)?\(\s*\[/.test(call) &&
       !chunked;
+
     if (unboundedEffect || promiseAll) out.push({ file, line: i + 1, text: text.trim() });
   });
+
   return out;
 };
 
@@ -65,13 +69,16 @@ export const unapproved = (
 
 if (import.meta.main) {
   const bad = unapproved(scanRepo());
+
   for (const f of bad)
     console.error(`concurrency: ${f.file}:${f.line} unbounded fan-out: ${f.text}`);
+
   if (bad.length) {
     console.error(
       "bound it (Effect.forEach({ concurrency: n }) / chunking) or add `// bounded: <reason>`",
     );
     process.exit(1);
   }
+
   console.log("concurrency: no unbounded fan-out in server code");
 }

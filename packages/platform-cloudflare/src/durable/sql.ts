@@ -2,7 +2,10 @@
 // Adapters depend on these instead of a whole Worker environment so the same code runs
 // against `ctx.storage` in workerd and against node:sqlite in tests.
 
+import { Predicate } from "effect";
+
 export type SqlValue = string | number | null | ArrayBuffer | Uint8Array;
+
 export type SqlRow = Record<string, SqlValue>;
 
 export interface SqlCursorLike {
@@ -45,7 +48,7 @@ export class Sql {
 }
 
 const normalize = (value: SqlValue | boolean | undefined): SqlValue =>
-  value === undefined ? null : typeof value === "boolean" ? (value ? 1 : 0) : value;
+  value === undefined ? null : Predicate.isBoolean(value) ? (value ? 1 : 0) : value;
 
 /**
  * Durable Object SQLite and D1 reject statements with more than 100 bound parameters. IN lists
@@ -64,7 +67,9 @@ export const inListChunks = <T>(
 ): Array<Array<T>> => {
   if (!(size >= 1)) throw new RangeError("chunk size must be at least 1");
   const out: Array<Array<T>> = [];
+
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+
   return out;
 };
 
@@ -90,7 +95,7 @@ export const likePatternFits = (pattern: string): boolean =>
 export const bool = (value: SqlValue | undefined): boolean => value === 1 || value === "1";
 
 export const json = <T>(value: SqlValue | undefined, fallback: T): T =>
-  typeof value === "string" && value.length > 0 ? (JSON.parse(value) as T) : fallback;
+  Predicate.isString(value) && value.length > 0 ? (JSON.parse(value) as T) : fallback;
 
 export interface Migration {
   readonly version: number;
@@ -111,6 +116,7 @@ export const migrate = (
   sql.run(
     "CREATE TABLE IF NOT EXISTS _schema_migrations (authority TEXT NOT NULL, version INTEGER NOT NULL, name TEXT NOT NULL, PRIMARY KEY (authority, version))",
   );
+
   const applied = new Set(
     sql
       .all<{ version: number }>(
@@ -119,15 +125,19 @@ export const migrate = (
       )
       .map((r) => Number(r.version)),
   );
+
   const ordered = [...migrations].sort((a, b) => a.version - b.version);
   let current = applied.size === 0 ? 0 : Math.max(...applied);
+
   for (const migration of ordered) {
     if (applied.has(migration.version)) continue;
+
     if (migration.version <= current) {
       throw new Error(
         `${authority}: migration ${migration.version} is older than applied version ${current}`,
       );
     }
+
     sql.tx(() => {
       for (const statement of migration.statements) sql.run(statement);
       sql.run(
@@ -139,5 +149,6 @@ export const migrate = (
     });
     current = migration.version;
   }
+
   return current;
 };

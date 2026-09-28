@@ -23,6 +23,7 @@ export const FanoutParams = Schema.Struct({
   /** Private→public media copies for this version (absent on instances created before v1 carried them). */
   copies: Schema.optional(Schema.Array(Schema.Struct({ from: Schema.String, to: Schema.String }))),
 });
+
 export type FanoutParams = typeof FanoutParams.Type;
 
 /** Passes this instance makes before leaving the rest to the cron reconciler. */
@@ -32,6 +33,7 @@ const Approval = Schema.Struct({
   publicationId: Schema.NullOr(Schema.String),
   blocked: Schema.NullOr(Schema.String),
 });
+
 const Pass = Schema.Struct({
   state: Schema.NullOr(Schema.String),
   blocked: Schema.NullOr(Schema.String),
@@ -43,6 +45,7 @@ const SETTLED = new Set(["sent", "cancelled", "failed", "held"]);
 export class FanoutWorkflow extends WorkflowEntrypoint<CoreEnv, FanoutParams> {
   override async run(event: Readonly<WorkflowEvent<FanoutParams>>, step: WorkflowStep) {
     const params = decodeParams(FanoutParams)(event.payload);
+
     // Publish resume: render only if the synchronous attempt didn't record this version as done.
     if (params.revision !== undefined) {
       const plan = {
@@ -50,22 +53,29 @@ export class FanoutWorkflow extends WorkflowEntrypoint<CoreEnv, FanoutParams> {
         revision: params.revision,
         copies: params.copies ?? [],
       };
+
       await promiseStep(step, "v1:site", Schema.Boolean, async () => {
         if (await siteRendered(this.env, params.handle, plan.postId, plan.revision)) return false;
         await renderPublished(this.env, params.handle, plan);
+
         return true;
       });
     }
+
     if (params.revision === undefined) return { blocked: "no post revision" };
     const revision = params.revision;
+
     const approval = await promiseStep(step, "v2:approve", Approval, async () => {
       const r = await approveNewsletter(this.env, params.handle, params.postId, revision);
+
       return "blocked" in r
         ? { publicationId: null, blocked: r.blocked }
         : { publicationId: r.id, blocked: null };
     });
+
     if (approval.blocked) return { blocked: approval.blocked };
     let last: typeof Pass.Type = { state: null, blocked: null, synced: 0 };
+
     for (let pass = 0; pass < FANOUT_PASSES; pass++) {
       last = await promiseStep(
         step,
@@ -73,6 +83,7 @@ export class FanoutWorkflow extends WorkflowEntrypoint<CoreEnv, FanoutParams> {
         Pass,
         async () => {
           const r = await runNewsletter(this.env, params.handle);
+
           return {
             state: r.publication?.id === approval.publicationId ? r.publication.state : null,
             blocked: r.blocked ?? null,
@@ -81,9 +92,11 @@ export class FanoutWorkflow extends WorkflowEntrypoint<CoreEnv, FanoutParams> {
         },
         { retries: { limit: 3, delay: "30 seconds", backoff: "exponential" } },
       );
+
       if (last.blocked || (last.state && SETTLED.has(last.state)) || last.state === null) break;
       await step.sleep(`v2:wait:${pass}`, "1 minute");
     }
+
     return { publicationId: approval.publicationId, ...last };
   }
 }

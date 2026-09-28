@@ -15,19 +15,23 @@ type ThreadResult =
 export const handleNotify = async (env: CoreEnv, m: NotifyMessage): Promise<void> => {
   const isMailbox = m.userId.startsWith("mbx_");
   const users = isMailbox ? await mailboxAudience(env, m.userId) : [m.userId];
+
   if (users.length === 0) return;
   let title = "bye";
   let body = "You have a new notification";
   let url = `${env.APP_ORIGIN}/#/`;
+
   if (isMailbox && m.kind === "delivery" && m.resource) {
     let thread: ThreadResult = { ok: false };
+
     try {
       // Forced by Cloudflare's RPC type mapping: `MailboxDO.thread`'s store type isn't expressible as
       // Serializable, so the stub's return collapses; the envelope is restated as `ThreadResult`.
-      thread = (await mailbox(env, m.userId).thread(m.resource)) as unknown as ThreadResult;
+      thread = (await mailbox(env, m.userId).thread(m.resource)) as ThreadResult;
     } catch {
       // fall back to a generic notification
     }
+
     title = thread.ok ? thread.value.thread.sender : "New mail";
     body = thread.ok ? thread.value.thread.subject || "(no subject)" : "You have new mail";
     url = `${env.APP_ORIGIN}/#/thread/${encodeURIComponent(m.resource)}`;
@@ -42,6 +46,7 @@ export const handleNotify = async (env: CoreEnv, m: NotifyMessage): Promise<void
         : "bye";
     body = m.kind;
   }
+
   for (const userId of users) {
     await deliverNotification(env, {
       userId,

@@ -14,6 +14,7 @@ const FORBIDDEN = [
   /CLOUDFLARE_API_TOKEN/,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
 ];
+
 const MAX_BYTES = 3 * 1024 * 1024;
 
 export const checkWorkerBundle = async (
@@ -24,6 +25,7 @@ export const checkWorkerBundle = async (
   violations: ReadonlyArray<string>;
 }> => {
   const dir = mkdtempSync(join(tmpdir(), "bye-bundle-"));
+
   try {
     const file = join(dir, "worker.js");
     await build({
@@ -35,20 +37,25 @@ export const checkWorkerBundle = async (
       logLevel: "silent",
     });
     const code = readFileSync(file, "utf8");
+
     const staticImports = [
       ...code.matchAll(
         /(?:^|[;}\n])\s*(?:import|export)\s*(?:[\w$*{},\s]+?\s*from\s*)?["']([^"'\n]+)["']/g,
       ),
     ].map((m) => m[1]!);
+
     const dynamicImports = [...code.matchAll(/\bimport\(\s*["']([^"'\n]+)["']\s*\)/g)].map(
       (m) => m[1]!,
     );
+
     const imports = [...new Set([...staticImports, ...dynamicImports])];
+
     const violations = [
-      ...imports.filter((i) => !i.startsWith("cloudflare:")).map((i) => `unexpected import ${i}`),
-      ...FORBIDDEN.filter((re) => re.test(code)).map((re) => `forbidden content ${re}`),
+      ...imports.flatMap((i) => (i.startsWith("cloudflare:") ? [] : [`unexpected import ${i}`])),
+      ...FORBIDDEN.flatMap((re) => (re.test(code) ? [`forbidden content ${re}`] : [])),
       ...(code.length > MAX_BYTES ? [`bundle exceeds ${MAX_BYTES} bytes`] : []),
     ];
+
     return { bytes: code.length, imports, violations };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -57,13 +64,16 @@ export const checkWorkerBundle = async (
 
 if (import.meta.main) {
   let failed = false;
+
   for (const worker of ["core", "public", "sigmirror"]) {
     const result = await checkWorkerBundle(`workers/${worker}/src/index.ts`);
     console.log(
       `bundle ${worker}: ${(result.bytes / 1024).toFixed(0)} KiB, imports ${result.imports.join(", ") || "(none)"}`,
     );
+
     for (const v of result.violations) console.error(`  ${v}`);
     failed ||= result.violations.length > 0;
   }
+
   process.exit(failed ? 1 : 0);
 }

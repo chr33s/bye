@@ -1,3 +1,4 @@
+import type { JsonValue } from "./json.ts";
 import { Context, Effect, Layer, Schema } from "effect";
 import {
   ByeApiError,
@@ -5,6 +6,7 @@ import {
   type FetchLike,
   type Method,
   type QueryParams,
+  type RequestBody,
 } from "@bye/native-shared";
 
 // Authenticated API access for the CLI and TUI (X02), through the shared client every first-party
@@ -34,15 +36,15 @@ export class CliApi extends Context.Service<
     readonly request: (
       method: Method,
       path: string,
-      body?: unknown,
+      body?: RequestBody,
       query?: QueryParams,
-    ) => Effect.Effect<unknown, CliApiError>;
+    ) => Effect.Effect<JsonValue, CliApiError>;
     /** Raw byte upload (multipart upload parts). */
     readonly putBytes: (
       path: string,
       bytes: Uint8Array,
       query?: QueryParams,
-    ) => Effect.Effect<unknown, CliApiError>;
+    ) => Effect.Effect<JsonValue, CliApiError>;
     readonly config: CliConfig;
   }
 >()("cli/CliApi") {}
@@ -57,21 +59,28 @@ const lift = <A>(run: () => Promise<A>) =>
         : new CliApiError({ status: 0, code: "unavailable", message: String(error) }),
   });
 
-export const makeCliApi = (config: CliConfig, fetchImpl: FetchLike) => {
+export const cliApiLayer = (config: CliConfig, fetchImpl: FetchLike) => {
   const client = new ByeClient({
     origin: config.apiUrl,
     token: config.token,
     fetch: fetchImpl,
     headers: { "user-agent": "bye-cli/0.2" },
   });
+
   return Layer.succeed(CliApi, {
     config,
     putBytes: (path, bytes, query) =>
       lift(() =>
-        client.raw("PUT", path, bytes, "application/octet-stream", query ? { query } : {}),
+        client.raw<JsonValue>(
+          "PUT",
+          path,
+          bytes,
+          "application/octet-stream",
+          query ? { query } : {},
+        ),
       ),
     request: (method, path, body, query) =>
-      lift(() => client.request(method, path, body, query ? { query } : {})),
+      lift(() => client.request<JsonValue>(method, path, body, query ? { query } : {})),
   });
 };
 

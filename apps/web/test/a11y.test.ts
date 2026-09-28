@@ -11,6 +11,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 // no WCAG 2.x A/AA violations. Colour contrast needs layout, which jsdom lacks, so it is disabled.
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+
 let bundle = "";
 
 beforeAll(async () => {
@@ -20,12 +21,14 @@ beforeAll(async () => {
     write: false,
     output: { format: "iife", minify: true },
   });
+
   bundle = out.output[0].code;
 }, 60_000);
 
 type Stub = (method: string, path: string) => { status: number; body: unknown };
 
 const me = { userId: "usr_1", mailboxIds: ["mbx_1"], calendarIds: ["cal_1"] };
+
 const threads = [
   {
     threadId: "thr_1",
@@ -50,8 +53,10 @@ const threads = [
 
 const signedIn: Stub = (_method, path) => {
   if (path === "/v1/me") return { status: 200, body: me };
+
   if (path.includes("/views/"))
     return { status: 200, body: { items: threads, nextCursor: null, boundary: 10 } };
+
   return { status: 200, body: { items: [] } };
 };
 
@@ -60,16 +65,20 @@ const render = async (hash: string, stub: Stub) => {
     /<script[^>]*src="https:[^"]*"[^>]*><\/script>/g,
     "",
   );
+
   const dom = new JSDOM(html, {
     url: `https://app.bye.test/${hash}`,
     runScripts: "outside-only",
     pretendToBeVisual: true,
   });
-  const window = dom.window as unknown as Window &
-    typeof globalThis & { eval(code: string): unknown; axe: typeof axe };
+
+  const window = dom.window as typeof dom.window &
+    typeof globalThis & { eval(code: string): void; axe: typeof axe };
+
   Object.defineProperty(window, "fetch", {
     value: async (input: string, init?: RequestInit) => {
       const r = stub(init?.method ?? "GET", new URL(input, "https://app.bye.test").pathname);
+
       return new Response(
         JSON.stringify(
           r.status >= 400 ? { error: { code: "unauthenticated", message: "Sign in" } } : r.body,
@@ -86,6 +95,7 @@ const render = async (hash: string, stub: Stub) => {
     },
   });
   window.eval(bundle);
+
   // Let the async route() settle.
   for (
     let i = 0;
@@ -95,10 +105,12 @@ const render = async (hash: string, stub: Stub) => {
     await new Promise((r) => setTimeout(r, 10));
   await new Promise((r) => setTimeout(r, 20));
   window.eval(axe.source);
+
   const result = await window.axe.run(window.document, {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] },
     rules: { "color-contrast": { enabled: false } },
   });
+
   return {
     window,
     violations: result.violations.map(
@@ -113,9 +125,11 @@ describe("a11y (axe-core 4.13.0, WCAG 2.1 A/AA)", () => {
     window.document.body.append(
       Object.assign(window.document.createElement("img"), { src: "x.png" }),
     );
+
     const result = await window.axe.run(window.document, {
       runOnly: { type: "rule", values: ["image-alt"] },
     });
+
     expect(result.violations.map((v) => v.id)).toEqual(["image-alt"]);
   });
 
@@ -124,6 +138,7 @@ describe("a11y (axe-core 4.13.0, WCAG 2.1 A/AA)", () => {
       status: 401,
       body: null,
     }));
+
     expect(window.document.querySelector("#auth-title")?.textContent).toBe("Sign in");
     expect(violations).toEqual([]);
   });
@@ -137,9 +152,11 @@ describe("a11y (axe-core 4.13.0, WCAG 2.1 A/AA)", () => {
   it("[C09] imbox with the calendar cover panel", async () => {
     const start = new Date();
     start.setHours(23, 0, 0, 0);
+
     const { window, violations } = await render("#/mail/imbox", (method, path) => {
       if (path.endsWith("/preferences"))
         return { status: 200, body: { preferences: { calendarPanel: true } } };
+
       if (path.endsWith("/events"))
         return {
           status: 200,
@@ -158,8 +175,10 @@ describe("a11y (axe-core 4.13.0, WCAG 2.1 A/AA)", () => {
             ],
           },
         };
+
       return signedIn(method, path);
     });
+
     const panel = window.document.querySelector("aside.cover-panel");
     expect(panel?.textContent).toContain("Standup");
     expect(panel?.textContent).toContain("Open calendar");
@@ -186,6 +205,7 @@ describe("a11y (axe-core 4.13.0, WCAG 2.1 A/AA)", () => {
             ],
           },
         };
+
       if (path.endsWith("/invitations"))
         return {
           status: 200,
@@ -208,8 +228,10 @@ describe("a11y (axe-core 4.13.0, WCAG 2.1 A/AA)", () => {
             ],
           },
         };
+
       return signedIn(method, path);
     });
+
     const invitation = window.document.querySelector('[aria-label="Invitation"]');
     expect(invitation?.textContent).toContain("Standup (this occurrence)");
     expect(invitation?.textContent).toContain("Declined");

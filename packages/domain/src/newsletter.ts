@@ -1,6 +1,8 @@
 // Newsletter provider contract and consent rules (spec.md §5.2, §5.5). Pure rules only: Bye's consent,
 // suppression and publication records are authoritative; provider records are external evidence.
 
+import { Match, Predicate } from "effect";
+
 // ---- per-operation capabilities ----
 
 export const NEWSLETTER_OPERATIONS = [
@@ -13,6 +15,7 @@ export const NEWSLETTER_OPERATIONS = [
   "broadcast-lookup",
   "events",
 ] as const;
+
 export type NewsletterOperation = (typeof NEWSLETTER_OPERATIONS)[number];
 
 /** Provider-side protection that makes resubmitting the SAME immutable request safe. */
@@ -83,24 +86,31 @@ export const checkOperation = (
 ): OperationCheck => {
   const cap = caps.operations[operation];
   const no = (detail: string): OperationCheck => ({ _tag: "Unsupported", operation, detail });
+
   if (!cap?.supported) return no(`${caps.name} does not support ${operation}`);
+
   if (
     req.recipients !== undefined &&
     cap.maxRecipients !== undefined &&
     req.recipients > cap.maxRecipients
   )
     return no(`${req.recipients} recipients exceeds ${cap.maxRecipients}`);
+
   if (
     req.encodedBytes !== undefined &&
     cap.maxEncodedBytes !== undefined &&
     req.encodedBytes > cap.maxEncodedBytes
   )
     return no(`${req.encodedBytes} bytes exceeds ${cap.maxEncodedBytes}`);
+
   if (req.headers?.length && !cap.preservesHeaders) return no("headers would not be preserved");
+
   if (req.exclusionsAtDispatch && !cap.enforcesExclusionsAtDispatch)
     return no("recipient exclusions are not enforced at dispatch");
   const missing = (req.eventKinds ?? []).filter((k) => !cap.eventCoverage?.includes(k));
+
   if (missing.length) return no(`no event coverage for ${missing.join(", ")}`);
+
   return { _tag: "Ok", capability: cap };
 };
 
@@ -137,13 +147,19 @@ export const retryDecision = (input: {
   readonly maxAttempts: number;
 }): RetryDecision => {
   const { outcome } = input;
-  if (outcome._tag === "Accepted") return { _tag: "Hold", reason: "accepted" };
+
+  if (Predicate.isTagged(outcome, "Accepted")) return { _tag: "Hold", reason: "accepted" };
+
   if (input.attempts >= input.maxAttempts) return { _tag: "Hold", reason: "retries exhausted" };
-  if (outcome._tag === "NotAccepted")
+
+  if (Predicate.isTagged(outcome, "NotAccepted"))
     return outcome.retryable ? { _tag: "Retry" } : { _tag: "Hold", reason: "rejected" };
+
   if (!input.idempotency) return { _tag: "Hold", reason: "unknown outcome without idempotency" };
+
   if (input.now - input.firstAttemptAt >= input.idempotency.windowMs)
     return { _tag: "Hold", reason: "idempotency window expired" };
+
   return { _tag: "Retry" };
 };
 
@@ -189,33 +205,39 @@ export const applyConsent = (
   change: ConsentChange,
 ): ConsentResult => {
   const revision = (current?.revision ?? 0) + 1;
-  switch (change._tag) {
-    case "Unsubscribe":
+
+  return Match.valueTags(change, {
+    Unsubscribe: (c): ConsentResult => {
       if (current?.status === "unsubscribed") return { _tag: "Ignored", reason: "unchanged" };
+
       return {
         _tag: "Applied",
-        record: { status: "unsubscribed", revision, changedAt: change.at, consentEvidence: null },
+        record: { status: "unsubscribed", revision, changedAt: c.at, consentEvidence: null },
       };
-    case "ProviderSubscribed":
-      return { _tag: "Ignored", reason: "no-consent" };
-    case "Confirm":
+    },
+    ProviderSubscribed: (): ConsentResult => ({ _tag: "Ignored", reason: "no-consent" }),
+    Confirm: (c): ConsentResult => {
       if (current?.status === "confirmed") return { _tag: "Ignored", reason: "unchanged" };
-      if (current?.status === "unsubscribed" && change.at <= current.changedAt)
+
+      if (current?.status === "unsubscribed" && c.at <= current.changedAt)
         return { _tag: "Ignored", reason: "stale" };
+
       return {
         _tag: "Applied",
         record: {
           status: "confirmed",
           revision,
-          changedAt: change.at,
-          consentEvidence: change.evidence,
+          changedAt: c.at,
+          consentEvidence: c.evidence,
         },
       };
-  }
+    },
+  });
 };
 
 /** Bounces and complaints are restrictions, recorded apart from subscriptions. */
 export type RestrictionScope = "creator" | "provider" | "platform";
+
 export interface Restriction {
   readonly kind: "hard-bounce" | "complaint" | "provider-unsubscribe" | "manual";
   readonly scope: RestrictionScope;
@@ -257,6 +279,7 @@ export type ObservedBroadcastState =
   | "sending"
   | "sent"
   | "cancelled";
+
 const OBSERVED_ORDER: Readonly<Record<ObservedBroadcastState, number>> = {
   draft: 0,
   scheduled: 1,
@@ -265,6 +288,7 @@ const OBSERVED_ORDER: Readonly<Record<ObservedBroadcastState, number>> = {
   sent: 4,
   cancelled: 4,
 };
+
 export const advanceObserved = (
   current: ObservedBroadcastState | null,
   next: ObservedBroadcastState,
@@ -278,6 +302,7 @@ export type NewsletterRecipientOutcome =
   | "soft-bounce"
   | "hard-bounce"
   | "complaint";
+
 const OUTCOME_ORDER: Readonly<Record<NewsletterRecipientOutcome, number>> = {
   accepted: 0,
   "soft-bounce": 1,
@@ -285,6 +310,7 @@ const OUTCOME_ORDER: Readonly<Record<NewsletterRecipientOutcome, number>> = {
   "hard-bounce": 3,
   complaint: 4,
 };
+
 export const advanceNewsletterRecipientOutcome = (
   current: NewsletterRecipientOutcome | null,
   next: NewsletterRecipientOutcome,

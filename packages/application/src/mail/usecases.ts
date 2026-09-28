@@ -4,8 +4,8 @@ import {
   MailViewQuery,
   decodeMailboxCommand,
 } from "@bye/contracts";
-import { Effect, Schema } from "effect";
-import { requireMailbox, type Scope } from "../services.ts";
+import { Effect, Predicate, Schema } from "effect";
+import { requireMailbox, type RequestPayload, type Scope } from "../services.ts";
 import { guardMailboxCommand } from "./guards.ts";
 import {
   type MailboxDeliveryCommit,
@@ -97,27 +97,29 @@ export type SendCommand = Extract<MailboxCommand, { readonly _tag: "Send" }> & {
 };
 
 /** Decode at the trust boundary, authorize against the current principal, then execute. */
-export const executeMailboxCommand = (mailboxId: string, raw: unknown) =>
+export const executeMailboxCommand = (mailboxId: string, raw: RequestPayload) =>
   Effect.gen(function* () {
     const command: MailboxCommand = yield* decodeMailboxCommand(raw);
     yield* guardMailboxCommand(mailboxId, command);
     const principal = yield* requireMailbox(mailboxId, MAILBOX_COMMAND_SCOPES[command._tag]);
     const repo = yield* MailboxRepository;
+
     // Only the authority knows a draft's recipients, so Send carries whether the principal may
     // publish: a draft addressed to the World address (publish-by-mail, P01) is refused without
     // the "publish" scope. Set after decoding, so a client can never supply it.
-    const authorized: MailboxCommand =
-      command._tag === "Send"
-        ? ({ ...command, publishAllowed: principal.scopes.includes("publish") } as SendCommand)
-        : command;
+    const authorized: MailboxCommand = Predicate.isTagged(command, "Send")
+      ? ({ ...command, publishAllowed: principal.scopes.includes("publish") } as SendCommand)
+      : command;
+
     return yield* repo.execute(mailboxId, authorized);
   }).pipe(Effect.withSpan("mail.command"));
 
-export const readMailboxView = (mailboxId: string, raw: unknown) =>
+export const readMailboxView = (mailboxId: string, raw: RequestPayload) =>
   Effect.gen(function* () {
     const query = yield* Schema.decodeUnknownEffect(MailViewQuery)(raw);
     yield* requireMailbox(mailboxId, "read");
     const repo = yield* MailboxRepository;
+
     return yield* repo.view(mailboxId, query);
   }).pipe(Effect.withSpan("mail.view"));
 
@@ -125,6 +127,7 @@ export const readMailboxThread = (mailboxId: string, threadId: string) =>
   Effect.gen(function* () {
     yield* requireMailbox(mailboxId, "read");
     const repo = yield* MailboxRepository;
+
     return yield* repo.thread(mailboxId, threadId);
   });
 
@@ -136,6 +139,7 @@ export const readMailboxQuery = <A = unknown>(
 ) =>
   Effect.gen(function* () {
     yield* requireMailbox(mailboxId, scope);
+
     return (yield* (yield* MailboxRepository).read(mailboxId, query)) as A;
   }).pipe(Effect.withSpan("mail.read"));
 
@@ -143,6 +147,7 @@ export const readMailboxChanges = (mailboxId: string, cursor: number) =>
   Effect.gen(function* () {
     yield* requireMailbox(mailboxId, "read");
     const repo = yield* MailboxRepository;
+
     return yield* repo.changes(mailboxId, cursor);
   });
 
@@ -153,5 +158,6 @@ export const readMailboxChanges = (mailboxId: string, cursor: number) =>
 export const ingestCommit = (mailboxId: string, input: MailboxDeliveryCommit) =>
   Effect.gen(function* () {
     const repo = yield* MailboxRepository;
+
     return yield* repo.commitDelivery(mailboxId, input);
   }).pipe(Effect.withSpan("mail.ingest.commit"));

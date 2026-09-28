@@ -5,6 +5,7 @@
 // service owns ordering and safety; Alchemy (through executor.ts) owns resources and state.
 // Nothing here deletes resources or state, changes DNS, MX or mail routing (only MailCore's
 // custom hostname), or exposes management tokens.
+import { Match } from "effect";
 import { createPublicKey, generateKeyPairSync, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { addInstanceLink } from "../../packages/native-shared/src/instance/handoff.ts";
@@ -92,7 +93,7 @@ export const SECRET_NAMES: ReadonlyArray<string> = [
 ];
 
 /** Every generated runtime secret for a new installation. */
-export const generateRuntimeSecrets = (): Record<string, string> => ({
+export const generateRuntimeSecrets = () => ({
   ...Object.fromEntries(GENERATED_SECRETS.map((k) => [k, b64(32)])),
   MAIL_DKIM_PRIVATE_KEY: generateKeyPairSync("rsa", {
     modulusLength: 2048,
@@ -100,6 +101,22 @@ export const generateRuntimeSecrets = (): Record<string, string> => ({
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
   }).privateKey,
 });
+
+/** Non-secret runtime configuration derived from an installation. */
+interface RuntimeConfig {
+  APP_ORIGIN: string;
+  MAIL_RENDER_ORIGIN: string;
+  BYE_WORKERS_DEV_NAME: string;
+  APP_DOMAIN?: string;
+  BOOTSTRAP_ADDRESS_DOMAIN?: string;
+  INSTALL_ACCOUNT_ID?: string;
+  INSTALL_ZONE_ID?: string;
+  INSTALL_ZONE_NAME?: string;
+  MAIL_WORKER_NAME?: string;
+  NEWSLETTER_QUALIFIED?: string;
+  MAIL_DKIM_PUBLIC_KEY?: string;
+  MAIL_TRAFFIC_CLASSES?: string;
+}
 
 /** The DKIM `p=` value (base64 SPKI DER) for a PKCS#8 PEM private key. */
 export const dkimPublicKey = (privatePem: string): string =>
@@ -133,6 +150,7 @@ const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 /** Validates and normalizes a hostname label; null when invalid. */
 export const normalizeLabel = (label: string): string | null => {
   const l = label.trim().toLowerCase();
+
   return LABEL.test(l) ? l : null;
 };
 
@@ -140,8 +158,10 @@ export const normalizeLabel = (label: string): string | null => {
 export const appHostnameFor = (label: string, zoneName: string): string | null => {
   const l = normalizeLabel(label);
   const zone = zoneName.trim().toLowerCase().replace(/\.$/, "");
+
   if (l === null || zone === "" || !zone.includes(".")) return null;
   const host = `${l}.${zone}`;
+
   return host.length <= 253 ? host : null;
 };
 
@@ -226,6 +246,7 @@ interface StoredCredentials {
 }
 
 const hex = (n: number) => encode(randomBytes(n), "hex");
+
 const b64 = (n: number) => encode(randomBytes(n), "base64url");
 
 /** Scrubs anything token-shaped from event text, in addition to the executor's exact redaction. */
@@ -268,19 +289,26 @@ export const hostnameInUse = async (
           `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${type}`,
           { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(5_000) },
         );
+
         if (!r.ok) return null;
         const body = (await r.json()) as { Status?: number; Answer?: ReadonlyArray<unknown> };
+
         if (body.Status !== 0 && body.Status !== 3) return null;
+
         if ((body.Answer ?? []).length > 0) return true;
       } catch {
         return null;
       }
     }
+
     return false;
   };
+
   const direct = await answers(host);
+
   if (direct !== true) return direct;
   const wildcard = await answers(`bye-probe-${hex(6)}.${zone}`);
+
   return wildcard === false ? true : null;
 };
 
@@ -292,19 +320,28 @@ export const installState = (
 ): InstallState => {
   if (inst.authorization.status === "disconnected" || inst.authorization.status === "expired")
     return "disconnected";
+
   if (operation && (operation.status === "queued" || operation.status === "running"))
-    return operation.step === "revalidate"
-      ? "planning"
-      : operation.step === "health"
-        ? "verifying"
-        : "deploying";
+    return Match.value(operation.step).pipe(
+      Match.when("revalidate", () => "planning" as const),
+      Match.when("health", () => "verifying" as const),
+      Match.orElse(() => "deploying" as const),
+    );
+
   if (planning) return "planning";
+
   if (inst.ready) return "ready";
+
   if (inst.pendingReviewId) return "needs-review";
+
   if (operation?.status === "interrupted") return "interrupted";
+
   if (operation && operation.status !== "succeeded") return "failed";
+
   if (inst.boundAt !== null) return "target-selected";
+
   if (inst.authorization.status === "connected") return "authorized";
+
   return "new";
 };
 
@@ -389,7 +426,9 @@ export class OnboardingService {
 
   async installation(operatorId: string): Promise<Installation> {
     const existing = await this.deps.store.installationForOperator(operatorId);
+
     if (existing) return existing;
+
     const created: Installation = {
       id: hex(12),
       operatorId,
@@ -417,14 +456,18 @@ export class OnboardingService {
       installIntent: null,
       pendingReviewId: null,
     };
+
     await this.deps.store.putInstallation(created);
     await this.event(created.id, "installation.created", "installation created");
+
     return created;
   }
 
   private async fresh(id: string): Promise<Installation> {
     const i = await this.deps.store.getInstallation(id);
+
     if (!i) throw new OnboardingError("not_found", "installation not found");
+
     return i;
   }
 
@@ -434,13 +477,16 @@ export class OnboardingService {
     const inst = await this.installation(operatorId);
     // Pending records hold PKCE verifiers; never let abandoned ones accumulate.
     await this.deps.store.prunePending(this.now());
+
     const { url, pending } = beginAuthorization(
       this.deps.oauth,
       { sessionId, installationId: inst.id },
       this.now(),
     );
+
     await this.deps.store.putPending(pending);
     await this.event(inst.id, "authorization.started", "redirected to Cloudflare");
+
     return { url };
   }
 
@@ -458,17 +504,24 @@ export class OnboardingService {
     const state = params.get("state");
     const pending = state ? await this.deps.store.takePending(state) : null;
     const checked = checkCallback(pending, params, sessionId, this.now());
+
     if (!checked.ok) {
       if (pending) await this.event(pending.installationId, "authorization.failed", checked.reason);
+
       return checked;
     }
+
     const inst = await this.fresh(checked.pending.installationId);
+
     if (inst.operatorId !== operatorId) {
       const reason = "authorization was started by a different operator";
       await this.event(inst.id, "authorization.failed", reason);
+
       return { ok: false, reason };
     }
+
     let tokens: TokenSet;
+
     try {
       tokens = await exchangeCode(
         this.deps.oauth,
@@ -479,36 +532,46 @@ export class OnboardingService {
     } catch (e) {
       const reason = e instanceof OAuthError ? e.message : "token exchange failed";
       await this.event(inst.id, "authorization.failed", reason);
+
       return { ok: false, reason };
     }
+
     const reject = async (reason: string) => {
       await revokeToken(this.deps.oauth, tokens.accessToken, "access_token", this.deps.fetch);
       await this.event(inst.id, "authorization.failed", reason);
+
       return { ok: false as const, reason };
     };
+
     const missing = missingScopes(tokens.scopes);
+
     if (missing.length > 0)
       return reject(
         `Cloudflare granted less access than onboarding needs (missing ${missing.join(", ")})`,
       );
+
     // Reauthorization returns to the bound installation: the grant must still reach its account.
     if (inst.accountId !== null) {
       let accounts: ReadonlyArray<Account>;
+
       try {
         accounts = await this.deps.cloudflare.accounts(tokens.accessToken);
       } catch (e) {
         return reject(e instanceof CloudflareApiError ? e.message : "account check failed");
       }
+
       if (!accounts.some((a) => a.id === inst.accountId))
         return reject(
           `this authorization cannot reach account ${inst.accountName ?? inst.accountId}, which this installation is bound to`,
         );
     }
+
     const credentials: StoredCredentials = {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       expiresAt: tokens.expiresAt,
     };
+
     await this.deps.store.putInstallation({
       ...(await this.fresh(inst.id)),
       credentials: seal(this.deps.keys, credentials, inst.id),
@@ -520,6 +583,7 @@ export class OnboardingService {
       },
     });
     await this.event(inst.id, "authorization.connected", `scopes: ${tokens.scopes.join(" ")}`);
+
     return { ok: true };
   }
 
@@ -539,7 +603,9 @@ export class OnboardingService {
       );
     const creds = open<StoredCredentials>(this.deps.keys, inst.credentials, inst.id);
     const valid = creds.expiresAt === null || creds.expiresAt - 60_000 > this.now();
+
     if (valid && !(fresh && creds.refreshToken !== null)) return creds.accessToken;
+
     const expire = async (why: string) => {
       await this.deps.store.putInstallation({
         ...(await this.fresh(inst.id)),
@@ -547,12 +613,16 @@ export class OnboardingService {
         authorization: { ...inst.authorization, status: "expired" },
       });
       await this.event(inst.id, "authorization.expired", why);
+
       return new OnboardingError("unauthorized", why, "Reconnect Cloudflare");
     };
+
     if (creds.refreshToken === null) throw await expire("the Cloudflare authorization expired");
+
     try {
       const next = await refreshTokens(this.deps.oauth, creds.refreshToken, this.deps.fetch);
       const current = await this.fresh(inst.id);
+
       // A disconnect that raced the refresh wins: never restore access.
       if (current.authorization.status !== "connected")
         throw new OnboardingError(
@@ -576,6 +646,7 @@ export class OnboardingService {
           expiresAt: next.expiresAt ? new Date(next.expiresAt).toISOString() : null,
         },
       });
+
       return next.accessToken;
     } catch (e) {
       if (e instanceof OnboardingError) throw e;
@@ -587,6 +658,7 @@ export class OnboardingService {
 
   async accounts(operatorId: string): Promise<ReadonlyArray<Account>> {
     const inst = await this.installation(operatorId);
+
     return this.deps.cloudflare.accounts(await this.accessToken(inst));
   }
 
@@ -597,8 +669,10 @@ export class OnboardingService {
   ): Promise<ReadonlyArray<{ readonly id: string; readonly name: string }>> {
     const inst = await this.installation(operatorId);
     const token = await this.accessToken(inst);
+
     if (!(await this.deps.cloudflare.accounts(token)).some((a) => a.id === accountId))
       throw new OnboardingError("invalid", "that account is not available to this authorization");
+
     return (await this.activeZones(token, accountId)).map((z) => ({ id: z.id, name: z.name }));
   }
 
@@ -621,9 +695,11 @@ export class OnboardingService {
     input: { readonly accountId: string; readonly zoneId: string; readonly label: string },
   ): Promise<InstallResult> {
     const inst = await this.installation(operatorId);
+
     if (this.installing.has(inst.id))
       throw new OnboardingError("conflict", "Bye is already being prepared", "Wait for it");
     this.installing.add(inst.id);
+
     try {
       return await this.runInstall(operatorId, inst, input);
     } finally {
@@ -637,6 +713,7 @@ export class OnboardingService {
     input: { readonly accountId: string; readonly zoneId: string; readonly label: string },
   ): Promise<InstallResult> {
     const label = normalizeLabel(input.label);
+
     if (label === null)
       throw new OnboardingError(
         "invalid",
@@ -644,12 +721,15 @@ export class OnboardingService {
       );
     // A running deployment is simply reported (duplicate "Create Bye").
     const active = await this.activeOperation(initial.id);
+
     if (active && initial.urls)
       return { status: "deploying", operationId: active.id, appUrl: initial.urls.app };
     const inst = await this.bindTarget(initial, input.accountId, input.zoneId, label);
     const resolved = this.deps.release.resolve();
+
     if (!resolved.ok)
       throw new OnboardingError("blocked", resolved.reason, "Contact the Bye release owner");
+
     // The intent is recorded before planning; a retry keeps the first one (same target).
     const intent: InstallIntent =
       inst.installIntent &&
@@ -668,6 +748,7 @@ export class OnboardingService {
             createdAt: this.iso(),
             operatorId,
           };
+
     if (intent !== inst.installIntent) {
       await this.deps.store.putInstallation({
         ...(await this.fresh(inst.id)),
@@ -679,8 +760,10 @@ export class OnboardingService {
         `Create Bye at ${intent.appHostname} (release ${intent.release.version})`,
       );
     }
+
     const review = await this.review(operatorId);
     const current = await this.fresh(inst.id);
+
     const reasons = autoApprovalBlockers({
       installation: current,
       intent,
@@ -688,11 +771,14 @@ export class OnboardingService {
       release: resolved.release.ref,
       releaseMigrations: await this.deps.release.migrations(resolved.release.dir),
     });
+
     if (reasons.length > 0) {
       await this.deps.store.putInstallation({ ...current, pendingReviewId: review.id });
       await this.event(inst.id, "install.needs-review", reasons.join("; "));
+
       return { status: "needs-review", reviewId: review.id, reasons };
     }
+
     const approval: Approval = {
       id: hex(12),
       reviewId: review.id,
@@ -704,6 +790,7 @@ export class OnboardingService {
       policy: "standard-first-install",
       installIntentId: intent.id,
     };
+
     await this.deps.store.putApproval(approval);
     await this.deps.store.putInstallation({
       ...(await this.fresh(inst.id)),
@@ -715,6 +802,7 @@ export class OnboardingService {
       `standard first install approved by policy for install intent ${intent.id} (plan ${review.digest.slice(0, 12)})`,
     );
     const op = await this.deploy(operatorId, approval.id);
+
     return { status: "deploying", operationId: op.id, appUrl: current.urls!.app };
   }
 
@@ -730,7 +818,9 @@ export class OnboardingService {
         inst.accountId === accountId &&
         inst.zoneId === zoneId &&
         inst.appHostname === appHostnameFor(label, inst.zoneName ?? "");
+
       if (same) return inst;
+
       // Before the first deployment write nothing exists yet, so a standard install may still
       // move to another hostname (e.g. the first one was taken). Afterwards the target is fixed,
       // and once the recovery kit (which names the target) is out it is fixed too.
@@ -739,6 +829,7 @@ export class OnboardingService {
         inst.firstWriteAt === null &&
         !inst.recoveryKitIssuedAt &&
         (await this.activeOperation(inst.id)) === null;
+
       if (!movable)
         throw new OnboardingError(
           "conflict",
@@ -748,11 +839,14 @@ export class OnboardingService {
           "Retries always use the recorded account, zone and hostname; changing them needs a separately reviewed workflow",
         );
     }
+
     const token = await this.accessToken(inst);
     const account = (await this.deps.cloudflare.accounts(token)).find((a) => a.id === accountId);
+
     if (!account)
       throw new OnboardingError("invalid", "that account is not available to this authorization");
     const zone = (await this.activeZones(token, accountId)).find((z) => z.id === zoneId);
+
     if (!zone)
       throw new OnboardingError(
         "invalid",
@@ -760,8 +854,10 @@ export class OnboardingService {
         "Add or activate the domain in Cloudflare, then refresh domains",
       );
     const appHostname = appHostnameFor(label, zone.name);
+
     if (appHostname === null)
       throw new OnboardingError("invalid", "that Bye address is not a valid hostname in the zone");
+
     // A Worker custom domain never overrides an existing record, so catch the conflict before
     // anything is created instead of at the final attach.
     if ((await hostnameInUse(this.deps.fetch, appHostname, zone.name)) === true)
@@ -771,9 +867,11 @@ export class OnboardingService {
         "Choose another Bye address, or remove those records in Cloudflare first",
       );
     const other = await this.deps.store.installationForTarget(accountId, "prod");
+
     if (other && other.id !== inst.id)
       throw new OnboardingError("conflict", "another installation already targets this account");
     const subdomain = await this.deps.cloudflare.workersSubdomain(token, accountId);
+
     if (!subdomain)
       throw new OnboardingError(
         "blocked",
@@ -781,9 +879,11 @@ export class OnboardingService {
         "Register a workers.dev subdomain in the Cloudflare dashboard (Workers & Pages), then continue",
       );
     const workerName = `bye-${inst.id.slice(0, 10)}`;
+
     // A move before the first write keeps the already generated secrets.
     const runtimeSecrets =
       inst.runtimeSecrets ?? seal(this.deps.keys, generateRuntimeSecrets(), inst.id);
+
     const bound: Installation = {
       ...(await this.fresh(inst.id)),
       installIntent: null,
@@ -801,8 +901,10 @@ export class OnboardingService {
       appHostname,
       ownerAddressDomain: zone.name,
     };
+
     await this.deps.store.putInstallation(bound);
     await this.event(inst.id, "installation.bound", `account ${account.name}, ${appHostname}`);
+
     return bound;
   }
 
@@ -810,6 +912,7 @@ export class OnboardingService {
 
   async bind(operatorId: string, accountId: string, stage: string): Promise<Installation> {
     const inst = await this.installation(operatorId);
+
     if (inst.boundAt !== null) {
       if (inst.accountId === accountId && inst.stage === stage) return inst;
       throw new OnboardingError(
@@ -818,19 +921,24 @@ export class OnboardingService {
         "Changing the account or stage needs a separately reviewed workflow; retries always use the bound target",
       );
     }
+
     const stageProblem = allowedStage(stage);
+
     if (stageProblem) throw new OnboardingError("invalid", stageProblem);
     const token = await this.accessToken(inst);
     const account = (await this.deps.cloudflare.accounts(token)).find((a) => a.id === accountId);
+
     if (!account)
       throw new OnboardingError("invalid", "that account is not available to this authorization");
     const other = await this.deps.store.installationForTarget(accountId, stage);
+
     if (other && other.id !== inst.id)
       throw new OnboardingError(
         "conflict",
         `another installation already targets this account and stage ${stage}`,
       );
     const subdomain = await this.deps.cloudflare.workersSubdomain(token, accountId);
+
     if (!subdomain)
       throw new OnboardingError(
         "blocked",
@@ -839,6 +947,7 @@ export class OnboardingService {
       );
     const workerName = `bye-${inst.id.slice(0, 10)}`;
     const secrets = generateRuntimeSecrets();
+
     const bound: Installation = {
       ...(await this.fresh(inst.id)),
       accountId,
@@ -850,44 +959,50 @@ export class OnboardingService {
       runtimeSecrets: seal(this.deps.keys, secrets, inst.id),
       boundAt: this.iso(),
     };
+
     await this.deps.store.putInstallation(bound);
     await this.event(inst.id, "installation.bound", `account ${account.name}, stage ${stage}`);
+
     return bound;
   }
 
-  private config(inst: Installation): Record<string, string> {
+  private config(inst: Installation) {
     const secrets = open<Record<string, string>>(this.deps.keys, inst.runtimeSecrets!, inst.id);
     // Newsletter dispatch qualification comes only from the pinned release's own evidence file,
     // never from the operator. It is part of the configuration digest, so a release that changes
     // it needs a fresh review.
     const resolved = this.deps.release.resolve();
     const qualified = resolved.ok ? (resolved.release.qualification?.newsletter ?? null) : null;
-    return {
+
+    const config: RuntimeConfig = {
       APP_ORIGIN: inst.urls!.app,
       MAIL_RENDER_ORIGIN: inst.urls!.render,
       BYE_WORKERS_DEV_NAME: inst.workerName!,
-      // The chosen Bye hostname becomes MailCore's custom domain. Installation metadata is
-      // non-secret: the bootstrap address domain and the zone incoming email binds to later.
-      ...(inst.appHostname
-        ? {
-            APP_DOMAIN: inst.appHostname,
-            BOOTSTRAP_ADDRESS_DOMAIN: inst.ownerAddressDomain ?? inst.zoneName ?? "",
-            INSTALL_ACCOUNT_ID: inst.accountId!,
-            INSTALL_ZONE_ID: inst.zoneId ?? "",
-            INSTALL_ZONE_NAME: inst.zoneName ?? "",
-            // The Worker incoming email's catch-all routes to (MailCore's fixed name).
-            MAIL_WORKER_NAME: inst.workerName!,
-          }
-        : {}),
-      ...(qualified ? { NEWSLETTER_QUALIFIED: qualified } : {}),
-      // Outbound personal mail through Cloudflare Email Sending, DKIM-signed with the generated
-      // key (installations bound before key generation keep transactional mail only).
-      ...(secrets.MAIL_DKIM_PRIVATE_KEY
-        ? {
-            MAIL_DKIM_PUBLIC_KEY: dkimPublicKey(secrets.MAIL_DKIM_PRIVATE_KEY),
-            MAIL_TRAFFIC_CLASSES: "transactional,personal",
-          }
-        : {}),
+    };
+
+    // The chosen Bye hostname becomes MailCore's custom domain. Installation metadata is
+    // non-secret: the bootstrap address domain and the zone incoming email binds to later.
+    if (inst.appHostname) {
+      config.APP_DOMAIN = inst.appHostname;
+      config.BOOTSTRAP_ADDRESS_DOMAIN = inst.ownerAddressDomain ?? inst.zoneName ?? "";
+      config.INSTALL_ACCOUNT_ID = inst.accountId!;
+      config.INSTALL_ZONE_ID = inst.zoneId ?? "";
+      config.INSTALL_ZONE_NAME = inst.zoneName ?? "";
+      // The Worker incoming email's catch-all routes to (MailCore's fixed name).
+      config.MAIL_WORKER_NAME = inst.workerName!;
+    }
+
+    if (qualified) config.NEWSLETTER_QUALIFIED = qualified;
+
+    // Outbound personal mail through Cloudflare Email Sending, DKIM-signed with the generated
+    // key (installations bound before key generation keep transactional mail only).
+    if (secrets.MAIL_DKIM_PRIVATE_KEY) {
+      config.MAIL_DKIM_PUBLIC_KEY = dkimPublicKey(secrets.MAIL_DKIM_PRIVATE_KEY);
+      config.MAIL_TRAFFIC_CLASSES = "transactional,personal";
+    }
+
+    return {
+      ...config,
       ...secrets,
       ...Object.fromEntries(DISABLED_SECRETS.map((k) => [k, ""])),
     };
@@ -915,27 +1030,34 @@ export class OnboardingService {
   private async prerequisites(inst: Installation, token: string): Promise<ReadonlyArray<string>> {
     const blockers: Array<string> = [];
     const accounts = await this.deps.cloudflare.accounts(token);
+
     if (!accounts.some((a) => a.id === inst.accountId))
       blockers.push("the bound account is no longer reachable with this authorization");
     const subdomain = await this.deps.cloudflare.workersSubdomain(token, inst.accountId!);
+
     if (!subdomain || workersDevUrls(inst.workerName!, subdomain).render !== inst.urls!.render)
       blockers.push("the account's workers.dev subdomain changed or was removed");
+
     if (inst.zoneId) {
       // The chosen zone must still be an active zone of the bound account, with the same name.
       const zone = (await this.deps.cloudflare.zones(token, inst.accountId!)).find(
         (z) => z.id === inst.zoneId,
       );
+
       if (!zone || zone.status !== "active" || zone.name !== inst.zoneName)
         blockers.push(`the zone ${inst.zoneName} is no longer an active zone in the bound account`);
       else if (!inst.appHostname?.endsWith(`.${zone.name}`))
         blockers.push("the Bye hostname is not a subdomain of the bound zone");
     }
+
     if (inst.firstWriteAt === null) {
       const names = new Set(await this.deps.cloudflare.workerNames(token, inst.accountId!));
       const n = inst.workerName!;
+
       for (const taken of [n, `${n}-site`, `${n}-render`].filter((x) => names.has(x)))
         blockers.push(`a Worker named ${taken} already exists in the account`);
     }
+
     return blockers;
   }
 
@@ -949,19 +1071,23 @@ export class OnboardingService {
 
   async review(operatorId: string): Promise<Review> {
     const inst = await this.installation(operatorId);
+
     if (inst.boundAt === null)
       throw new OnboardingError("invalid", "choose where Bye should live first");
     const token = await this.accessToken(inst);
     const resolved = this.deps.release.resolve();
+
     if (!resolved.ok)
       throw new OnboardingError("blocked", resolved.reason, "Contact the Bye release owner");
     const active = await this.activeOperation(inst.id);
     const blockers: Array<string> = [...(await this.prerequisites(inst, token))];
+
     if (active) blockers.push("a deployment is already in progress for this installation");
     const config = this.config(inst);
     blockers.push(...this.requiredConfigGaps(resolved.release.dir, config));
     const controller = new AbortController();
     let exported: ExportedPlan;
+
     try {
       exported = await this.deps.executor.plan(
         this.context(inst, resolved.release.dir, token, controller.signal),
@@ -973,6 +1099,7 @@ export class OnboardingService {
         'If Alchemy state cannot be read, stop and follow infra/RUNBOOK.md "Interrupted deploy"; onboarding never substitutes fresh state',
       );
     }
+
     const outcome = buildReview({
       installation: inst,
       release: resolved.release.ref,
@@ -981,20 +1108,23 @@ export class OnboardingService {
       releaseMigrations: await this.deps.release.migrations(resolved.release.dir),
       prerequisiteBlockers: blockers,
       grantedScopes: inst.authorization.scopes,
-      ...(this.deps.scopeMatrix ? { scopeMatrix: this.deps.scopeMatrix } : {}),
+      scopeMatrix: this.deps.scopeMatrix,
     });
+
     const review: Review = {
       id: hex(12),
       installationId: inst.id,
       createdAt: this.iso(),
       ...outcome,
     };
+
     await this.deps.store.putReview(review);
     await this.event(
       inst.id,
       "review.created",
       `${review.subject.actions.length} changes, ${review.blockers.length} blockers, release ${review.subject.release.version}`,
     );
+
     return review;
   }
 
@@ -1006,14 +1136,19 @@ export class OnboardingService {
   ): Promise<Approval> {
     const inst = await this.installation(operatorId);
     const review = await this.deps.store.getReview(reviewId);
+
     if (!review || review.installationId !== inst.id)
       throw new OnboardingError("not_found", "review not found");
+
     if (review.blockers.length > 0)
       throw new OnboardingError("blocked", "this review has blockers and cannot be approved");
+
     if (digest !== review.digest)
       throw new OnboardingError("invalid", "the approved plan does not match the review shown");
+
     if (review.destructive.length > 0 && !acknowledgeDestructive)
       throw new OnboardingError("invalid", "destructive changes need explicit acknowledgement");
+
     const approval: Approval = {
       id: hex(12),
       reviewId,
@@ -1024,8 +1159,10 @@ export class OnboardingService {
       approvedBy: operatorId,
       policy: "operator",
     };
+
     await this.deps.store.putApproval(approval);
     const current = await this.fresh(inst.id);
+
     if (current.pendingReviewId)
       await this.deps.store.putInstallation({ ...current, pendingReviewId: null });
     await this.event(
@@ -1033,6 +1170,7 @@ export class OnboardingService {
       "approval.recorded",
       `approval ${approval.id} for plan ${digest.slice(0, 12)}`,
     );
+
     return approval;
   }
 
@@ -1053,8 +1191,10 @@ export class OnboardingService {
   async deploy(operatorId: string, approvalId: string): Promise<Operation> {
     const inst = await this.installation(operatorId);
     const approval = await this.deps.store.getApproval(approvalId);
+
     if (!approval || approval.installationId !== inst.id)
       throw new OnboardingError("not_found", "approval not found");
+
     if (inst.authorization.status !== "connected")
       throw new OnboardingError(
         "unauthorized",
@@ -1062,7 +1202,9 @@ export class OnboardingService {
         "Connect Cloudflare, then review again",
       );
     const active = await this.activeOperation(inst.id);
+
     if (active) return active;
+
     const op: Operation = {
       id: hex(12),
       installationId: inst.id,
@@ -1077,9 +1219,12 @@ export class OnboardingService {
       health: [],
       error: null,
     };
+
     const holder = await this.deps.store.acquireWriter(inst.id, op.id);
+
     if (holder !== null) {
       const held = await this.deps.store.getOperation(holder);
+
       if (held) return held;
       throw new OnboardingError(
         "conflict",
@@ -1087,16 +1232,20 @@ export class OnboardingService {
         "Wait for it to finish",
       );
     }
+
     await this.deps.store.putOperation(op);
     await this.event(inst.id, "operation.queued", `deploy with approval ${approvalId}`, op.id);
     const controller = new AbortController();
     this.active.set(inst.id, { opId: op.id, controller });
+
     const run = this.execute(op, approval, controller.signal).finally(async () => {
       this.active.delete(inst.id);
       this.running.delete(op.id);
       await this.deps.store.releaseWriter(inst.id, op.id);
     });
+
     this.running.set(op.id, run);
+
     return op;
   }
 
@@ -1104,8 +1253,10 @@ export class OnboardingService {
   async operation(operatorId: string, operationId: string): Promise<Operation> {
     const inst = await this.installation(operatorId);
     const op = await this.deps.store.getOperation(operationId);
+
     if (!op || op.installationId !== inst.id)
       throw new OnboardingError("not_found", "operation not found");
+
     return op;
   }
 
@@ -1121,14 +1272,17 @@ export class OnboardingService {
   ): Promise<void> {
     let op = initial;
     const instId = op.installationId;
+
     const save = async (patch: Partial<Operation>) => {
       op = { ...op, ...patch, updatedAt: this.iso() };
       await this.deps.store.putOperation(op);
     };
+
     const step = async (s: OperationStep) => {
       await save({ step: s, status: "running" });
       await this.event(instId, "operation.step", s, op.id);
     };
+
     const fail = async (
       s: OperationStep,
       message: string,
@@ -1143,9 +1297,11 @@ export class OnboardingService {
       });
       await this.event(instId, `operation.${status}`, `${s}: ${message}`, op.id);
     };
+
     // Disconnect aborts `signal` and flips the authorization status; either stops further calls.
     const stopped = async () =>
       signal.aborted || (await this.fresh(instId)).authorization.status !== "connected";
+
     const STOPPED_NEXT =
       "Reconnect Cloudflare, review again and retry: completed resources are kept and nothing is replayed blindly";
 
@@ -1153,6 +1309,7 @@ export class OnboardingService {
       await step("revalidate");
       let inst = await this.fresh(instId);
       let token: string;
+
       try {
         token = await this.accessToken(inst, true);
       } catch (e) {
@@ -1162,13 +1319,16 @@ export class OnboardingService {
           "Reconnect Cloudflare",
         );
       }
+
       const resolved = this.deps.release.resolve();
+
       if (!resolved.ok)
         return await fail(
           "revalidate",
           resolved.reason,
           "Review again once the pinned release is available",
         );
+
       if (JSON.stringify(resolved.release.ref) !== JSON.stringify(approval.subject.release))
         return await fail(
           "revalidate",
@@ -1178,6 +1338,7 @@ export class OnboardingService {
       const prereq = await this.prerequisites(inst, token);
       const ctx = () => this.context(inst, resolved.release.dir, token, signal);
       let exported: ExportedPlan;
+
       try {
         exported = await this.deps.executor.plan(ctx());
       } catch (e) {
@@ -1187,6 +1348,7 @@ export class OnboardingService {
           'If Alchemy state cannot be read, follow infra/RUNBOOK.md "Interrupted deploy"; do not start over with fresh state',
         );
       }
+
       const fresh = buildReview({
         installation: inst,
         release: resolved.release.ref,
@@ -1198,12 +1360,14 @@ export class OnboardingService {
           ...this.requiredConfigGaps(resolved.release.dir, this.config(inst)),
         ],
         grantedScopes: inst.authorization.scopes,
-        ...(this.deps.scopeMatrix ? { scopeMatrix: this.deps.scopeMatrix } : {}),
+        scopeMatrix: this.deps.scopeMatrix,
       });
+
       // A retry after a partial apply is not a first deployment: existing rows are its own.
       const blockers = fresh.blockers.filter(
         (b) => !(inst.firstWriteAt !== null && b.startsWith("Alchemy state already holds")),
       );
+
       if (blockers.length > 0)
         return await fail(
           "revalidate",
@@ -1211,6 +1375,7 @@ export class OnboardingService {
           "Resolve the blockers, then review again",
         );
       const drift = approvalCovers(approval.subject, fresh.subject);
+
       if (drift.length > 0)
         return await fail(
           "revalidate",
@@ -1219,6 +1384,7 @@ export class OnboardingService {
         );
 
       let outcomes: Array<ResourceOutcome> = [];
+
       if (fresh.subject.actions.length > 0) {
         if (await stopped())
           return await fail(
@@ -1227,16 +1393,21 @@ export class OnboardingService {
             STOPPED_NEXT,
             "cancelled",
           );
+
         if (inst.firstWriteAt === null) {
           inst = { ...(await this.fresh(instId)), firstWriteAt: this.iso() };
           await this.deps.store.putInstallation(inst);
         }
+
         await step("apply");
         let lines = 0;
+
         const applied = await this.deps.executor.apply(ctx(), (line) => {
           if (lines++ < 400) void this.event(instId, "apply.progress", line, op.id);
         });
+
         const planned = fresh.subject.actions;
+
         if (applied.aborted || (await stopped())) {
           // No further API calls after a stop: outcomes stay uncertain until a reviewed reconcile.
           await save({
@@ -1247,6 +1418,7 @@ export class OnboardingService {
               outcome: "uncertain",
             })),
           });
+
           return await fail(
             "apply",
             "deployment was stopped while applying; requests already sent to Cloudflare may still complete",
@@ -1254,18 +1426,22 @@ export class OnboardingService {
             "cancelled",
           );
         }
+
         await step("reconcile");
+
         try {
           token = await this.accessToken(await this.fresh(instId));
           const after = await this.deps.executor.plan(ctx());
           outcomes = planned.map((a) => {
             const row = after.rows.find((r) => r.fqn === a.fqn);
+
             const outcome: ResourceOutcome["outcome"] =
               row === undefined || row.action === "noop"
                 ? "completed"
                 : row.action === a.action || (a.action === "create" && row.action === "update")
                   ? "pending"
                   : "uncertain";
+
             return { fqn: a.fqn, logicalId: a.logicalId, action: a.action, outcome };
           });
         } catch {
@@ -1276,7 +1452,9 @@ export class OnboardingService {
             outcome: "uncertain",
           }));
         }
+
         await save({ outcomes });
+
         if (!applied.ok)
           return await fail(
             "apply",
@@ -1284,6 +1462,7 @@ export class OnboardingService {
             "Retry with the same approval: completed resources are kept and only approved remaining actions run",
           );
         const open = outcomes.filter((o) => o.outcome !== "completed");
+
         if (open.length > 0)
           return await fail(
             "reconcile",
@@ -1308,12 +1487,15 @@ export class OnboardingService {
 
       await step("health");
       inst = await this.fresh(instId);
+
       const probeToken = open<Record<string, string>>(
         this.deps.keys,
         inst.runtimeSecrets!,
         inst.id,
       ).PROBE_TOKEN!;
+
       let health: ReadonlyArray<HealthResult>;
+
       try {
         health = await runHealthChecks(
           inst.urls!,
@@ -1326,17 +1508,21 @@ export class OnboardingService {
           { name: "health", ok: false, ms: 0, detail: e instanceof Error ? e.message : "failed" },
         ];
       }
+
       await save({ health });
       const failed = health.filter((h) => !h.ok);
       inst = await this.fresh(instId);
+
       if (failed.length > 0) {
         await this.deps.store.putInstallation({ ...inst, ready: false });
+
         return await fail(
           "health",
           `required checks failed: ${failed.map((h) => `${h.name} (${h.detail})`).join(", ")}`,
           "Deploy again with the same approval to rerun the checks; no resource changes are replayed",
         );
       }
+
       await this.deps.store.putInstallation({ ...inst, ready: true, readyAt: this.iso() });
       await save({ status: "succeeded", step: "done", finishedAt: this.iso() });
       await this.event(instId, "operation.succeeded", `ready at ${inst.urls!.app}`, op.id);
@@ -1356,9 +1542,11 @@ export class OnboardingService {
    */
   async recover(installationIds: ReadonlyArray<string>): Promise<number> {
     let n = 0;
+
     for (const id of installationIds) {
       for (const op of await this.deps.store.operations(id)) {
         if (op.status !== "queued" && op.status !== "running") continue;
+
         if (this.running.has(op.id)) continue;
         await this.deps.store.putOperation({
           ...op,
@@ -1377,6 +1565,7 @@ export class OnboardingService {
         n++;
       }
     }
+
     return n;
   }
 
@@ -1386,10 +1575,12 @@ export class OnboardingService {
     operatorId: string,
   ): Promise<{ readonly revocation: string; readonly inFlight: string | null }> {
     const inst = await this.installation(operatorId);
+
     const creds =
       inst.credentials === null
         ? null
         : open<StoredCredentials>(this.deps.keys, inst.credentials, inst.id);
+
     const active = await this.activeOperation(inst.id);
     // 1. Block: no new, queued or retried writes and no refresh from here on.
     await this.deps.store.putInstallation({
@@ -1399,16 +1590,19 @@ export class OnboardingService {
     });
     // 2. Stop active work before any further deployment API call.
     this.active.get(inst.id)?.controller.abort();
+
     const inFlight =
       active === null
         ? null
         : active.step === "apply"
           ? "A deployment was applying; requests already sent to Cloudflare may still complete. Review after reconnecting to see what exists."
           : `A deployment was stopped during ${active.step}; no resource writes had started.`;
+
     if (active) {
       await this.settled(active.id);
       // Work recorded by an earlier process (queued, or running when it died) is cancelled too.
       const after = await this.deps.store.getOperation(active.id);
+
       if (after && (after.status === "queued" || after.status === "running")) {
         await this.deps.store.putOperation({
           ...after,
@@ -1424,8 +1618,10 @@ export class OnboardingService {
         await this.deps.store.releaseWriter(inst.id, after.id);
       }
     }
+
     // 3. Revoke at the provider (best effort, reported), refresh token first.
     let revocation = "no stored credentials";
+
     if (creds) {
       const results = [
         ...(creds.refreshToken
@@ -1440,10 +1636,12 @@ export class OnboardingService {
           : []),
         await revokeToken(this.deps.oauth, creds.accessToken, "access_token", this.deps.fetch),
       ];
+
       revocation = results.every((r) => r.ok)
         ? "revoked at Cloudflare"
         : `local credentials deleted; provider revocation failed (${results.map((r) => r.detail).join(", ")}); revoke Bye's access in the Cloudflare dashboard`;
     }
+
     const current = await this.fresh(inst.id);
     await this.deps.store.putInstallation({
       ...current,
@@ -1459,6 +1657,7 @@ export class OnboardingService {
       "authorization.disconnected",
       `${revocation}${inFlight ? `; ${inFlight}` : ""}`,
     );
+
     return { revocation, inFlight };
   }
 
@@ -1469,6 +1668,7 @@ export class OnboardingService {
     const operation = (await this.deps.store.operations(inst.id))[0] ?? null;
     const events = await this.deps.store.events(inst.id);
     const resolved = this.deps.release.resolve();
+
     return {
       state: installState(inst, operation, this.installing.has(inst.id)),
       installation: {
@@ -1504,8 +1704,10 @@ export class OnboardingService {
 
   async handoff(operatorId: string): Promise<Handoff> {
     const inst = await this.installation(operatorId);
+
     if (!inst.ready || !inst.urls)
       throw new OnboardingError("not_ready", "the installation is not ready yet");
+
     return handoffFor(inst.urls.app);
   }
 
@@ -1516,13 +1718,16 @@ export class OnboardingService {
    */
   async firstAccountLink(operatorId: string): Promise<{ readonly link: string }> {
     const inst = await this.installation(operatorId);
+
     if (!inst.ready || !inst.urls || !inst.runtimeSecrets)
       throw new OnboardingError("not_ready", "the installation is not ready yet");
+
     const token = open<Record<string, string>>(
       this.deps.keys,
       inst.runtimeSecrets,
       inst.id,
     ).BOOTSTRAP_TOKEN;
+
     if (!token)
       throw new OnboardingError(
         "blocked",
@@ -1531,6 +1736,7 @@ export class OnboardingService {
       );
     await this.event(inst.id, "first-account.link", "setup link shown to the operator");
     const domain = inst.ownerAddressDomain ?? null;
+
     return {
       link: `${inst.urls.app}/#bootstrap=${token}${domain ? `&domain=${encodeURIComponent(domain)}` : ""}`,
     };
@@ -1543,8 +1749,10 @@ export class OnboardingService {
    */
   async recoveryKit(operatorId: string): Promise<RecoveryKit> {
     const inst = await this.installation(operatorId);
+
     if (inst.boundAt === null || !inst.runtimeSecrets || !inst.urls || !inst.stateRef)
       throw new OnboardingError("invalid", "choose where Bye should live first");
+
     if (inst.recoveryKitIssuedAt)
       throw new OnboardingError(
         "conflict",
@@ -1561,6 +1769,7 @@ export class OnboardingService {
       "recovery-kit.issued",
       "recovery kit downloaded (contents not logged)",
     );
+
     return {
       format: "bye.recovery-kit.v1",
       issuedAt,
@@ -1591,6 +1800,7 @@ export class OnboardingService {
 
   async guide(operatorId: string): Promise<ManualGuide> {
     const inst = await this.installation(operatorId);
+
     return manualGuide({ stage: inst.stage ?? "prod", appUrl: inst.urls?.app ?? null });
   }
 }
@@ -1599,5 +1809,6 @@ export class OnboardingService {
 export const handoffFor = (url: string): Handoff => {
   if (!/^https:\/\/[^/?#@]+$/.test(url))
     throw new OnboardingError("invalid", "not an HTTPS instance origin");
+
   return { url, link: addInstanceLink(url), qrSvg: qrSvg(url) };
 };

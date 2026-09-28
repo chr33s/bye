@@ -5,10 +5,12 @@ import { h } from "./dom.ts";
 
 const region = (): HTMLElement => {
   let el = document.getElementById("toasts");
+
   if (!el) {
     el = h("div", { id: "toasts", class: "toasts", role: "status", "aria-live": "polite" });
     document.body.append(el);
   }
+
   return el;
 };
 
@@ -24,6 +26,7 @@ export const toast = (
 ): (() => void) => {
   const box = region();
   const close = () => item.remove();
+
   const item = h(
     "div",
     { class: "toast" },
@@ -43,8 +46,11 @@ export const toast = (
       : null,
     h("button", { type: "button", "aria-label": "Dismiss", onclick: close }, "×"),
   );
+
   box.append(item);
   const timeout = options.timeoutMs ?? (options.action ? 0 : 8000);
+
   if (timeout > 0) setTimeout(close, timeout);
+
   return close;
 };

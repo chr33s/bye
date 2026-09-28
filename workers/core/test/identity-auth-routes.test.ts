@@ -19,7 +19,7 @@ import {
 import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, makeHarness, enablePersonalMail } from "./harness.ts";
+import { type Harness, makeHarness, enablePersonalMail, executionContext } from "./harness.ts";
 
 // HTTP wiring for identity/security settings (TOTP, passkeys, support access, referrals), the signed
 // provider webhooks, and the unauthenticated /auth/* routes (recovery, logout, passkey sign-in,
@@ -31,10 +31,7 @@ import { type Harness, makeHarness, enablePersonalMail } from "./harness.ts";
   }
 };
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 interface Account {
   readonly userId: string;
@@ -50,7 +47,9 @@ const signup = async (h: Harness, address: string, steppedUp = true): Promise<Ac
   const account = await new ControlDirectory(h.env.DIRECTORY, kernelClock).provisionPersonalAccount(
     { address, displayName: address.split("@")[0]! },
   );
+
   const session = await (await auth(h)).issueSession(account.userId, "test", steppedUp);
+
   return { ...account, address, cookie: `__Host-session=${session.token}` };
 };
 
@@ -60,30 +59,38 @@ const plainSession = async (h: Harness, a: Account): Promise<Account> => ({
   cookie: `__Host-session=${(await (await auth(h)).issueSession(a.userId, "other", false)).token}`,
 });
 
-const call = async (
+const call = async <JsonValue>(
   h: Harness,
   a: Account | null,
   method: string,
   path: string,
-  json?: unknown,
+  json?: JsonValue,
   headers: Record<string, string> = {},
 ) => {
+  const requestHeaders = new Headers();
+
+  if (a) requestHeaders.set("cookie", a.cookie);
+
+  if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+  if (json !== undefined) requestHeaders.set("content-type", "application/json");
+
+  for (const [k, v] of Object.entries(headers ?? {})) requestHeaders.set(k, v);
+
   const response = await handleFetch(
-    new Request(`${h.env.APP_ORIGIN}${path}`, {
-      method,
-      headers: {
-        ...(a ? { cookie: a.cookie } : {}),
-        ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-        ...(json !== undefined ? { "content-type": "application/json" } : {}),
-        ...headers,
-      },
-      ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
-    }),
+    new Request(
+      `${h.env.APP_ORIGIN}${path}`,
+      json !== undefined
+        ? { method, headers: requestHeaders, body: JSON.stringify(json) }
+        : { method, headers: requestHeaders },
+    ),
     h.env,
     ctx,
   );
+
   const text = await response.text();
   const type = response.headers.get("content-type") ?? "";
+
   return {
     status: response.status,
     headers: response.headers,
@@ -99,7 +106,9 @@ const post = async (h: Harness, path: string, body: string, headers: Record<stri
     h.env,
     ctx,
   );
+
   const text = await response.text();
+
   return { status: response.status, body: text ? JSON.parse(text) : null };
 };
 
@@ -111,19 +120,25 @@ const authenticator = async (rpId: string, origin: string) => {
     "sign",
     "verify",
   ])) as CryptoKeyPair;
+
   const jwk = (await crypto.subtle.exportKey("jwk", pair.publicKey)) as JsonWebKey;
+
   const b64 = (s: string) =>
     Uint8Array.from(
       atob(s.replace(/-/g, "+").replace(/_/g, "/") + "==".slice(0, (4 - (s.length % 4)) % 4)),
       (c) => c.charCodeAt(0),
     );
+
   const credId = crypto.getRandomValues(new Uint8Array(16));
   let counter = 0;
+
   const authData = async (attested: boolean) => {
     const count = new Uint8Array(4);
     new DataView(count.buffer).setUint32(0, counter);
     const rpHash = await sha256(rpId);
+
     if (!attested) return concatBytes(rpHash, new Uint8Array([0x05]), count);
+
     const cose = cborEncode(
       new Map<CborValue, CborValue>([
         [1, 2],
@@ -133,6 +148,7 @@ const authenticator = async (rpId: string, origin: string) => {
         [-3, b64(jwk.y!)],
       ]),
     );
+
     return concatBytes(
       rpHash,
       new Uint8Array([0x45]),
@@ -143,8 +159,10 @@ const authenticator = async (rpId: string, origin: string) => {
       cose,
     );
   };
+
   const clientData = (type: string, challenge: string) =>
     utf8(JSON.stringify({ type, challenge, origin }));
+
   return {
     credentialId: toBase64Url(credId),
     register: async (challenge: string) => ({
@@ -163,6 +181,7 @@ const authenticator = async (rpId: string, origin: string) => {
       counter++;
       const ad = await authData(false);
       const cd = clientData("webauthn.get", challenge);
+
       const sig = new Uint8Array(
         await crypto.subtle.sign(
           { name: "ECDSA", hash: "SHA-256" },
@@ -170,6 +189,7 @@ const authenticator = async (rpId: string, origin: string) => {
           concatBytes(ad, await sha256(cd)),
         ),
       );
+
       return {
         credentialId: toBase64Url(credId),
         clientDataJSON: toBase64Url(cd),
@@ -187,13 +207,16 @@ const addPasskey = async (h: Harness, a: Account, label = "laptop") => {
   const key = await device(h);
   const challenge = await call(h, a, "POST", "/v1/security/passkeys/challenge", {});
   expect(challenge.status).toBe(200);
+
   const added = await call(h, a, "POST", "/v1/security/passkeys", {
     challengeId: challenge.body.id,
     label,
     response: await key.register(challenge.body.challenge),
   });
+
   expect(added.status).toBe(201);
   expect(added.body.id).toBe(key.credentialId);
+
   return { id: added.body.id as string, key };
 };
 
@@ -205,6 +228,7 @@ const hex = async (secret: string, body: string) => {
     false,
     ["sign"],
   );
+
   return [...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)))]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
@@ -279,10 +303,12 @@ describe("identity and security settings", () => {
 
     // A register challenge issued to Bob cannot enrol a key on Ana's account.
     const bobChallenge = await call(h, bob, "POST", "/v1/security/passkeys/challenge", {});
+
     const stolen = await call(h, ana, "POST", "/v1/security/passkeys", {
       challengeId: bobChallenge.body.id,
       response: await (await device(h)).register(bobChallenge.body.challenge),
     });
+
     expect([stolen.status, stolen.body.error.code]).toEqual([403, "forbidden"]);
 
     // Bob cannot delete Ana's passkey by id: not found for him, and hers is untouched.
@@ -369,6 +395,7 @@ describe("signed provider webhooks", () => {
 
   it("[A02] /webhooks/billing: a valid signature applies once; bad, stale or missing signatures are 401; bad bodies 400; outages 503", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const event = JSON.stringify({
       id: "evt_credit_1",
       orgId: ana.organizationId,
@@ -376,19 +403,23 @@ describe("signed provider webhooks", () => {
       cents: 500,
       created: Date.now(),
     });
+
     const secret = h.env.BILLING_WEBHOOK_SECRET;
     const signed = await signBillingPayload(event, secret, Date.now());
     const ok = await post(h, "/webhooks/billing", event, { "x-billing-signature": signed });
     expect([ok.status, ok.body]).toEqual([200, { applied: true, duplicate: false }]);
+
     const credits = await h.d1
       .prepare("SELECT credits_cents FROM entitlements WHERE org_id = ?")
       .bind(ana.organizationId)
       .first<{ credits_cents: number }>();
+
     expect(credits?.credits_cents).toBeGreaterThanOrEqual(500);
     const replay = await post(h, "/webhooks/billing", event, { "x-billing-signature": signed });
     expect(replay.body).toEqual({ applied: false, duplicate: true });
 
     const tampered = event.replace("500", "50000");
+
     for (const [body, headers] of [
       [tampered, { "x-billing-signature": signed }],
       [event, {}],
@@ -405,15 +436,20 @@ describe("signed provider webhooks", () => {
       const r = await post(h, "/webhooks/billing", body, headers);
       expect([r.status, r.body.error.code]).toEqual([401, "unauthenticated"]);
     }
+
     const garbage = "not json";
+
     const badBody = await post(h, "/webhooks/billing", garbage, {
       "x-billing-signature": await signBillingPayload(garbage, secret, Date.now()),
     });
+
     expect([badBody.status, badBody.body.error.code]).toEqual([400, "bad_request"]);
     const missingFields = JSON.stringify({ id: "evt_2" });
+
     const incomplete = await post(h, "/webhooks/billing", missingFields, {
       "x-billing-signature": await signBillingPayload(missingFields, secret, Date.now()),
     });
+
     expect([incomplete.status, incomplete.body.error.code]).toEqual([400, "bad_request"]);
     const events = await h.d1.prepare("SELECT provider_event_id FROM billing_events").all();
     expect(events.results).toEqual([{ provider_event_id: "evt_credit_1" }]);
@@ -426,14 +462,19 @@ describe("signed provider webhooks", () => {
       cents: 100,
       created: Date.now(),
     });
+
     const prepare = h.d1.prepare.bind(h.d1);
+
     const spy = vi.spyOn(h.d1, "prepare").mockImplementation((sql: string) => {
       if (/billing_events/.test(sql)) throw new Error("D1 unavailable");
+
       return prepare(sql);
     });
+
     const outage = await post(h, "/webhooks/billing", later, {
       "x-billing-signature": await signBillingPayload(later, secret, Date.now()),
     });
+
     spy.mockRestore();
     expect([outage.status, outage.body.error.code]).toEqual([503, "unavailable"]);
   });
@@ -447,6 +488,7 @@ describe("signed provider webhooks", () => {
       )
       .bind(Date.now())
       .run();
+
     const event = (over: Record<string, string> = {}) =>
       JSON.stringify({
         eventId: "pev_1",
@@ -456,9 +498,12 @@ describe("signed provider webhooks", () => {
         outcome: "delivered",
         ...over,
       });
+
     const body = event();
+
     const signed = (b: string, key = secret, at = Date.now()) =>
       signBillingPayload(b, key, at).then((sig) => ({ "x-bye-signature": sig }));
+
     const ok = await post(h, "/webhooks/send-events", body, await signed(body));
     expect([ok.status, ok.body]).toEqual([200, { ok: true }]);
 
@@ -474,6 +519,7 @@ describe("signed provider webhooks", () => {
       const r = await post(h, "/webhooks/send-events", body, headers);
       expect([r.status, r.body.error.code]).toEqual([401, "unauthenticated"]);
     }
+
     const invalid = JSON.stringify({ eventId: "pev_2", outcome: "exploded" });
     const r = await post(h, "/webhooks/send-events", invalid, await signed(invalid));
     expect([r.status, r.body.error.code]).toEqual([400, "bad_request"]);
@@ -518,8 +564,10 @@ describe("unauthenticated auth routes", () => {
 
   it("[A03] /auth/recover: a single-use code signs in and revokes every existing credential", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const codes = (await call(h, ana, "POST", "/v1/security/recovery-codes", {})).body
       .codes as Array<string>;
+
     const token = await call(h, ana, "POST", "/v1/tokens", { kind: "cli", label: "laptop" });
     expect(token.status).toBe(201);
 
@@ -527,11 +575,14 @@ describe("unauthenticated auth routes", () => {
       address: "ana@bye.test",
       code: "AAAA-BBBB-CCCC-DDDD",
     });
+
     expect([wrong.status, wrong.body.error.code]).toEqual([401, "unauthenticated"]);
+
     const unknown = await call(h, null, "POST", "/auth/recover", {
       address: "nobody@bye.test",
       code: codes[0],
     });
+
     // Unknown addresses are indistinguishable from wrong codes.
     expect([unknown.status, unknown.body]).toEqual([wrong.status, wrong.body]);
 
@@ -539,6 +590,7 @@ describe("unauthenticated auth routes", () => {
       address: "ANA@bye.test",
       code: codes[0]!.toLowerCase(),
     });
+
     expect(recovered.status).toBe(200);
     const fresh = { ...ana, cookie: cookieOf(recovered.headers) };
     expect((await call(h, fresh, "GET", "/v1/me")).body.userId).toBe(ana.userId);
@@ -551,10 +603,12 @@ describe("unauthenticated auth routes", () => {
           .first<{ revoked_at: number | null }>()
       )?.revoked_at,
     ).not.toBeNull();
+
     const reused = await call(h, null, "POST", "/auth/recover", {
       address: "ana@bye.test",
       code: codes[0],
     });
+
     expect(reused.status).toBe(401);
     expect((await call(h, fresh, "GET", "/v1/security")).body.recoveryCodesRemaining).toBe(
       codes.length - 1,
@@ -563,30 +617,37 @@ describe("unauthenticated auth routes", () => {
 
   it("[A03] /auth/passkey/register binds the ceremony to its user; /auth/passkey/login signs in once per challenge", async () => {
     const directory = new ControlDirectory(h.env.DIRECTORY, kernelClock);
+
     const ana = await directory.provisionPersonalAccount({
       address: "ana@bye.test",
       displayName: "A",
     });
+
     const bob = await directory.provisionPersonalAccount({
       address: "bob@bye.test",
       displayName: "B",
     });
+
     const key = await device(h);
     const challenge = await (await auth(h)).beginChallenge("register", ana.userId);
     const response = await key.register(challenge.challenge);
+
     // A register challenge bound to Ana cannot enrol a key for Bob.
     const hijack = await call(h, null, "POST", "/auth/passkey/register", {
       userId: bob.userId,
       challengeId: challenge.id,
       response,
     });
+
     expect([hijack.status, hijack.body.error.code]).toEqual([401, "unauthenticated"]);
     const fresh = await (await auth(h)).beginChallenge("register", ana.userId);
+
     const registered = await call(h, null, "POST", "/auth/passkey/register", {
       userId: ana.userId,
       challengeId: fresh.id,
       response: await key.register(fresh.challenge),
     });
+
     expect(registered.status).toBe(201);
     const session = { ...ana, address: "ana@bye.test", cookie: cookieOf(registered.headers) };
     expect((await call(h, session, "GET", "/v1/me")).body.userId).toBe(ana.userId);
@@ -595,34 +656,43 @@ describe("unauthenticated auth routes", () => {
     const login = await call(h, null, "POST", "/auth/challenge", { purpose: "authenticate" });
     expect(login.status).toBe(200);
     const assertion = await key.assert(login.body.challenge);
+
     const signedIn = await call(h, null, "POST", "/auth/passkey/login", {
       challengeId: login.body.id,
       response: assertion,
     });
+
     expect(signedIn.status).toBe(200);
     const cookie = cookieOf(signedIn.headers);
     expect((await call(h, { ...session, cookie }, "GET", "/v1/me")).body.userId).toBe(ana.userId);
+
     // Replaying the same challenge (single-use) fails.
     const replay = await call(h, null, "POST", "/auth/passkey/login", {
       challengeId: login.body.id,
       response: await key.assert(login.body.challenge),
     });
+
     expect([replay.status, replay.body.error.code]).toEqual([401, "unauthenticated"]);
     // An unknown credential fails the same way.
     const other = await call(h, null, "POST", "/auth/challenge", { purpose: "authenticate" });
     const stranger = await device(h);
+
     const bad = await call(h, null, "POST", "/auth/passkey/login", {
       challengeId: other.body.id,
       response: await stranger.assert(other.body.challenge),
     });
+
     expect([bad.status, bad.body.error.code]).toEqual([401, "unauthenticated"]);
   });
 
   it("[A03] session-issuing routes refuse cross-site and non-JSON posts (login CSRF)", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const codes = (await call(h, ana, "POST", "/v1/security/recovery-codes", {})).body
       .codes as Array<string>;
+
     const recover = JSON.stringify({ address: "ana@bye.test", code: codes[0] });
+
     const attempts: Array<Record<string, string>> = [
       // A hostile page's auto-submitted text/plain form (no preflight).
       { origin: "https://evil.example", "content-type": "text/plain" },
@@ -634,6 +704,7 @@ describe("unauthenticated auth routes", () => {
       { origin: h.env.APP_ORIGIN, "content-type": "text/plain" },
       { origin: h.env.APP_ORIGIN, "content-type": "application/x-www-form-urlencoded" },
     ];
+
     for (const path of ["/auth/recover", "/auth/passkey/login", "/auth/passkey/register"]) {
       for (const headers of attempts) {
         const r = await handleFetch(
@@ -641,10 +712,12 @@ describe("unauthenticated auth routes", () => {
           h.env,
           ctx,
         );
+
         expect([path, headers, r.status]).toEqual([path, headers, 403]);
         expect(r.headers.get("set-cookie")).toBeNull();
       }
     }
+
     // The code was never spent: a same-origin JSON recovery (even without Origin) still works.
     const ok = await handleFetch(
       new Request(`${h.env.APP_ORIGIN}/auth/recover`, {
@@ -658,16 +731,19 @@ describe("unauthenticated auth routes", () => {
       h.env,
       ctx,
     );
+
     expect(ok.status).toBe(200);
     expect(ok.headers.get("set-cookie")).toMatch(/__Host-session=/);
   });
 
   it("[§10] consent form posts read a capped body: an oversized one is refused, not buffered", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     for (const path of ["/device", "/oauth/authorize"]) {
       // 1 MiB offered in 1 KiB chunks; count how much of it the handler pulls.
       let pulled = 0;
       const chunk = new TextEncoder().encode("a".repeat(1024));
+
       const body = new ReadableStream<Uint8Array>({
         start: (c) => c.enqueue(new TextEncoder().encode("user_code=ABCD&decision=allow&pad=")),
         pull: (c) => {
@@ -676,6 +752,7 @@ describe("unauthenticated auth routes", () => {
           c.enqueue(chunk);
         },
       });
+
       const r = await handleFetch(
         new Request(`${h.env.APP_ORIGIN}${path}`, {
           method: "POST",
@@ -691,6 +768,7 @@ describe("unauthenticated auth routes", () => {
         h.env,
         ctx,
       );
+
       expect([path, r.status]).toEqual([path, 400]);
       expect(pulled).toBeLessThan(64 * 1024);
     }
@@ -712,6 +790,7 @@ describe("unauthenticated auth routes", () => {
         Date.now(),
       )
       .run();
+
     const verified = () =>
       h.d1
         .prepare(
@@ -719,20 +798,24 @@ describe("unauthenticated auth routes", () => {
         )
         .bind("ana@bye.test")
         .first<{ forwarding_to: string; forwarding_verified_at: number | null }>();
+
     const wrong = await call(
       h,
       null,
       "GET",
       `/auth/forwarding/confirm?address=ana@bye.test&token=nope`,
     );
+
     expect(wrong.status).toBe(400);
     expect(wrong.text).toContain("invalid or expired");
+
     const otherAddress = await call(
       h,
       null,
       "GET",
       `/auth/forwarding/confirm?address=bob@bye.test&token=${token}`,
     );
+
     expect(otherAddress.status).toBe(400);
     expect((await verified())?.forwarding_verified_at).toBeNull();
 
@@ -742,6 +825,7 @@ describe("unauthenticated auth routes", () => {
       "GET",
       `/auth/forwarding/confirm?address=ana@bye.test&token=${token}`,
     );
+
     expect(ok.status).toBe(200);
     expect(ok.text).toContain("Forwarding confirmed");
     expect(await verified()).toEqual({
@@ -770,6 +854,7 @@ describe("unauthenticated auth routes", () => {
     expect(
       (await call(h, null, "GET", `/auth/checkout/status?checkout=chk_1&sig=${sig}`)).body.status,
     ).toBe("expired");
+
     for (const query of [
       `checkout=chk_1&sig=${"0".repeat(sig.length)}`,
       "checkout=chk_1",
@@ -786,6 +871,7 @@ describe("unauthenticated auth routes", () => {
     const denied = new Set<string>();
     h.rateLimit.deny = (key) => [...denied].some((prefix) => key.startsWith(prefix));
     const ip = { "cf-connecting-ip": "203.0.113.9" };
+
     const cases: Array<[string, string, unknown, Account | null]> = [
       ["auth:", "/auth/challenge", { purpose: "authenticate" }, null],
       ["login:", "/auth/passkey/login", {}, null],
@@ -796,6 +882,7 @@ describe("unauthenticated auth routes", () => {
       ["register:", "/auth/passkey/register", { userId: "usr_x" }, null],
       ["stepup:", "/auth/step-up/totp", { code: "123456" }, ana],
     ];
+
     for (const [prefix, path, body, who] of cases) {
       denied.clear();
       denied.add(prefix);
@@ -803,8 +890,10 @@ describe("unauthenticated auth routes", () => {
       const r = await call(h, who, "POST", path, body, ip);
       expect([path, r.status, r.body.error.code]).toEqual([path, 429, "rate_limited"]);
       expect(h.rateLimit.keys.some((k) => k.startsWith(prefix))).toBe(true);
+
       if (prefix !== "stepup:") expect(h.rateLimit.keys).toContain(`${prefix}203.0.113.9`);
     }
+
     // Nothing was created by the refused signup.
     expect(
       await h.d1.prepare("SELECT 1 AS x FROM users WHERE primary_address = 'new@bye.test'").first(),

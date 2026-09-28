@@ -9,6 +9,7 @@ let lastNotice = 0;
 
 const notify = (): void => {
   const now = Date.now();
+
   if (now - lastNotice < 5000) return;
   lastNotice = now;
   toast("Something went wrong. If it keeps happening, reload the page.");

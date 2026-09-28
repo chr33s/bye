@@ -17,6 +17,7 @@ export const composeBody = (editorHtml: string): ComposedBody => {
     cid: (id) => `cid:${id}`,
     blockRemoteImages: true,
   });
+
   return { html, text: htmlToText(html).trim() };
 };
 
@@ -34,6 +35,7 @@ export const restoreInlineImages = (
     const id = img.getAttribute("src")!.slice(4);
     img.setAttribute("data-cid", id);
     const local = images && Object.hasOwn(images, id) ? images[id] : undefined;
+
     if (local) img.setAttribute("src", toUrl(local));
     else img.removeAttribute("src");
   });
@@ -46,6 +48,11 @@ export interface Recipient {
 
 const ADDRESS = /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/;
 
+export interface ParsedRecipients {
+  readonly recipients: ReadonlyArray<Recipient>;
+  readonly invalid: ReadonlyArray<string>;
+}
+
 /**
  * Parse a recipient field: comma/semicolon separated, `Name <addr>` or bare addresses, and group
  * tokens `@group:Name` expanded through `groups`. Invalid tokens are returned separately so the UI
@@ -54,44 +61,55 @@ const ADDRESS = /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/;
 export const parseRecipients = (
   field: string,
   groups: Readonly<Record<string, ReadonlyArray<Recipient>>> = {},
-): { readonly recipients: ReadonlyArray<Recipient>; readonly invalid: ReadonlyArray<string> } => {
+): ParsedRecipients => {
   const recipients: Array<Recipient> = [];
   const invalid: Array<string> = [];
   const seen = new Set<string>();
+
   const push = (r: Recipient) => {
     const key = r.address.toLowerCase();
+
     if (seen.has(key)) return;
     seen.add(key);
     recipients.push(r);
   };
+
   for (const raw of field
     .split(/[,;]/)
     .map((s) => s.trim())
     .filter(Boolean)) {
     const group = /^@group:(.+)$/i.exec(raw);
+
     if (group) {
       const members = groups[group[1]!.trim()];
+
       if (members) members.forEach(push);
       else invalid.push(raw);
       continue;
     }
+
     const named = /^(.*?)\s*<([^>]+)>$/.exec(raw);
     const address = (named ? named[2]! : raw).trim();
+
     if (!ADDRESS.test(address)) {
       invalid.push(raw);
       continue;
     }
+
     const name = named?.[1]?.replace(/^"|"$/g, "").trim();
     push(name ? { name, address } : { address });
   }
+
   return { recipients, invalid };
 };
 
 /** Append a signature below a `-- ` separator unless the body already ends with it. */
 export const withSignature = (text: string, signature: string): string => {
   const sig = signature.trim();
+
   if (!sig) return text;
   const block = `\n\n-- \n${sig}`;
+
   return text.endsWith(block) ? text : `${text.replace(/\s+$/, "")}${block}`;
 };
 
@@ -106,8 +124,10 @@ export const partRanges = (
 ): ReadonlyArray<{ readonly part: number; readonly start: number; readonly end: number }> => {
   if (size <= 0) return [];
   const out: Array<{ part: number; start: number; end: number }> = [];
+
   for (let start = 0, part = 1; start < size; start += partSize, part++)
     out.push({ part, start, end: Math.min(size, start + partSize) });
+
   return out;
 };
 

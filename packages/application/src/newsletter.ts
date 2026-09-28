@@ -76,7 +76,7 @@ export type BroadcastLookup =
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Inconclusive"; readonly detail: string };
 
-export interface NewsletterProviderShape {
+export interface NewsletterProviderService {
   readonly capabilities: NewsletterCapabilities;
   /** Identifies the provider account the credentials belong to; events bind to it. */
   readonly account: string;
@@ -109,5 +109,5 @@ export interface NewsletterProviderShape {
 
 export class NewsletterProvider extends Context.Service<
   NewsletterProvider,
-  NewsletterProviderShape
+  NewsletterProviderService
 >()("mail/NewsletterProvider") {}

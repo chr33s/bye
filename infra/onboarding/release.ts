@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { Option, Schema } from "effect";
 import type { ReleaseRef } from "./store.ts";
 
 /**
@@ -21,15 +22,22 @@ export interface ReleaseQualification {
 
 export const QUALIFICATION_FILE = "infra/release/qualification.json";
 
+const decodeQualification = Schema.decodeUnknownOption(
+  Schema.Struct({ newsletter: Schema.optional(Schema.String) }),
+);
+
 const EVIDENCE_REF = /^[A-Za-z0-9 ._:#/()-]{1,200}$/;
 
 /** Reads the release's qualification evidence; anything missing or malformed means "not qualified". */
 export const releaseQualification = (dir: string): ReleaseQualification => {
   const file = join(dir, QUALIFICATION_FILE);
+
   if (!existsSync(file)) return { newsletter: null };
+
   try {
-    const v = JSON.parse(readFileSync(file, "utf8")) as { newsletter?: unknown };
-    const ref = typeof v.newsletter === "string" ? v.newsletter.trim() : "";
+    const v = Option.getOrUndefined(decodeQualification(JSON.parse(readFileSync(file, "utf8"))));
+    const ref = v?.newsletter?.trim() ?? "";
+
     return { newsletter: EVIDENCE_REF.test(ref) ? ref : null };
   } catch {
     return { newsletter: null };
@@ -57,19 +65,24 @@ export type ReleaseResolution =
 export const resolveRelease = (dir: string, version: string): ReleaseResolution => {
   if (!/^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version))
     return { ok: false, reason: `release ${version} is not a published version tag` };
+
   try {
     const tagged = git(dir, ["rev-parse", "--verify", `refs/tags/${version}^{commit}`]);
     const head = git(dir, ["rev-parse", "HEAD"]);
+
     if (tagged !== head)
       return {
         ok: false,
         reason: `release checkout is not at ${version} (${tagged.slice(0, 12)})`,
       };
+
     if (git(dir, ["status", "--porcelain", "--untracked-files=no"]) !== "")
       return { ok: false, reason: "release checkout has local modifications" };
+
     const lockfileDigest = createHash("sha256")
       .update(readFileSync(join(dir, "pnpm-lock.yaml")))
       .digest("hex");
+
     return {
       ok: true,
       release: {
@@ -86,20 +99,25 @@ export const resolveRelease = (dir: string, version: string): ReleaseResolution 
 /** Migration IDs the release ships: D1 files and Durable Object class-migration tags per host. */
 export const releaseMigrations = async (dir: string): Promise<ReadonlyArray<string>> => {
   const d1Dir = join(dir, "infra/migrations/d1");
+
   const d1 = existsSync(d1Dir)
     ? readdirSync(d1Dir)
         .filter((f) => f.endsWith(".sql"))
         .map((f) => `d1:${f}`)
     : [];
+
   const manifest = join(dir, "infra/migrations/durable/durable-class-migrations.ts");
   let durable: Array<string> = [];
+
   if (existsSync(manifest)) {
     const mod = (await import(pathToFileURL(manifest).href)) as {
       CLASS_MIGRATIONS_BY_HOST?: Readonly<Record<string, ReadonlyArray<{ tag: string }>>>;
     };
+
     durable = Object.entries(mod.CLASS_MIGRATIONS_BY_HOST ?? {}).flatMap(([host, steps]) =>
       steps.map((s) => `do:${host}:${s.tag}`),
     );
   }
+
   return [...d1, ...durable].sort();
 };

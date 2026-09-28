@@ -48,8 +48,10 @@ export const CONTAINER_LIMITS: ParseLimits = {
 
 const b64 = (bytes: Uint8Array): string => {
   let s = "";
+
   for (let i = 0; i < bytes.length; i += 0x8000)
     s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+
   return btoa(s);
 };
 
@@ -60,6 +62,7 @@ export function* parseToLines(
   limits: ParseLimits = CONTAINER_LIMITS,
 ): Generator<string> {
   const parsed = parseMessage(bytes, limits);
+
   const sanitized = parsed.html
     ? sanitizeHtml(parsed.html, {
         proxyImage: (url) => url,
@@ -67,6 +70,7 @@ export function* parseToLines(
         blockRemoteImages: false,
       })
     : undefined;
+
   const meta: MimeMeta = {
     type: "meta",
     summary: summarizeMessage(parsed, receivedAt),
@@ -77,26 +81,34 @@ export function* parseToLines(
       blockedTrackers: sanitized?.blockedTrackers.length ?? 0,
     },
     headers: parsed.headers.slice(0, 64),
-    attachments: parsed.attachments.map((a) => ({
-      partId: a.partId,
-      filename: a.filename,
-      contentType: a.contentType,
-      size: a.size,
-      ...(a.contentId ? { contentId: a.contentId } : {}),
-    })),
+    attachments: parsed.attachments.map((a) => {
+      const attachment = {
+        partId: a.partId,
+        filename: a.filename,
+        contentType: a.contentType,
+        size: a.size,
+      };
+
+      return a.contentId ? { ...attachment, contentId: a.contentId } : attachment;
+    }),
     truncated: parsed.truncated,
     warnings: parsed.warnings.map((w) => w._tag),
   };
+
   yield JSON.stringify(meta);
+
   for (const a of parsed.attachments) {
     const part = parsed.parts.find((p) => p.partId === a.partId);
+
     if (!part) continue;
+
     const line: MimePart = {
       type: "part",
       partId: a.partId,
       filename: a.filename,
       contentBase64: b64(part.content),
     };
+
     yield JSON.stringify(line);
   }
 }

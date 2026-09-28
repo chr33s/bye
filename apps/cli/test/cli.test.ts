@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { EXIT, type FetchLike, makeCliApi, runCli } from "@bye/cli";
+import { EXIT, type FetchLike, cliApiLayer, runCli } from "@bye/cli";
 import { invoke } from "../src/commands.ts";
 import { sanitize } from "../src/tui.ts";
 
@@ -15,6 +15,7 @@ interface Call {
 
 const harness = (respond: (call: Call) => { status: number; body: unknown }) => {
   const calls: Array<Call> = [];
+
   const fetchImpl: FetchLike = async (url, init) => {
     const call = {
       url,
@@ -22,21 +23,25 @@ const harness = (respond: (call: Call) => { status: number; body: unknown }) => 
       headers: init.headers,
       body: init.body === undefined ? undefined : JSON.parse(init.body as string),
     };
+
     calls.push(call);
     const { status, body } = respond(call);
+
     return {
       status,
       headers: { get: () => "application/json" },
       text: async () => JSON.stringify(body),
     };
   };
+
   const out: Array<string> = [];
   const err: Array<string> = [];
   let n = 0;
+
   const run = (argv: Array<string>, token: string | undefined = "tok_agent") =>
     runCli(
       argv,
-      makeCliApi(
+      cliApiLayer(
         { apiUrl: "https://api.test", token, mailboxId: "mbx_1", calendarId: "cal_1" },
         fetchImpl,
       ),
@@ -46,6 +51,7 @@ const harness = (respond: (call: Call) => { status: number; body: unknown }) => 
         newCommandId: () => `cmd_${++n}`,
       },
     );
+
   return { calls, out, err, run };
 };
 
@@ -77,6 +83,7 @@ describe("CLI", () => {
       status: 200,
       body: { items: [{ threadId: "thr_1", subject: "Hi" }], cursor: "c1" },
     }));
+
     expect(await h.run(["mail", "view", "imbox", "--limit", "5", "--json"])).toBe(EXIT.ok);
     expect(h.calls[0]!.url).toBe("https://api.test/v1/mailboxes/mbx_1/views/imbox?limit=5");
     expect(h.calls[0]!.headers.authorization).toBe("Bearer tok_agent");
@@ -91,6 +98,7 @@ describe("CLI", () => {
       status: 200,
       body: { items: [{ threadId: "thr_1", subject: "evil\u001b[31m\nsubject" }] },
     }));
+
     await h.run(["mail", "view", "feed"]);
     expect(h.out[0]).toContain("thr_1");
     expect(h.out[0]).not.toContain("\u001b");
@@ -115,6 +123,7 @@ describe("CLI", () => {
       [429, "rate_limited", EXIT.rateLimited],
       [503, "unavailable", EXIT.unavailable],
     ];
+
     for (const [status, code, exit] of cases) {
       const h = harness(() => ({ status, body: { error: { code, message: code } } }));
       expect(await h.run(["send", "cancel", "snd_1", "--json"])).toBe(exit);
@@ -128,6 +137,7 @@ describe("CLI", () => {
         ? { status: 403, body: { error: { code: "forbidden", message: "missing scope send" } } }
         : { status: 200, body: {} },
     );
+
     expect(
       await h.run(["draft", "create", "--to", "a@example.com", "--subject", "s", "--body", "b"]),
     ).toBe(EXIT.ok);
@@ -211,14 +221,16 @@ describe("CLI", () => {
     expect(await h.run(["screen", "approve", "a@example.com", "--to", "bogus", "--yes"])).toBe(
       EXIT.usage,
     );
+
     // Missing selection flags are usage errors too, never a request with an empty ID.
     const noFetch: FetchLike = async () => {
       throw new Error("no request expected");
     };
+
     expect(
       await runCli(
         ["mail", "view", "imbox"],
-        makeCliApi(
+        cliApiLayer(
           { apiUrl: "https://api.test", token: "tok", mailboxId: undefined, calendarId: undefined },
           noFetch,
         ),
@@ -244,9 +256,11 @@ describe("CLI", () => {
       EXIT.ok,
     );
     expect(await h.run(["cal", "task", "add", "x", "--date", "tomorrow"])).toBe(EXIT.usage);
+
     const byUrl = h.calls.map(
       (c) => [c.method, c.url.replace("https://api.test", "").split("?")[0], c.body] as const,
     );
+
     expect(byUrl[0]).toEqual(["GET", "/v1/mailboxes/mbx_1/focus", undefined]);
     expect(byUrl[1]![2]).toMatchObject({ _tag: "CreateBatch", threadIds: "new-for-you" });
     expect(byUrl[2]![2]).toMatchObject({ _tag: "MoveToTrash", threadIds: ["thr_1", "thr_2"] });
@@ -282,6 +296,7 @@ describe("CLI review fixes", () => {
       status: 200,
       body: { text: "hi\u001b]0;pwned\u0007\u001b[31m red\nsecond\u202e line" },
     }));
+
     expect(await h.run(["mail", "text", "dl/1"])).toBe(EXIT.ok);
     // IDs are path segments, never extra path.
     expect(new URL(h.calls[0]!.url).pathname).toBe("/v1/mailboxes/mbx_1/deliveries/dl%2F1/text");
@@ -321,7 +336,7 @@ describe("CLI review fixes", () => {
       ["evt_1", "accept"],
       { occurrence: undefined },
       {
-        api: makeCliApi(
+        api: cliApiLayer(
           { apiUrl: "https://api.test", token: "t", mailboxId: "mbx_1", calendarId: "cal_1" },
           async (url, init) => {
             h.calls.push({
@@ -330,6 +345,7 @@ describe("CLI review fixes", () => {
               headers: init.headers,
               body: JSON.parse(init.body as string),
             });
+
             return {
               status: 200,
               headers: { get: () => "application/json" },
@@ -348,14 +364,16 @@ describe("CLI raw exports", () => {
   it("[E16] contacts export prints the vCard body verbatim", async () => {
     const vcard = "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Ana\r\nEND:VCARD\r\n";
     const out: Array<string> = [];
+
     const fetchImpl: FetchLike = async () => ({
       status: 200,
       headers: { get: () => "text/vcard" },
       text: async () => vcard,
     });
+
     const code = await runCli(
       ["contacts", "export"],
-      makeCliApi(
+      cliApiLayer(
         { apiUrl: "https://api.test", token: "t", mailboxId: "mbx_1", calendarId: undefined },
         fetchImpl,
       ),
@@ -365,6 +383,7 @@ describe("CLI raw exports", () => {
         newCommandId: () => "cmd_1",
       },
     );
+
     expect(code).toBe(0);
     expect(out[0]).toBe(vcard);
   });
@@ -375,25 +394,31 @@ describe("CLI upload", () => {
     const dir = await mkdtemp(join(tmpdir(), "bye-cli-"));
     const file = join(dir, "notes.txt");
     await writeFile(file, "x".repeat(25));
-    const calls: Array<{ method: string; url: string; size?: number }> = [];
+    const calls: Array<{ method: string; url: string; size?: number | undefined }> = [];
+
     const fetchImpl: FetchLike = async (url, init) => {
-      calls.push({
+      const call = {
         method: init.method,
         url,
-        ...(init.body instanceof Uint8Array ? { size: init.body.byteLength } : {}),
-      });
+        size: init.body instanceof Uint8Array ? init.body.byteLength : undefined,
+      };
+
+      calls.push(call);
+
       const body = url.endsWith("/v1/uploads")
         ? { uploadId: "upl_1", partSize: 10 }
         : { state: "complete" };
+
       return {
         status: 200,
         headers: { get: () => "application/json" },
         text: async () => JSON.stringify(body),
       };
     };
+
     const code = await runCli(
       ["upload", file],
-      makeCliApi(
+      cliApiLayer(
         { apiUrl: "https://api.test", token: "t", mailboxId: "mbx_1", calendarId: undefined },
         fetchImpl,
       ),
@@ -403,6 +428,7 @@ describe("CLI upload", () => {
         newCommandId: () => "cmd_1",
       },
     );
+
     expect(code).toBe(0);
     expect(
       calls.map((c) => `${c.method} ${new URL(c.url).pathname} ${c.size ?? ""}`.trim()),

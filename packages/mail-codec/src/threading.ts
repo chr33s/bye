@@ -6,11 +6,14 @@ const REPLY_PREFIX =
 
 export const normalizeSubject = (subject: string): string => {
   let current = subject.replace(/\s+/g, " ").trim();
+
   for (let i = 0; i < 20; i++) {
     const next = current.replace(REPLY_PREFIX, "");
+
     if (next === current) break;
     current = next;
   }
+
   return current.trim().toLowerCase();
 };
 
@@ -46,6 +49,7 @@ export interface ThreadMatch {
 }
 
 export const DEFAULT_SUBJECT_WINDOW_MS = 14 * 24 * 3600 * 1000;
+
 const MAX_REFERENCES_CHECKED = 100;
 
 /**
@@ -59,18 +63,25 @@ export const resolveThread = (
 ): ThreadMatch | undefined => {
   for (const id of candidate.inReplyTo) {
     const threadId = index.byMessageId(id);
+
     if (threadId) return { threadId, via: "in-reply-to" };
   }
+
   const refs = candidate.references.slice(-MAX_REFERENCES_CHECKED);
+
   for (let i = refs.length - 1; i >= 0; i--) {
     const threadId = index.byMessageId(refs[i]!);
+
     if (threadId) return { threadId, via: "references" };
   }
+
   if (!hasReplyPrefix(candidate.subject)) return undefined;
   const normalized = normalizeSubject(candidate.subject);
+
   if (normalized.length < 3) return undefined;
   const window = options.windowMs ?? DEFAULT_SUBJECT_WINDOW_MS;
   const participants = new Set(candidate.participants.map((p) => p.toLowerCase()));
+
   const matches = index
     .bySubject(normalized)
     .filter(
@@ -79,7 +90,9 @@ export const resolveThread = (
         e.participants.some((p) => participants.has(p.toLowerCase())),
     )
     .sort((a, b) => b.lastDate - a.lastDate);
+
   const best = matches[0];
+
   return best ? { threadId: best.threadId, via: "subject" } : undefined;
 };
 
@@ -92,8 +105,11 @@ export const replyReferences = (
   max = 20,
 ): Array<string> => {
   const refs = [...parent.references];
+
   if (parent.messageIdHeader) refs.push(parent.messageIdHeader);
+
   if (refs.length <= max) return refs;
+
   // Keep the root and the most recent ancestors (RFC 5322 §3.6.4 guidance).
   return [refs[0]!, ...refs.slice(refs.length - (max - 1))];
 };

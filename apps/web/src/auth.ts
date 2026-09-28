@@ -9,6 +9,7 @@ const b64urlToBytes = (value: string): Uint8Array<ArrayBuffer> => {
     .replace(/-/g, "+")
     .replace(/_/g, "/")
     .padEnd(Math.ceil(value.length / 4) * 4, "=");
+
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 };
 
@@ -24,6 +25,7 @@ export const signInWithPasskey = async (): Promise<void> => {
     "/auth/challenge",
     { purpose: "authenticate" },
   );
+
   const credential = (await navigator.credentials.get({
     publicKey: {
       challenge: b64urlToBytes(challenge),
@@ -32,6 +34,7 @@ export const signInWithPasskey = async (): Promise<void> => {
       timeout: 60_000,
     },
   })) as PublicKeyCredential | null;
+
   if (!credential) throw new Error("No passkey selected");
   const response = credential.response as AuthenticatorAssertionResponse;
   await api("POST", "/auth/passkey/login", {
@@ -57,6 +60,7 @@ export const signUpWithPasskey = async (
 ): Promise<void> => {
   let userId: string;
   let challenge: { id: string; challenge: string };
+
   if (pendingSignup?.address === address) {
     userId = pendingSignup.userId;
     challenge = await api<{ id: string; challenge: string }>("POST", "/auth/signup/challenge", {
@@ -74,10 +78,12 @@ export const signUpWithPasskey = async (
       ...(bootstrap ? { bootstrap } : { turnstile }),
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
+
     pendingSignup = { address, userId: created.userId, signupToken: created.signupToken };
     userId = created.userId;
     challenge = created.challenge;
   }
+
   const credential = (await navigator.credentials.create({
     publicKey: {
       challenge: b64urlToBytes(challenge.challenge),
@@ -89,6 +95,7 @@ export const signUpWithPasskey = async (
       timeout: 60_000,
     },
   })) as PublicKeyCredential | null;
+
   if (!credential) throw new Error("Passkey creation was cancelled");
   const response = credential.response as AuthenticatorAttestationResponse;
   await api("POST", "/auth/passkey/register", {
@@ -109,6 +116,7 @@ export const stepUpWithPasskey = async (): Promise<void> => {
     "/auth/step-up/challenge",
     {},
   );
+
   const credential = (await navigator.credentials.get({
     publicKey: {
       challenge: b64urlToBytes(challenge),
@@ -117,6 +125,7 @@ export const stepUpWithPasskey = async (): Promise<void> => {
       timeout: 60_000,
     },
   })) as PublicKeyCredential | null;
+
   if (!credential) throw new Error("Step-up cancelled");
   const response = credential.response as AuthenticatorAssertionResponse;
   await api("POST", "/auth/step-up/passkey", {
@@ -133,8 +142,8 @@ export const stepUpWithPasskey = async (): Promise<void> => {
 export const recoverWithCode = (address: string, code: string) =>
   api("POST", "/auth/recover", { address, code });
 
-export const isSignedOut = (error: unknown): boolean =>
-  error instanceof ApiRequestError && error.status === 401;
+export const isSignedOut = (cause: unknown): boolean =>
+  cause instanceof ApiRequestError && cause.status === 401;
 
 /** Add a passkey or security key to the signed-in account (A03). Requires a recent step-up. */
 export const addPasskey = async (
@@ -147,6 +156,7 @@ export const addPasskey = async (
     "/v1/security/passkeys/challenge",
     {},
   );
+
   const credential = (await navigator.credentials.create({
     publicKey: {
       challenge: b64urlToBytes(challenge),
@@ -158,6 +168,7 @@ export const addPasskey = async (
       timeout: 60_000,
     },
   })) as PublicKeyCredential | null;
+
   if (!credential) throw new Error("Passkey creation was cancelled");
   const response = credential.response as AuthenticatorAttestationResponse;
   await api("POST", "/v1/security/passkeys", {
@@ -180,11 +191,13 @@ export const clearLocalData = async (): Promise<void> => {
   } catch {
     // Storage blocked: nothing was stored.
   }
+
   try {
     sessionStorage.clear();
   } catch {
     // ignore
   }
+
   await new Promise<void>((resolve) => {
     try {
       const request = indexedDB.deleteDatabase("bye-drafts");
@@ -194,6 +207,7 @@ export const clearLocalData = async (): Promise<void> => {
       resolve();
     }
   });
+
   try {
     if ("caches" in globalThis)
       await Promise.all((await caches.keys()).map((key) => caches.delete(key)));
@@ -216,9 +230,12 @@ const storedOwner = (): string | null => {
  */
 export const bindLocalOwner = async (userId: string): Promise<void> => {
   const action = localOwnerAction(storedOwner(), userId);
+
   if (action === "keep") return;
+
   if (action === "wipe") await clearLocalData();
   else await pruneUnownedDrafts().catch(() => undefined);
+
   try {
     localStorage.setItem(LOCAL_OWNER_KEY, userId);
   } catch {
@@ -243,12 +260,15 @@ export const onSignedOut = async (): Promise<void> => {
  */
 export const logout = async (): Promise<void> => {
   let revoked = true;
+
   try {
     await api("POST", "/auth/logout", {});
   } catch {
     revoked = false;
   }
+
   await clearLocalData();
+
   if (!revoked)
     throw new Error(
       "Couldn't reach the server to end this session. Local data was cleared; try again when online.",

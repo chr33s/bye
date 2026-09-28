@@ -60,8 +60,9 @@ export const childEnv = (
   ctx: ExecutionContext,
   parent: Readonly<Record<string, string | undefined>>,
   extra: Readonly<Record<string, string>> = {},
-): Record<string, string> => {
+) => {
   const env: Record<string, string> = {};
+
   for (const k of PASSTHROUGH) if (parent[k] !== undefined) env[k] = parent[k]!;
   Object.assign(env, REQUIRED_DEPLOY_ENV, ctx.config, extra, {
     HOME: ctx.homeDir,
@@ -72,18 +73,23 @@ export const childEnv = (
     CLOUDFLARE_API_TOKEN: ctx.apiToken,
     STATE_BACKEND: "cloudflare",
   });
+
   for (const k of FORCED_EMPTY) env[k] = "";
   // Only the installation's own chosen hostname, never a value inherited from elsewhere.
   env.APP_DOMAIN = ctx.config.APP_DOMAIN ?? "";
+
   return env;
 };
 
 /** Replaces every secret value (token, runtime secrets) in a line of child output. */
 export const redactor = (secrets: ReadonlyArray<string>) => {
   const values = secrets.filter((s) => s.length >= 8).sort((a, b) => b.length - a.length);
+
   return (line: string): string => {
     let out = line;
+
     for (const v of values) out = out.split(v).join("[redacted]");
+
     // Bearer headers or token assignments from any tool that echoes them.
     return out.replace(/(bearer\s+|token["'=:\s]+)[A-Za-z0-9._~+/-]{16,}/gi, "$1[redacted]");
   };
@@ -100,15 +106,19 @@ const run = (
   new Promise((resolve) => {
     const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let aborted = false;
+
     const abort = () => {
       aborted = true;
       child.kill("SIGTERM");
     };
+
     if (signal.aborted) abort();
     else signal.addEventListener("abort", abort, { once: true });
+
     const lines = (chunk: Buffer) => {
       for (const l of encode(chunk, "utf8").split("\n")) if (l.trim() !== "") onLine(l);
     };
+
     child.stdout.on("data", lines);
     child.stderr.on("data", lines);
     child.on("error", () => resolve({ code: null, aborted }));
@@ -126,6 +136,7 @@ export const processExecutor = (
     const out = mkdtempSync(join(ctx.homeDir, "plan-"));
     const redact = redactor([ctx.apiToken, ...Object.values(ctx.config)]);
     const tail: Array<string> = [];
+
     try {
       // The plan hashes the web assets and the MIME container context, so build them first
       // exactly as `pnpm run deploy` will (build:web + build:mime).
@@ -137,9 +148,12 @@ export const processExecutor = (
         ctx.signal,
         (l) => tail.push(redact(l)),
       );
+
       if (built.aborted) throw new Error("planning was cancelled");
+
       if (built.code !== 0)
         throw new Error(`build failed: ${tail.slice(-5).join(" | ") || `exit ${built.code}`}`);
+
       const r = await run(
         process.execPath,
         ["--experimental-strip-types", "infra/policies/plan-export.ts", out, "deploy"],
@@ -148,9 +162,12 @@ export const processExecutor = (
         ctx.signal,
         (l) => tail.push(redact(l)),
       );
+
       if (r.aborted) throw new Error("planning was cancelled");
+
       if (r.code !== 0)
         throw new Error(`planning failed: ${tail.slice(-5).join(" | ") || `exit ${r.code}`}`);
+
       return JSON.parse(readFileSync(join(out, "plan-export.json"), "utf8")) as ExportedPlan;
     } finally {
       rmSync(out, { recursive: true, force: true });
@@ -159,6 +176,7 @@ export const processExecutor = (
   async apply(ctx, onLine) {
     mkdirSync(ctx.homeDir, { recursive: true, mode: 0o700 });
     const redact = redactor([ctx.apiToken, ...Object.values(ctx.config)]);
+
     const r = await run(
       "pnpm",
       ["run", "deploy"],
@@ -171,6 +189,7 @@ export const processExecutor = (
       ctx.signal,
       (l) => onLine(redact(l)),
     );
+
     return {
       ok: r.code === 0 && !r.aborted,
       aborted: r.aborted,

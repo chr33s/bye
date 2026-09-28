@@ -1,23 +1,41 @@
+import { Predicate } from "effect";
 import { describe, expect, it } from "vitest";
 import { crc32Update, safeZipName, zipStream } from "@bye/platform-cloudflare";
 import { deliveryFixture, makeTestMailbox, summaryFixture } from "@bye/testing";
 import { Rejection } from "@bye/platform-cloudflare";
+import type { MailboxDraftContent } from "@bye/platform-cloudflare";
+import type { MessageSummary } from "@bye/mail-codec";
+
+/** The payload fields these tests read from outbox events. */
+interface OutboxPayload {
+  readonly id?: string;
+  readonly summary?: MessageSummary;
+  readonly transferId?: string;
+  readonly messageKey?: string;
+  readonly rawSize?: number;
+  readonly sendJobId?: string;
+}
 
 const setup = (mailboxId?: string) => {
   const m = makeTestMailbox(mailboxId);
+
   const deliver = (
     over: Parameters<typeof summaryFixture>[0] = {},
     extra: Parameters<typeof deliveryFixture>[2] = {},
   ) => {
     m.clock.advance(1000);
+
     return m.store.ingest.commitDelivery(deliveryFixture(m.clock, summaryFixture(over), extra));
   };
+
   const allow = (sender: string) =>
     m.store.screener.screen([{ sender, decision: "allow", destination: "imbox" }]);
+
   const outbox = (topic?: string) =>
     m.store.kernel.pendingOutbox(1000).filter((e) => !topic || e.topic === topic);
-  const payloads = (topic: string) =>
-    outbox(topic).map((e) => e.payload as Record<string, unknown>);
+
+  const payloads = (topic: string) => outbox(topic).map((e) => e.payload as OutboxPayload);
+
   return { ...m, deliver, allow, outbox, payloads };
 };
 
@@ -27,11 +45,13 @@ describe("screener bypass (P0 #1)", () => {
     m.allow("alice@example.com");
     const t = m.deliver({ fromAddress: "alice@example.com", messageIdHeader: "known@x" });
     expect(t.disposition).toBe("active");
+
     const guess = m.deliver({
       fromAddress: "mallory@evil.test",
       inReplyTo: ["known@x"],
       references: ["known@x"],
     });
+
     expect(guess.disposition).toBe("screening");
     expect(guess.threadId).not.toBe(t.threadId);
   });
@@ -39,49 +59,60 @@ describe("screener bypass (P0 #1)", () => {
   it("a prior participant replying on the thread joins it without screening", () => {
     const m = setup();
     m.allow("alice@example.com");
+
     const t = m.deliver({
       fromAddress: "alice@example.com",
       messageIdHeader: "root@x",
       cc: [{ name: undefined, address: "carol@example.com" }],
     });
+
     // Before we take part, even a cc'd address is screened.
     expect(m.deliver({ fromAddress: "carol@example.com", inReplyTo: ["root@x"] }).disposition).toBe(
       "screening",
     );
+
     const draftId = m.store.drafts.createReplyDraft(
       t.threadId,
       "reply",
       m.store.views.getThread(t.threadId).deliveries,
     );
+
     const sent = m.store.sends.send(draftId, { expectedRevision: 1, undoMs: 0 });
-    if (sent._tag !== "Queued") throw new Error(sent._tag);
+
+    if (!Predicate.isTagged(sent, "Queued")) throw new Error(sent._tag);
     m.store.runDueJobs(m.clock.now() + 60_000);
     m.store.sends.claim(sent.sendJobIds[0]!);
     m.store.sends.accepted(sent.sendJobIds[0]!, { providerId: "p1" });
+
     const reply = m.deliver({
       fromAddress: "carol@example.com",
       inReplyTo: ["root@x"],
       references: ["root@x"],
     });
+
     expect(reply.disposition).toBe("active");
     expect(reply.threadId).toBe(t.threadId);
   });
 
   it("[C04] an iTIP REPLY confirmed by the calendar bypasses the Screener; a REQUEST never does", () => {
     const m = setup();
+
     const reply = summaryFixture({
       fromAddress: "guest@example.com",
       hasCalendar: true,
       calendarMethod: "REPLY",
     });
+
     const ingest = deliveryFixture(m.clock, reply, { calendarOrganizerReply: true });
     expect(m.store.ingest.needsOrganizerCheck(reply, ingest.ingestionId)).toBe(true);
     expect(m.store.ingest.commitDelivery(ingest).disposition).toBe("active");
+
     // The flag is ignored for REQUESTs, and unconfirmed replies wait in the Screener.
     const request = m.deliver(
       { fromAddress: "x@example.com", hasCalendar: true, calendarMethod: "REQUEST" },
       { calendarOrganizerReply: true },
     );
+
     expect(request.disposition).toBe("screening");
     expect(
       m.deliver({ fromAddress: "y@example.com", hasCalendar: true, calendarMethod: "REPLY" })
@@ -188,13 +219,14 @@ describe("redelivery (P0 #4, E22)", () => {
       summary: src.store.ingest.deliverySummary(d.deliveryId),
     });
     const [p] = src.payloads("mailbox.redeliver");
-    const summary = p!.summary as ReturnType<typeof src.store.ingest.deliverySummary>;
+    const summary = p!.summary!;
     expect(summary).toMatchObject({
       subject: "Quarterly report",
       from: { address: "alice@example.com" },
     });
 
     const dst = setup("mbx_dst00000000000000000000");
+
     const r = dst.store.ingest.commitDelivery({
       ingestionId: `xfer:${String(p!.transferId)}`,
       recipient: "",
@@ -205,6 +237,7 @@ describe("redelivery (P0 #4, E22)", () => {
       receivedAt: dst.clock.now(),
       authorizedTransfer: true,
     });
+
     expect(r).toMatchObject({ disposition: "active", decidedBy: "transfer" });
     expect(dst.store.views.getThread(r.threadId).thread.subject).toBe("Quarterly report");
   });
@@ -279,23 +312,27 @@ describe("views and seen state (P0 #5)", () => {
 describe("export manifest paging (P0 #11)", () => {
   it("pages through every delivery without a silent cap", () => {
     const m = setup();
+
     for (let i = 0; i < 230; i++) m.deliver({ fromAddress: `s${i}@example.com` });
     const seen = new Set<string>();
     let cursor: string | null = null;
     let pages = 0;
+
     do {
       const page = m.store.retention.exportManifestPage(cursor, 100);
+
       for (const d of page.deliveries) seen.add(d.deliveryId);
       cursor = page.nextCursor;
       pages++;
     } while (cursor);
+
     expect(seen.size).toBe(230);
     expect(pages).toBe(3);
   });
 });
 
 describe("sending gaps (P0 #6, #14, E17, E19)", () => {
-  const draftTo = (m: ReturnType<typeof setup>, content: Record<string, unknown>) =>
+  const draftTo = (m: ReturnType<typeof setup>, content: Partial<MailboxDraftContent>) =>
     m.store.drafts.createDraft({
       content: {
         to: [],
@@ -320,7 +357,8 @@ describe("sending gaps (P0 #6, #14, E17, E19)", () => {
     const m = setup();
     const { draftId } = draftTo(m, { to: [{ name: undefined, address: "bob@example.com" }] });
     const r = m.store.sends.send(draftId, { expectedRevision: 1, undoMs: 0 });
-    if (r._tag !== "Queued") throw new Error(r._tag);
+
+    if (!Predicate.isTagged(r, "Queued")) throw new Error(r._tag);
     m.store.runDueJobs(m.clock.now() + 60_000);
     m.store.kernel.markPublished(m.outbox().map((e) => e.eventId));
     expect(m.store.sends.replayStaleDispatches(m.clock.now(), 10 * 60_000)).toEqual([]);
@@ -333,12 +371,15 @@ describe("sending gaps (P0 #6, #14, E17, E19)", () => {
     const m = setup();
     m.store.organize.putContact({ name: "Ann", emails: ["ann@example.com"], groups: ["team"] });
     m.store.organize.putContact({ name: "Ben", emails: ["ben@example.com"], groups: ["team"] });
+
     const { draftId } = draftTo(m, {
       to: [{ name: undefined, address: "ann@example.com" }],
       groups: ["team"],
     });
+
     const r = m.store.sends.send(draftId, { expectedRevision: 1, undoMs: 0 });
-    if (r._tag !== "Queued") throw new Error(r._tag);
+
+    if (!Predicate.isTagged(r, "Queued")) throw new Error(r._tag);
     const job = m.store.sends.job(r.sendJobIds[0]!)!;
     expect([...job.recipients].sort()).toEqual(["ann@example.com", "ben@example.com"]);
     const { draftId: bad } = draftTo(m, { groups: ["nobody"] });
@@ -348,11 +389,13 @@ describe("sending gaps (P0 #6, #14, E17, E19)", () => {
   it("external send-as needs the mailed challenge code; wrong codes never verify", () => {
     const m = setup();
     const id = m.store.identities.addIdentity({ address: "me@gmail.test", kind: "external" });
+
     const token = (
       m.storage.sql
         .exec("SELECT challenge_token FROM identities WHERE identity_id = ?", id)
         .toArray()[0] as { challenge_token: string }
     ).challenge_token;
+
     expect(m.store.identities.verifyIdentity(id, "wrong-code")).toEqual({ verified: false });
     expect(m.store.identities.identities().find((i) => i.identityId === id)!.verified).toBe(false);
     expect(m.store.identities.verifyIdentity(id, token)).toEqual({ verified: true });
@@ -362,6 +405,7 @@ describe("sending gaps (P0 #6, #14, E17, E19)", () => {
 
 describe("streaming zip", () => {
   const bytes = (s: string) => new TextEncoder().encode(s);
+
   const one = (b: Uint8Array) =>
     new ReadableStream<Uint8Array>({ start: (c) => (c.enqueue(b), c.close()) });
 
@@ -370,6 +414,7 @@ describe("streaming zip", () => {
       { name: "a.txt", modified: Date.UTC(2026, 0, 1), open: async () => one(bytes("hello")) },
       { name: "b.txt", modified: Date.UTC(2026, 0, 1), open: async () => one(bytes("world!")) },
     ];
+
     const out = new Uint8Array(await new Response(zipStream(entries)).arrayBuffer());
     const view = new DataView(out.buffer);
     expect(view.getUint32(0, true)).toBe(0x04034b50);

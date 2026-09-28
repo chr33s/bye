@@ -4,7 +4,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // MAX_BYTES is read at module load, so the env var is stubbed before the dynamic import.
 const LIMIT = 1024;
+
 let server: Server;
+
 let port: number;
 
 beforeAll(async () => {
@@ -35,7 +37,9 @@ const post = (
         res.on("error", reject);
       },
     );
+
     req.on("error", reject);
+
     for (const chunk of body) req.write(chunk);
     req.end();
   });
@@ -55,6 +59,7 @@ describe("MIME container body limit", () => {
       Array.from({ length: 4 }, () => "x".repeat(LIMIT / 2)),
       { "transfer-encoding": "chunked" },
     );
+
     expect(res.status).toBe(413);
     expect(JSON.parse(res.body)).toEqual({ error: "too large" });
   });
@@ -62,10 +67,12 @@ describe("MIME container body limit", () => {
   it("parses a body at or under the limit", async () => {
     const res = await post([small], { "content-length": String(small.length) });
     expect(res.status).toBe(200);
+
     const [meta] = res.body
       .trim()
       .split("\n")
       .map((l) => JSON.parse(l));
+
     expect(meta.type).toBe("meta");
     expect(meta.summary.subject).toBe("hi");
   });

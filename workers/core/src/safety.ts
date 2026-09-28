@@ -49,66 +49,92 @@ const parseAuthResults = (
   let authserv = "";
   let pairs: Array<[string, string]> | undefined;
   let i = 0;
+
   const skip = (): boolean => {
     for (;;) {
       while (i < value.length && /\s/.test(value[i]!)) i++;
+
       if (value[i] !== "(") return true;
       let depth = 0;
+
       for (; i < value.length; i++) {
         const ch = value[i]!;
+
         if (ch === "\\") i++;
         else if (ch === "(") depth++;
         else if (ch === ")" && --depth === 0) break;
       }
+
       if (depth !== 0) return false;
       i++;
     }
   };
+
   const word = (): string | undefined => {
     if (value[i] === '"') {
       let out = "";
+
       for (i++; i < value.length; i++) {
         const ch = value[i]!;
+
         if (ch === "\\") out += value[++i] ?? "";
         else if (ch === '"') {
           i++;
+
           return out;
         } else out += ch;
       }
+
       return undefined;
     }
+
     const start = i;
+
     while (i < value.length && !/[\s;=()"]/.test(value[i]!)) i++;
+
     return value.slice(start, i);
   };
+
   for (;;) {
     if (!skip()) return undefined;
+
     if (i >= value.length) break;
+
     if (value[i] === ";") {
       i++;
       pairs = [];
       segments.push(pairs);
       continue;
     }
+
     const key = word();
+
     if (key === undefined) return undefined;
+
     if (!skip()) return undefined;
+
     if (pairs === undefined) {
       // authserv-id (optionally followed by a version); nothing else precedes the first ';'.
       if (!authserv) authserv = key.toLowerCase();
+
       if (key === "" && value[i] !== ";") i++;
       continue;
     }
+
     if (value[i] !== "=") {
       if (key === "") i++;
       continue;
     }
+
     i++;
+
     if (!skip()) return undefined;
     const val = word();
+
     if (val === undefined) return undefined;
     pairs.push([key.toLowerCase(), val]);
   }
+
   return { authserv, resinfo: segments };
 };
 
@@ -120,26 +146,36 @@ export const trustedAuthenticationResults = (
   // Received was written by an earlier hop — possibly the sender — and is never trusted, even
   // with a matching authserv-id (which anyone can write).
   let received = 0;
+
   for (const [name, value] of headers) {
     const lower = name.toLowerCase();
+
     if (lower === "received" && ++received > 1) return undefined;
+
     if (lower !== "authentication-results") continue;
     const authserv = value.split(";")[0]?.trim().toLowerCase() ?? "";
+
     if (!TRUSTED_AUTHSERV_IDS.includes(authserv)) return undefined;
     const parsed = parseAuthResults(value);
+
     // Our authserv-id but an unparseable body: fail closed rather than guess at the verdict.
     if (!parsed || parsed.authserv !== authserv)
       return { spf: undefined, dkim: undefined, dmarc: "fail", headerFrom: undefined };
+
     // A method result is only ever the first token of its own resinfo (`method[/version]=result`).
     const results = (method: string) =>
       parsed.resinfo.filter((r) => r[0]?.[0]?.replace(/\/.*$/, "") === method);
+
     const first = (method: string) => results(method)[0]?.[0]?.[1]?.toLowerCase();
     const dmarc = results("dmarc");
+
     const headerFroms = dmarc.flatMap((r) =>
       r.slice(1).flatMap(([k, v]) => (k === "header.from" ? [v.trim().toLowerCase()] : [])),
     );
+
     // More than one DMARC evaluation (or more than one evaluated From) is ambiguous: treat as fail.
     const ambiguous = dmarc.length > 1 || headerFroms.length > 1;
+
     return {
       spf: first("spf"),
       dkim: first("dkim"),
@@ -147,6 +183,7 @@ export const trustedAuthenticationResults = (
       headerFrom: ambiguous ? undefined : headerFroms[0],
     };
   }
+
   return undefined;
 };
 
@@ -154,20 +191,28 @@ const spoofed = (reason: string): SafetyVerdict => ({ _tag: "Spoofed", reason })
 
 export const safetyVerdict = (parsed: ParsedMessage): SafetyVerdict => {
   const auth = trustedAuthenticationResults(parsed.headers);
+
   if (auth?.dmarc === "fail") return spoofed("dmarc=fail");
   // Sender policy is keyed on the parsed From, so it must be the identity DMARC authenticated.
   // Several From headers (including `From :` variants, which the header parser normalizes) let
   // the MTA and this parser disagree about which one counts.
   const fromHeaders = headerValues(parsed.headers, "from");
+
   if (fromHeaders.length !== 1) return spoofed("missing or multiple From headers");
+
   if (auth?.headerFrom !== undefined) {
     const from = parseAddressList(fromHeaders[0], [])[0]?.address ?? "";
     const evaluated = domainOf(`@${auth.headerFrom.replace(/\.$/, "")}`);
+
     if (!from || domainOf(from) !== evaluated)
       return spoofed("From does not match dmarc header.from");
   }
+
   const risky = parsed.attachments.find((a) => DANGEROUS_EXTENSIONS.test(a.filename));
+
   if (risky) return { _tag: "Malware", reason: "executable attachment quarantined" };
+
   if (parsed.truncated) return { _tag: "Spam", reason: "limits exceeded; quarantined for review" };
+
   return { _tag: "Clean" };
 };

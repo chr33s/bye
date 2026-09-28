@@ -18,8 +18,10 @@ import {
   releaseLease,
   renewLease,
 } from "../lease.ts";
+import type { JsonValue } from "../core.ts";
+import type { LeaseHolderBody } from "../lease.ts";
 import { envLines, readStackOutput } from "../output.ts";
-import { verifyStateWorker } from "../verify-worker.ts";
+import { verifyStateWorker, type StateVersionBody } from "../verify-worker.ts";
 
 // CI gates around the self-hosted state backend (§15.6 serialized writers, §15.7 deployed-artifact check).
 
@@ -29,25 +31,30 @@ const backend = (build?: string) => {
   const env: StateEnv = {
     STATE_TOKEN: TOKEN,
     STATE_ENCRYPTION_KEY: `v1:${"22".repeat(32)}`,
-    ...(build ? { STATE_BUILD_HASH: build } : {}),
+    STATE_BUILD_HASH: build || undefined,
     STATE: { getByName: () => object },
   };
+
   const object = new StateStoreObject({ storage: new MemoryDurableStorage() as never }, env);
+
   const fetcher = async (
     url: string,
     init: Parameters<LeaseFetcher>[1] = { method: "GET", headers: {} },
-  ): ReturnType<LeaseFetcher> => {
+  ): Promise<{ status: number; json(): Promise<LeaseHolderBody & StateVersionBody> }> => {
     const r = await handleStateRequest(
       new Request(url, {
         method: init.method,
         headers: init.headers,
-        ...(init.body ? { body: init.body } : {}),
+        body: init.body || undefined,
       }),
       env,
     );
+
     const text = await r.text();
+
     return { status: r.status, json: async () => (text ? JSON.parse(text) : {}) };
   };
+
   return { fetcher };
 };
 
@@ -55,15 +62,19 @@ describe("state backend CI scripts", () => {
   it("[A04] the build hash covers every local module the state Worker imports", () => {
     const dir = join(import.meta.dirname, "..");
     const seen = new Set<string>();
+
     const visit = (file: string): void => {
       const path = normalize(file);
+
       if (seen.has(path)) return;
       seen.add(path);
+
       for (const [, spec] of readFileSync(join(dir, path), "utf8").matchAll(
         /^import[^"']*["'](\.[^"']+)["']/gm,
       ))
         visit(join(dirname(path), spec!));
     };
+
     visit("worker.ts");
     expect([...seen].sort()).toEqual(STATE_WORKER_SOURCES.map((f) => normalize(f)).sort());
   });
@@ -74,22 +85,27 @@ describe("state backend CI scripts", () => {
     expect(
       (await verifyStateWorker("https://state.test", (u) => backend(hash).fetcher(u))).ok,
     ).toBe(true);
+
     const drifted = await verifyStateWorker("https://state.test", (u) =>
       backend("0".repeat(64)).fetcher(u),
     );
+
     expect(drifted.ok).toBe(false);
     expect(drifted.problems.join()).toContain("reviewed source");
     expect((await verifyStateWorker("https://state.test", (u) => backend().fetcher(u))).ok).toBe(
       false,
     );
+
     const down = await verifyStateWorker("https://state.test", async () =>
       Promise.reject(new Error("ECONNREFUSED")),
     );
+
     expect(down.problems.join()).toContain("unreachable");
   });
 
   it("[A04] lease: a competing writer waits and then fails closed; the holder releases; expired release is tolerated", async () => {
     const { fetcher } = backend(stateBuildHash());
+
     const o = {
       baseUrl: "https://state.test",
       token: TOKEN,
@@ -98,6 +114,7 @@ describe("state backend CI scripts", () => {
       pollMs: 10,
       sleep: async () => undefined,
     };
+
     expect(await acquireLease(o, "MailboxPlatform", "prod", "gha-1")).toMatchObject({ ok: true });
     const second = await acquireLease(o, "MailboxPlatform", "prod", "gha-2");
     expect(second.ok).toBe(false);
@@ -106,22 +123,27 @@ describe("state backend CI scripts", () => {
     expect(await acquireLease(o, "MailboxPlatform", "prod", "gha-2")).toMatchObject({ ok: true });
     // Releasing a lease we no longer hold (e.g. it expired) must not fail the job.
     expect((await releaseLease(o, "MailboxPlatform", "prod", "gha-1")).ok).toBe(true);
+
     const badToken = await acquireLease(
       { ...o, token: "wrong" },
       "MailboxPlatform",
       "prod",
       "gha-3",
     );
+
     expect(badToken).toMatchObject({ ok: false, detail: "lease request failed with 401" });
   });
 
   it("[A04] lease heartbeat: renewals keep a long deploy's lease; a lost lease stops the heartbeat", async () => {
     const { fetcher } = backend(stateBuildHash());
     const calls: Array<string> = [];
+
     const counting: LeaseFetcher = async (url, init) => {
       calls.push(`${init.method} ${init.body ?? ""}`);
+
       return fetcher(url, init);
     };
+
     const o = { baseUrl: "https://state.test", token: TOKEN, fetcher: counting };
     expect(await acquireLease(o, "MailboxPlatform", "prod", "gha-1")).toMatchObject({ ok: true });
     // Every request asks for the full TTL, so each renewal pushes expiry out again.
@@ -140,6 +162,7 @@ describe("state backend CI scripts", () => {
     // Heartbeat: three ticks, then the job ends (abort) — the lease was renewed each tick.
     const stop = new AbortController();
     let ticks = 0;
+
     const beat = await heartbeatLease(
       {
         ...o,
@@ -152,6 +175,7 @@ describe("state backend CI scripts", () => {
       "gha-1",
       { signal: stop.signal },
     );
+
     expect(beat).toEqual({ ok: true, detail: "stopped", renewals: 3 });
 
     // The heartbeat of a holder that lost its lease (expired and taken) stops and reports it.
@@ -161,6 +185,7 @@ describe("state backend CI scripts", () => {
       "prod",
       "gha-stale",
     );
+
     expect(lost).toMatchObject({ ok: false, renewals: 0, detail: "lease lost to gha-1" });
 
     // Transient failures are retried, never treated as a lost lease.
@@ -170,6 +195,7 @@ describe("state backend CI scripts", () => {
       "prod",
       "gha-1",
     );
+
     expect(flaky).toMatchObject({ ok: false, lost: false });
     expect((await releaseLease(o, "MailboxPlatform", "prod", "gha-1")).ok).toBe(true);
   });
@@ -179,19 +205,22 @@ describe("per-stage state tokens (prod state unreachable from nonprod CI)", () =
   const PROD = "prod-token-0123456789abcdef";
   const NONPROD = "nonprod-token-0123456789abcdef";
   const OPERATOR = "operator-token-0123456789abcdef";
+
   const scoped = () => {
     const env: StateEnv = {
       STATE_TOKEN: `prod=${PROD}, staging|preview-*|dev-*=${NONPROD},${OPERATOR}`,
       STATE_ENCRYPTION_KEY: `v1:${"33".repeat(32)}`,
       STATE: { getByName: () => object },
     };
+
     const object = new StateStoreObject({ storage: new MemoryDurableStorage() as never }, env);
-    return (token: string, method: string, path: string, body?: unknown) =>
+
+    return (token: string, method: string, path: string, body?: JsonValue) =>
       handleStateRequest(
         new Request(`https://state.test${path}`, {
           method,
           headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          body: body === undefined ? undefined : JSON.stringify(body),
         }),
         env,
       ).then((r) => r.status);
@@ -260,22 +289,27 @@ describe("stack output reader (canary version pin)", () => {
       STATE_ENCRYPTION_KEY: `v1:${"44".repeat(32)}`,
       STATE: { getByName: () => object },
     };
+
     const object = new StateStoreObject({ storage: new MemoryDurableStorage() as never }, env);
+
     const fetcher = async (
       url: string,
       init: { headers: Record<string, string>; method?: string; body?: string },
     ) => handleStateRequest(new Request(url, init), env);
+
     const path = "https://state.test/state/stacks/MailboxPlatform/stages/prod/output";
     await fetcher(path, {
       method: "PUT",
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
       body: JSON.stringify({ coreWorkerName: "core-w", coreVersionId: "abcd-1234", n: 1 }),
     });
+
     const output = await readStackOutput(
       { baseUrl: "https://state.test", token: TOKEN, fetcher },
       "MailboxPlatform",
       "prod",
     );
+
     expect(
       envLines(output, [
         "coreWorkerName=PROBE_WORKER_NAME",

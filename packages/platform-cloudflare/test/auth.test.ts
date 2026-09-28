@@ -1,3 +1,4 @@
+import type { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   base32Decode,
@@ -33,6 +34,7 @@ const RP = { rpId: "bye.test", origins: ["https://app.bye.test"], requireUserVer
 const setup = async () => {
   const d1 = MemoryD1.migrated();
   const clock = new TestClock();
+
   const keys = {
     current: 2,
     keys: {
@@ -40,12 +42,15 @@ const setup = async () => {
       2: crypto.getRandomValues(new Uint8Array(32)),
     },
   };
+
   const auth = new ControlAuth(d1, clock, { rp: RP, totpKeys: keys, recoveryPepper: "pepper" });
   const dir = new ControlDirectory(d1, clock);
+
   const account = await dir.provisionPersonalAccount({
     address: "alice@bye.test",
     displayName: "Alice",
   });
+
   return { d1, clock, auth, dir, account, keys };
 };
 
@@ -55,14 +60,18 @@ const authenticator = async () => {
     "sign",
     "verify",
   ]);
+
   const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+
   const b64 = (s: string) =>
     Uint8Array.from(
       atob(s.replace(/-/g, "+").replace(/_/g, "/") + "==".slice(0, (4 - (s.length % 4)) % 4)),
       (c) => c.charCodeAt(0),
     );
+
   const credId = crypto.getRandomValues(new Uint8Array(16));
   let counter = 0;
+
   const authData = async (
     attested: boolean,
     {
@@ -74,7 +83,9 @@ const authenticator = async () => {
     const rpHash = await sha256(rpId);
     const count = new Uint8Array(4);
     new DataView(count.buffer).setUint32(0, counter);
+
     if (!attested) return concatBytes(rpHash, new Uint8Array([flags]), count);
+
     const cose = cborEncode(
       new Map<CborValue, CborValue>([
         [1, 2],
@@ -84,7 +95,9 @@ const authenticator = async () => {
         [-3, b64(jwk.y!)],
       ]),
     );
+
     const idLen = new Uint8Array([0, credId.length]);
+
     return concatBytes(
       rpHash,
       new Uint8Array([flags | 0x40]),
@@ -95,12 +108,14 @@ const authenticator = async () => {
       cose,
     );
   };
+
   const clientData = (
     type: string,
     challenge: string,
     origin = RP.origins[0]!,
-    extra: Record<string, unknown> = {},
+    extra: Record<string, Schema.Json> = {},
   ) => utf8(JSON.stringify({ type, challenge, origin, ...extra }));
+
   /** Tamper knobs for negative ceremonies; defaults produce a valid response. */
   interface Tamper {
     readonly type?: string;
@@ -109,6 +124,7 @@ const authenticator = async () => {
     readonly flags?: number;
     readonly rpId?: string;
   }
+
   return {
     credentialId: toBase64Url(credId),
     register: async (challenge: string, opts: Tamper & { fmt?: string; alg?: number } = {}) => ({
@@ -133,12 +149,14 @@ const authenticator = async () => {
     assert: async (challenge: string, opts: Tamper & { counter?: number } = {}) => {
       counter = opts.counter ?? counter + 1;
       const ad = await authData(false, opts);
+
       const cd = clientData(
         opts.type ?? "webauthn.get",
         challenge,
         opts.origin,
         opts.crossOrigin === undefined ? {} : { crossOrigin: opts.crossOrigin },
       );
+
       const sig = new Uint8Array(
         await crypto.subtle.sign(
           { name: "ECDSA", hash: "SHA-256" },
@@ -146,6 +164,7 @@ const authenticator = async () => {
           concatBytes(ad, await sha256(cd)),
         ),
       );
+
       return {
         credentialId: toBase64Url(credId),
         clientDataJSON: toBase64Url(cd),
@@ -156,7 +175,7 @@ const authenticator = async () => {
   };
 };
 
-const code = (err: unknown) => (err instanceof Rejection ? err.code : String(err));
+const code = <Caught>(err: Caught) => (err instanceof Rejection ? err.code : String(err));
 
 describe("authentication", () => {
   it("[A03] registers a passkey and signs in with an ES256 assertion; challenges are single-use", async () => {
@@ -222,15 +241,19 @@ describe("authentication", () => {
     // the stored 0, so only the counter CAS can tell them apart.
     const a1 = await device.assert(c1.challenge, { counter: 3 });
     const a2 = await device.assert(c2.challenge, { counter: 3 });
+
     const results = await Promise.allSettled([
       auth.authenticatePasskey(c1.id, a1, "a"),
       auth.authenticatePasskey(c2.id, a2, "b"),
     ]);
+
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+
     const sessions = await d1
       .prepare("SELECT COUNT(*) AS n FROM sessions WHERE user_id = ?")
       .bind(account.userId)
       .first<{ n: number }>();
+
     expect(sessions?.n).toBe(1);
   });
 
@@ -239,6 +262,7 @@ describe("authentication", () => {
     const device = await authenticator();
     const reg = await auth.beginChallenge("register", account.userId);
     await auth.registerPasskey(account.userId, reg.id, await device.register(reg.challenge));
+
     for (const name of ["a", "b"]) {
       const c = await auth.beginChallenge("authenticate");
       await auth.authenticatePasskey(c.id, await device.assert(c.challenge, { counter: 0 }), name);
@@ -264,6 +288,7 @@ describe("authentication", () => {
         keys: { ...keys.keys, 3: crypto.getRandomValues(new Uint8Array(32)) },
       },
     });
+
     expect(await rotated.rotateTotpKeys()).toBe(1);
     clock.advance(30_000);
     await rotated.stepUpWithTotp(session.id, await current());
@@ -273,11 +298,13 @@ describe("authentication", () => {
     const { auth, account } = await setup();
     const codes = await auth.generateRecoveryCodes(account.userId);
     const old = await auth.issueSession(account.userId, "stolen-laptop");
+
     const recovered = await auth.recoverWithCode(
       "Alice@bye.test",
       codes[3]!.toLowerCase(),
       "new-phone",
     );
+
     expect(recovered.session.step_up_at).not.toBeNull();
     await expect(auth.authenticate(old.token)).rejects.toSatisfy(
       (e) => code(e) === "unauthenticated",
@@ -294,10 +321,12 @@ describe("authentication", () => {
     const { auth, account, clock } = await setup();
     const codes = await auth.generateRecoveryCodes(account.userId);
     const attacker = await auth.issueSession(account.userId, "attacker", true);
+
     const cli = await auth.createApiToken(attacker.session.user_id, {
       kind: "cli",
       label: "stolen",
     });
+
     const now = clock.now();
     await auth.db
       .prepare(
@@ -309,9 +338,11 @@ describe("authentication", () => {
     await expect(auth.authenticate(cli.token)).rejects.toSatisfy(
       (e) => code(e) === "unauthenticated",
     );
+
     const device = await auth.db
       .prepare("SELECT revoked_at, revoke_reason FROM device_sessions WHERE id = 'dvs_1'")
       .first<{ revoked_at: number | null; revoke_reason: string }>();
+
     expect(device).toMatchObject({ revoke_reason: "recovery" });
     expect(device?.revoked_at).not.toBeNull();
   });
@@ -320,14 +351,17 @@ describe("authentication", () => {
     const { auth, account, clock } = await setup();
     const codes = await auth.generateRecoveryCodes(account.userId);
     const devices = new ControlDeviceAuth(auth.db, clock);
+
     // The attacker (holding a stolen session) approves a device code and gets an OAuth code,
     // redeeming neither before the owner recovers.
     const started = await devices.startDeviceAuthorization({
       clientId: "bye-cli",
       deviceName: "x",
     });
+
     expect(await devices.decideUserCode(account.userId, started.user_code, true)).toBe(true);
     const verifier = "v".repeat(43);
+
     const params = {
       responseType: "code",
       clientId: "bye-desktop",
@@ -337,6 +371,7 @@ describe("authentication", () => {
       state: "s".repeat(32),
       deviceName: "Evil Mac",
     };
+
     const oauthCode = await devices.issueCode(account.userId, params);
     await auth.db
       .prepare(
@@ -345,11 +380,13 @@ describe("authentication", () => {
       .bind(account.userId, clock.now())
       .run();
     await auth.recoverWithCode("alice@bye.test", codes[0]!, "new-phone");
+
     const errorCode = (p: Promise<unknown>) =>
       p.then(
         () => "ok",
-        (e: unknown) => (e instanceof DeviceAuthError ? e.code : String(e)),
+        <Caught>(e: Caught) => (e instanceof DeviceAuthError ? e.code : String(e)),
       );
+
     expect(
       await errorCode(
         devices.pollDeviceCode({ deviceCode: started.device_code, clientId: "bye-cli" }),
@@ -408,11 +445,13 @@ describe("authentication", () => {
         scopes: ["read", "bogus" as never],
       }),
     ).rejects.toSatisfy((e) => code(e) === "bad_request");
+
     const cli = await auth.createApiToken(account.userId, {
       kind: "cli",
       label: "cli",
       scopes: ["read", "send"],
     });
+
     expect(await auth.revokeApiToken(account.userId, cli.id)).toBe(true);
     await expect(auth.authenticate(cli.token)).rejects.toThrow();
   });
@@ -445,19 +484,25 @@ describe("authentication", () => {
   it("[A03] a recovery code redeems exactly once, even when two redemptions race", async () => {
     const { auth, account, d1 } = await setup();
     const [c] = await auth.generateRecoveryCodes(account.userId, 1);
+
     const results = await Promise.allSettled([
       auth.recoverWithCode("alice@bye.test", c!, "a"),
       auth.recoverWithCode("alice@bye.test", c!, "b"),
     ]);
+
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+
     const live = await d1
       .prepare("SELECT COUNT(*) AS n FROM sessions WHERE user_id = ? AND revoked_at IS NULL")
       .bind(account.userId)
       .first<{ n: number }>();
+
     expect(live?.n).toBe(1);
+
     const audits = await d1
       .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'recovery.redeem'")
       .first<{ n: number }>();
+
     expect(audits?.n).toBe(1);
   });
 
@@ -485,9 +530,11 @@ describe("authentication", () => {
     await auth.enrollTotp(account.userId);
     expect(await auth.disableTotp(account.userId)).toBe(true);
     expect(await auth.disableTotp(account.userId)).toBe(false);
+
     const audits = await d1
       .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'totp.disable'")
       .first<{ n: number }>();
+
     expect(audits?.n).toBe(1);
   });
 });
@@ -495,12 +542,15 @@ describe("authentication", () => {
 /** Alice with a registered passkey, plus Bob with his own account and passkey. */
 const twoUsers = async () => {
   const ctx = await setup();
+
   const bob = await ctx.dir.provisionPersonalAccount({
     address: "bob@bye.test",
     displayName: "Bob",
   });
+
   const aliceKey = await authenticator();
   const bobKey = await authenticator();
+
   for (const [userId, device] of [
     [ctx.account.userId, aliceKey],
     [bob.userId, bobKey],
@@ -508,6 +558,7 @@ const twoUsers = async () => {
     const reg = await ctx.auth.beginChallenge("register", userId);
     await ctx.auth.registerPasskey(userId, reg.id, await device.register(reg.challenge));
   }
+
   return { ...ctx, bob, aliceKey, bobKey };
 };
 
@@ -553,10 +604,12 @@ describe("[A03] credentials are scoped to their owner", () => {
 
   it("another user cannot revoke an API token; the owner's token keeps working", async () => {
     const { auth, account, bob } = await twoUsers();
+
     const t = await auth.createApiToken(account.userId, {
       kind: "cli",
       label: "cli",
     });
+
     expect(await auth.revokeApiToken(bob.userId, t.id)).toBe(false);
     const cred = await auth.authenticate(t.token);
     expect(cred.kind).toBe("cli");
@@ -571,11 +624,13 @@ describe("[A03] credentials are scoped to their owner", () => {
       aliceKey.credentialId,
     ]);
     const c = await auth.beginChallenge("authenticate");
+
     const { session } = await auth.authenticatePasskey(
       c.id,
       await aliceKey.assert(c.challenge),
       "x",
     );
+
     expect(session.user_id).toBe(account.userId);
   });
 });
@@ -609,12 +664,15 @@ describe("[A03] WebAuthn ceremony verification rejects", () => {
   const registering = async () => {
     const { auth, account } = await setup();
     const device = await authenticator();
+
     const attempt = async (
       build: (challenge: string) => Promise<{ clientDataJSON: string; attestationObject: string }>,
     ) => {
       const reg = await auth.beginChallenge("register", account.userId);
+
       return auth.registerPasskey(account.userId, reg.id, await build(reg.challenge));
     };
+
     return { auth, account, device, attempt };
   };
 
@@ -633,6 +691,7 @@ describe("[A03] WebAuthn ceremony verification rejects", () => {
 
   it("registration with a malformed CBOR attestation object", async () => {
     const { attempt, device } = await registering();
+
     for (const bytes of [
       new Uint8Array([0xa1]), // map of one entry, truncated
       new Uint8Array([0xc0, 0x00]), // tagged item
@@ -669,6 +728,7 @@ describe("[A03] WebAuthn ceremony verification rejects", () => {
     const device = await authenticator();
     const reg = await auth.beginChallenge("register", account.userId);
     await auth.registerPasskey(account.userId, reg.id, await device.register(reg.challenge));
+
     for (const bad of [
       new Uint8Array([0x31, 0x02, 0x02, 0x00]), // SEQUENCE tag wrong
       new Uint8Array([0x30, 0x04, 0x05, 0x01, 0x01, 0x00]), // INTEGER tag wrong
@@ -683,10 +743,12 @@ describe("[A03] WebAuthn ceremony verification rejects", () => {
 
   it("when the RP does not require user verification, UP alone suffices", async () => {
     const { auth, account } = await setup();
+
     const lax = new ControlAuth(auth.db, auth.clock, {
       ...auth.config,
       rp: { ...RP, requireUserVerification: false },
     });
+
     const device = await authenticator();
     const reg = await lax.beginChallenge("register", account.userId);
     await lax.registerPasskey(
@@ -695,11 +757,13 @@ describe("[A03] WebAuthn ceremony verification rejects", () => {
       await device.register(reg.challenge, { flags: 0x01 }),
     );
     const c = await lax.beginChallenge("authenticate");
+
     const { session } = await lax.authenticatePasskey(
       c.id,
       await device.assert(c.challenge, { flags: 0x01 }),
       "x",
     );
+
     expect(session.user_id).toBe(account.userId);
   });
 });

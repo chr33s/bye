@@ -14,12 +14,14 @@ describe("canary covers async paths (§15.9)", () => {
 
   it("promotes only when HTTP and every async probe (queue, alarm, workflow) passed", () => {
     const ok = (name: string) => ({ name, ok: true });
+
     const all = [
       ok("http.unauthenticated"),
       ok("queue.round-trip"),
       ok("do.alarm"),
       ok("workflow.checkpoint"),
     ];
+
     expect(canaryDecision({ results: all })).toBe("promote");
     expect(
       canaryDecision({
@@ -34,21 +36,27 @@ describe("canary covers async paths (§15.9)", () => {
 describe("canary probes target the new version", () => {
   it("every probe request carries Cloudflare-Workers-Version-Overrides when a version is given", async () => {
     const seen: Array<string | undefined> = [];
+
     const fetcher = async (_url: string, init?: RequestInit) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       seen.push(headers["cloudflare-workers-version-overrides"]);
+
       return new Response("{}", { status: 500 });
     };
+
     const override = {
       worker: "mailboxplatform-prod-mailcore",
       versionId: "dc8dcd28-271b-4367-9840-6c244f84cb40",
     };
+
     await runProbes("https://app.test", "t", fetcher, 0, override);
     expect(seen.length).toBeGreaterThan(3);
+
     for (const h of seen)
       expect(h).toBe('mailboxplatform-prod-mailcore="dc8dcd28-271b-4367-9840-6c244f84cb40"');
     seen.length = 0;
     await runProbes("https://app.test", "t", fetcher, 0);
+
     for (const h of seen) expect(h).toBeUndefined();
     expect(() => versionOverrideHeader({ worker: 'x"; y', versionId: "abc" })).toThrow();
   });
@@ -57,13 +65,16 @@ describe("canary probes target the new version", () => {
 describe("zone ownership and MX cutover (§15.4, §15.8)", () => {
   it("Email Routing is only enabled after an explicit MX cutover approval, never on previews", () => {
     const zone = "mail.example";
+
     for (const name of ["prod", "staging", "dev-abcdef"]) {
       const stage = requireStage(name);
       expect(mailRoutingZone(stage, zone, "approved")).toBe(zone);
+
       for (const cutover of [undefined, "", "yes", "APPROVED", "approved "])
         expect(mailRoutingZone(stage, zone, cutover)).toBeUndefined();
       expect(mailRoutingZone(stage, undefined, "approved")).toBeUndefined();
     }
+
     expect(mailRoutingZone(requireStage("preview-12"), zone, "approved")).toBeUndefined();
   });
 
@@ -72,6 +83,7 @@ describe("zone ownership and MX cutover (§15.4, §15.8)", () => {
     expect(Object.keys(byDescription)).toHaveLength(WAF_RULES.length);
     const probes = byDescription["Block secret/dotfile probes"]!;
     expect(probes.action).toBe("block");
+
     for (const path of ['"/.env"', '"/.git"']) expect(probes.expression).toContain(path);
     expect(probes.expression).toContain("lower(http.request.uri.path)");
 

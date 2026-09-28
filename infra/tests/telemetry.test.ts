@@ -14,6 +14,7 @@ describe("deployment privacy (§15.7)", () => {
       string,
       string
     >;
+
     expect(Object.values(scripts).some((s) => /\balchemy (deploy|plan|destroy)\b/.test(s))).toBe(
       true,
     );
@@ -25,6 +26,7 @@ describe("deployment privacy (§15.7)", () => {
     const ci = `${root}.github/workflows/ci.yml`;
     expect(existsSync(ci)).toBe(true);
     const text = readFileSync(ci, "utf8");
+
     for (const [k, v] of Object.entries(REQUIRED_DEPLOY_ENV))
       expect(text).toContain(`${k}: "${v}"`);
   });
@@ -38,10 +40,11 @@ describe("deployment privacy (§15.7)", () => {
 
   it("uses opaque stack and resource names", async () => {
     // The compiled stack carries its name at runtime; the Effect type does not expose it.
-    const stack = (await import("../stack.ts")).default as unknown as { stackName: string };
+    const stack: { stackName: string } = (await import("../stack.ts")).default as never;
     const { INVENTORY } = await import("../resources/inventory.ts");
     // Names reach Cloudflare as physical resource names and in the deploy telemetry we opt out of.
     expect(stack.stackName).toBe("MailboxPlatform");
+
     for (const name of [stack.stackName, ...INVENTORY.map((e) => e.logicalId)])
       expect(name).toMatch(/^[A-Z][A-Za-z0-9]*$/);
   });

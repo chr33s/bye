@@ -1,3 +1,5 @@
+import { Predicate } from "effect";
+import type { JsonObject } from "../src/json.ts";
 import { describe, expect, it } from "vitest";
 import {
   CUSTOM_SCHEME_REDIRECT,
@@ -31,6 +33,7 @@ import { testInstance } from "./fixtures.ts";
 describe("instance URL normalization", () => {
   const ok = (raw: string, opts = {}) => {
     const n = normalizeInstanceUrl(raw, opts);
+
     return n.ok ? n.url : n.reason;
   };
 
@@ -86,6 +89,7 @@ describe("instance URL normalization", () => {
     expect(ok("http://LOCALHOST:1337/", dev)).toBe("http://localhost:1337");
     expect(ok("http://127.0.0.1:80", dev)).toBe("http://127.0.0.1");
     expect(ok("http://[::1]:8787", dev)).toBe("http://[::1]:8787");
+
     for (const host of ["mail.example.com", "10.0.0.5", "127.0.0.2", "nas.local"])
       expect(ok(`http://${host}`, dev), host).toBe("insecure-scheme");
     // https keeps its normal private-network policy.
@@ -103,6 +107,7 @@ describe("Open in Bye / QR handoff", () => {
       _tag: "AddInstance",
       url: "https://mail.example.com",
     });
+
     // Injected authentication payloads are refused, not ignored.
     for (const extra of ["code=abc", "state=x", "token=t", "access_token=t"])
       expect(
@@ -120,6 +125,13 @@ describe("Open in Bye / QR handoff", () => {
 
 // ---- a fake network of instances ----
 
+interface FakeResponse {
+  status: number;
+  url?: string;
+  headers: { get(n: string): string | null };
+  text(): Promise<string>;
+}
+
 type Handler = (init: ProbeFetchInit) => {
   status: number;
   body?: unknown;
@@ -130,23 +142,30 @@ type Handler = (init: ProbeFetchInit) => {
 
 const network = (routes: Record<string, Handler>) => {
   const calls: Array<{ url: string; init: ProbeFetchInit }> = [];
+
   const fetch: ProbeFetch = async (url, init) => {
     calls.push({ url, init });
     const handler = routes[url];
+
     if (!handler) return { status: 404, text: async () => "" };
     const r = handler(init);
     const headers = new Map(Object.entries(r.headers ?? {}));
-    return {
+
+    const response: FakeResponse = {
       status: r.status,
-      ...(r.url ? { url: r.url } : {}),
       headers: { get: (n: string) => headers.get(n.toLowerCase()) ?? null },
       text: async () => r.text ?? JSON.stringify(r.body ?? {}),
     };
+
+    if (r.url) response.url = r.url;
+
+    return response;
   };
+
   return { fetch, calls };
 };
 
-const instanceDoc = (base: string, issuer = base, extra: Record<string, unknown> = {}) => ({
+const instanceDoc = (base: string, issuer = base, extra: JsonObject = {}) => ({
   schema: "bye.instance/1",
   baseUrl: base,
   issuer,
@@ -157,7 +176,7 @@ const instanceDoc = (base: string, issuer = base, extra: Record<string, unknown>
   ...extra,
 });
 
-const asMetadata = (issuer: string, extra: Record<string, unknown> = {}) => ({
+const asMetadata = (issuer: string, extra: JsonObject = {}) => ({
   issuer,
   authorization_endpoint: `${issuer}/oauth/authorize`,
   token_endpoint: `${issuer}/oauth/token`,
@@ -170,6 +189,7 @@ const asMetadata = (issuer: string, extra: Record<string, unknown> = {}) => ({
 const serve = (base: string, doc = instanceDoc(base), meta = asMetadata(doc.issuer as string)) => {
   const origin = /^https:\/\/[^/]+/.exec(doc.issuer as string)![0];
   const path = (doc.issuer as string).slice(origin.length);
+
   return {
     [`${base}/.well-known/bye-instance`]: () => ({ status: 200, body: doc }),
     [`${origin}/.well-known/oauth-authorization-server${path}`]: () => ({
@@ -193,7 +213,8 @@ describe("instance validation", () => {
     const net = network(serve("https://mail.selfhosted.example/bye"));
     const r = await probe("https://MAIL.selfhosted.example/bye/", net.fetch);
     expect(r._tag).toBe("Valid");
-    if (r._tag !== "Valid") return;
+
+    if (!Predicate.isTagged(r, "Valid")) return;
     expect(r.instance.baseUrl).toBe("https://mail.selfhosted.example/bye");
     expect(r.instance.issuer).toBe("https://mail.selfhosted.example/bye");
     expect(r.instance.endpoints.token).toBe("https://mail.selfhosted.example/bye/oauth/token");
@@ -201,11 +222,13 @@ describe("instance validation", () => {
     expect(net.calls[1]!.url).toBe(
       "https://mail.selfhosted.example/.well-known/oauth-authorization-server/bye",
     );
+
     for (const c of net.calls) {
       expect(c.init.credentials).toBe("omit");
       expect(c.init.redirect).toBe("manual");
       expect(Object.keys(c.init.headers)).toEqual(["accept"]);
     }
+
     // Routes on foreign origins are dropped.
     expect(r.instance.routes.support).toBeNull();
     expect(r.instance.routes.accountDeletion).toBe(
@@ -221,11 +244,13 @@ describe("instance validation", () => {
         headers: { location: "https://b.example/.well-known/bye-instance" },
       }),
     });
+
     expect(await probe("https://a.example", redirected.fetch)).toEqual({
       _tag: "Moved",
       location: "https://b.example/.well-known/bye-instance",
     });
     expect(redirected.calls).toHaveLength(1);
+
     // React Native follows redirects regardless: a changed final URL still stops validation.
     const followed = network({
       "https://a.example/.well-known/bye-instance": () => ({
@@ -234,7 +259,9 @@ describe("instance validation", () => {
         body: instanceDoc("https://b.example"),
       }),
     });
+
     expect((await probe("https://a.example", followed.fetch))._tag).toBe("Moved");
+
     // The document names a different canonical base URL.
     const moved = network({
       "https://a.example/.well-known/bye-instance": () => ({
@@ -242,6 +269,7 @@ describe("instance validation", () => {
         body: instanceDoc("https://b.example"),
       }),
     });
+
     expect(await probe("https://a.example", moved.fetch)).toEqual({
       _tag: "Moved",
       location: "https://b.example",
@@ -249,7 +277,7 @@ describe("instance validation", () => {
   });
 
   it("refuses unsupported, incompatible and oversized documents", async () => {
-    const cases: Array<[Record<string, unknown>, string]> = [
+    const cases: Array<[JsonObject, string]> = [
       [{ schema: "bye.instance/9" }, "unsupported-schema"],
       [{ api: { min: 2, max: 3 } }, "incompatible-version"],
       [{ capabilities: ["mail"] }, "missing-capability"],
@@ -259,20 +287,25 @@ describe("instance validation", () => {
       ],
       [{ issuer: "http://a.example" }, "invalid-issuer"],
     ];
+
     for (const [patch, reason] of cases) {
       const doc = instanceDoc("https://a.example", "https://a.example", patch);
+
       const net = network({
         "https://a.example/.well-known/bye-instance": () => ({ status: 200, body: doc }),
       });
+
       const r = await probe("https://a.example", net.fetch);
-      expect(r._tag === "Invalid" && r.reason, reason).toBe(reason);
+      expect(Predicate.isTagged(r, "Invalid") && r.reason, reason).toBe(reason);
     }
+
     const big = network({
       "https://a.example/.well-known/bye-instance": () => ({
         status: 200,
         text: "x".repeat(70_000),
       }),
     });
+
     expect(await probe("https://a.example", big.fetch)).toEqual({
       _tag: "Invalid",
       reason: "response-too-large",
@@ -283,15 +316,18 @@ describe("instance validation", () => {
 
   it("verifies the exact issuer and refuses endpoints outside the issuer's origin (mix-up)", async () => {
     const base = "https://evil.example";
+
     // Claims the victim's issuer: the victim's real metadata names the victim, but the probe must
     // fetch it from the victim's issuer-derived location, and the key still includes evil's URL.
     const mismatch = network(
       serve(base, instanceDoc(base), asMetadata(base, { issuer: "https://victim.example" })),
     );
+
     expect(await probe(base, mismatch.fetch)).toEqual({
       _tag: "Invalid",
       reason: "issuer-mismatch",
     });
+
     // The victim's authorization endpoint combined with the attacker's token endpoint.
     const combined = network(
       serve(
@@ -300,10 +336,12 @@ describe("instance validation", () => {
         asMetadata(base, { authorization_endpoint: "https://victim.example/oauth/authorize" }),
       ),
     );
+
     expect(await probe(base, combined.fetch)).toEqual({
       _tag: "Invalid",
       reason: "foreign-endpoint",
     });
+
     const noIss = network(
       serve(
         base,
@@ -311,13 +349,18 @@ describe("instance validation", () => {
         asMetadata(base, { authorization_response_iss_parameter_supported: false }),
       ),
     );
+
     expect((await probe(base, noIss.fetch))._tag).toBe("Invalid");
+
     // A distinct issuer is allowed, and shown before confirmation.
     const split = network(
       serve("https://mail.example", instanceDoc("https://mail.example", "https://id.example")),
     );
+
     const r = await probe("https://mail.example", split.fetch);
-    expect(r._tag === "Valid" && distinctAuthOrigin(r.instance)).toBe("https://id.example");
+    expect(Predicate.isTagged(r, "Valid") && distinctAuthOrigin(r.instance)).toBe(
+      "https://id.example",
+    );
   });
 });
 
@@ -325,6 +368,7 @@ describe("instance validation", () => {
 
 const memoryKv = (): KeyValueStore & { data: Map<string, string> } => {
   const data = new Map<string, string>();
+
   return {
     data,
     getItem: async (k) => data.get(k) ?? null,
@@ -353,19 +397,23 @@ describe("instance registry and isolation", () => {
     const reg = new InstanceRegistry(memoryKv());
     const a = testInstance("https://a.example");
     await reg.save(a, { select: true });
+
     const moved = {
       ...a,
       endpoints: { ...a.endpoints, token: "https://a.example/oauth/token2" },
     };
+
     expect(await reg.save(moved)).toEqual({ invalidated: [a.key] });
     const newIssuer = testInstance("https://a.example", "https://id.a.example");
     expect(await reg.save(newIssuer)).toEqual({ invalidated: [a.key] });
     expect((await reg.selected())?.key).toBe(newIssuer.key);
+
     // Another server claiming a saved issuer with its own endpoints.
     const impostor = {
       ...testInstance("https://evil.example", "https://id.a.example"),
       endpoints: { ...newIssuer.endpoints, token: "https://id.a.example/steal" },
     };
+
     await expect(reg.save(impostor)).rejects.toBeInstanceOf(InstanceConflictError);
   });
 
@@ -421,6 +469,7 @@ describe("instance registry and isolation", () => {
         entered();
         await held;
       }
+
       kv.data.set(key, value);
     };
 
@@ -448,7 +497,9 @@ class Store implements SecureSessionStore {
   data = new Map<string, string>();
   async read(k: string) {
     const v = this.data.get(k);
+
     if (v === undefined) throw new SecureStoreError("MissingCredential");
+
     return v;
   }
   async write(k: string, v: string) {
@@ -464,12 +515,16 @@ const authServer = () => {
   let n = 0;
   let release: (() => void) | null = null;
   const state = { hold: false };
+
   const fetch: TokenFetch = async (url, init) => {
     tokenCalls.push(url);
     expect(init.redirect).toBe("error");
+
     if (state.hold) await new Promise<void>((r) => (release = r));
     const form = new URLSearchParams(init.body);
+
     if (url.endsWith("/oauth/revoke")) return { status: 200, text: async () => "{}" };
+
     if (
       form.get("grant_type") === "authorization_code" ||
       form.get("grant_type") === "refresh_token"
@@ -484,13 +539,16 @@ const authServer = () => {
             refresh_token: `rt_${url}_${n}_${"r".repeat(16)}`,
           }),
       };
+
     return { status: 400, text: async () => '{"error":"invalid_grant"}' };
   };
+
   return { fetch, tokenCalls, state, release: () => release?.() };
 };
 
 const callbackFor = (attemptUrl: string, iss: string | null, code = `code_${"x".repeat(12)}`) => {
   const q = new URLSearchParams(attemptUrl.split("?")[1]);
+
   return `bye://oauth/callback?code=${code}&state=${encodeURIComponent(q.get("state")!)}${iss === null ? "" : `&iss=${encodeURIComponent(iss)}`}`;
 };
 
@@ -498,6 +556,7 @@ describe("sign-in bound to its instance (RFC 9207)", () => {
   const A = testInstance("https://a.example");
   const B = testInstance("https://b.example");
   let now = Date.UTC(2026, 8, 26, 12);
+
   const make = (instance = A, store = new Store(), server = authServer()) => ({
     store,
     server,
@@ -538,6 +597,7 @@ describe("sign-in bound to its instance (RFC 9207)", () => {
       expect(a.session.state).toEqual({ _tag: "SignedOut", reason: "failed" });
       expect(a.server.tokenCalls).toEqual([]);
     }
+
     const expired = make();
     await expired.session.restore();
     const attempt = await expired.session.beginSignIn();
@@ -585,6 +645,7 @@ describe("sign-in bound to its instance (RFC 9207)", () => {
     const a = make();
     await a.session.restore();
     await a.session.handleCallback(callbackFor((await a.session.beginSignIn()).url, A.issuer));
+
     const offline = new SessionClient({
       instance: A,
       redirectUri: CUSTOM_SCHEME_REDIRECT,
@@ -595,18 +656,21 @@ describe("sign-in bound to its instance (RFC 9207)", () => {
       store: a.store,
       openBrowser: async () => undefined,
     });
+
     expect(await offline.forget()).toBe("unconfirmed");
     expect(a.store.data.size).toBe(0);
   });
 
   it("migrates a pre-instance hosted credential only into the matching instance slot", async () => {
     const store = new Store();
+
     const legacy = JSON.stringify({
       v: 1,
       refreshToken: `rt_legacy_${"r".repeat(16)}`,
       scope: "",
       savedAt: 1,
     });
+
     store.data.set("email.bye.desktop.session.v1|https://a.example", legacy);
     const b = make(B, store);
     await b.session.restore();

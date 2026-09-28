@@ -16,6 +16,7 @@ import { Rejection } from "../durable/rpc.ts";
 
 /** Calendar refusals use the platform-wide `Rejection`; the old class name stays as an alias. */
 export { Rejection as CalendarStoreError } from "../durable/rpc.ts";
+
 export type CalendarStoreErrorCode =
   | "not_found"
   | "forbidden"
@@ -29,11 +30,9 @@ export const calendarError = (
   message: string,
   currentRevision?: number,
 ): Rejection =>
-  new Rejection({
-    code,
-    message,
-    ...(currentRevision !== undefined ? { details: { currentRevision } } : {}),
-  });
+  currentRevision === undefined
+    ? new Rejection({ code, message })
+    : new Rejection({ code, message, details: { currentRevision } });
 
 export interface CalendarStoreConfig {
   /** User ID of the owning account. */
@@ -44,6 +43,7 @@ export interface CalendarStoreConfig {
 }
 
 export type CalendarKind = "local" | "subscription" | "invitations";
+
 export type CalendarRole = "owner" | "write" | "read";
 
 export interface CalendarRecord {
@@ -197,7 +197,9 @@ export interface CalendarDayContext {
 }
 
 export const REMINDER_JOB = "reminder";
+
 export const SUBSCRIPTION_JOB = "subscription";
+
 /** Occurrence expansion windows are bounded (§9). */
 export const MAX_WINDOW_MS = 400 * 86_400_000;
 

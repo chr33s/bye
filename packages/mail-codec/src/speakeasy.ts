@@ -11,6 +11,11 @@ export const generateSpeakeasySecret = (
 /** The canonical constant-time compare (@bye/domain), re-exported under its historical name. */
 export const constantTimeEqual = timingSafeEqual;
 
+export interface SpeakeasyExtraction {
+  readonly matched: boolean;
+  readonly subject: string;
+}
+
 /**
  * Check a subject for the current secret as a whole token (case-insensitive). Returns the
  * subject with the token removed so it is not displayed or quoted back in replies.
@@ -18,18 +23,22 @@ export const constantTimeEqual = timingSafeEqual;
 export const extractSpeakeasyToken = (
   subject: string,
   secret: string | undefined,
-): { readonly matched: boolean; readonly subject: string } => {
+): SpeakeasyExtraction => {
   if (!secret || secret.length < 6) return { matched: false, subject };
   const needle = secret.toLowerCase();
   let matched = false;
   const tokens = subject.split(/([^A-Za-z0-9]+)/);
+
   const kept = tokens.map((token) => {
     if (token.length === needle.length && constantTimeEqual(token.toLowerCase(), needle)) {
       matched = true;
+
       return "";
     }
+
     return token;
   });
+
   return {
     matched,
     subject: matched

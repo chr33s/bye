@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Change notifications (§8 Synchronization) with a fake WebSocket, fake timers and an in-memory
-// localStorage; the changes API is mocked at the shared client.
-const request = vi.hoisted(() => vi.fn());
-vi.mock("../src/api.ts", () => ({ client: { request } }));
+// localStorage; the changes API is stubbed on the shared client instance.
+vi.hoisted(() => {
+  (globalThis as { location?: unknown }).location = new URL("https://app.bye.test/");
+});
+
+const { client } = await import("../src/api.ts");
 
 const { connectLive } = await import("../src/live.ts");
+
+const request = vi.spyOn(client, "request");
 
 class FakeSocket {
   static opened: Array<FakeSocket> = [];
@@ -98,16 +103,20 @@ describe("connectLive", () => {
     request.mockResolvedValue(page(0));
     const stop = connectLive("mbx_1", () => undefined);
     const delays: Array<number> = [];
+
     for (let i = 0; i < 8; i++) {
       const before = FakeSocket.opened.length;
       socket().onclose?.();
       let waited = 0;
+
       while (FakeSocket.opened.length === before) {
         vi.advanceTimersByTime(1000);
         waited += 1000;
       }
+
       delays.push(waited);
     }
+
     expect(delays).toEqual([2000, 4000, 8000, 16_000, 32_000, 60_000, 60_000, 60_000]);
 
     socket().onopen?.();

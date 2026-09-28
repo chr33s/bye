@@ -34,12 +34,15 @@ export const makeMailboxJobStore = (port: MailboxJobPort) =>
   JobStore.of({
     claim: (id) => call("claim", () => port.claim(id)),
     accepted: (id, receipt) =>
-      call("accepted", () =>
-        port.accepted(id, {
+      call("accepted", () => {
+        let accepted: Parameters<MailboxJobPort["accepted"]>[1] = {
           providerId: receipt.providerId,
-          ...(receipt.wireMessageId ? { wireMessageId: receipt.wireMessageId } : {}),
-        }),
-      ),
+        };
+
+        if (receipt.wireMessageId) accepted = { ...accepted, wireMessageId: receipt.wireMessageId };
+
+        return port.accepted(id, accepted);
+      }),
     failed: (id, failure) =>
       call("failed", () => port.failed(id, { kind: failure.kind, detail: failure.detail })),
   });

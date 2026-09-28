@@ -1,3 +1,4 @@
+import type { JsonValue } from "@bye/native-shared/json";
 import {
   calendarPanelEnabled,
   type CoverOccurrence,
@@ -21,7 +22,7 @@ const COLLAPSED_KEY = "coverPanelCollapsed";
 /** Whether the Imbox shows the panel; off when there is no calendar or the preference is unset. */
 export const coverPanelEnabled = (signal: AbortSignal): Promise<boolean> =>
   state.calendarId
-    ? api("GET", `/v1/mailboxes/${mb()}/preferences`, undefined, signal).then(
+    ? api<JsonValue>("GET", `/v1/mailboxes/${mb()}/preferences`, undefined, signal).then(
         calendarPanelEnabled,
         degrade(false),
       )
@@ -41,14 +42,17 @@ const eventLink = (o: CoverOccurrence, now: number): HTMLElement =>
 export const coverPanel = (now: () => number = Date.now): HTMLElement => {
   const body = h("div", { class: "cover-body" });
   const today = ymd(toLocalDate(new Date(now())));
+
   const details = h(
     "details",
     remember.get(COLLAPSED_KEY) === "1" ? {} : { open: true },
     h("summary", { id: "cover-title" }, "Today's calendar"),
     body,
   );
+
   const panel = h("aside", { class: "cover-panel", "aria-labelledby": "cover-title" }, details);
   details.addEventListener("toggle", () => remember.set(COLLAPSED_KEY, details.open ? "0" : "1"));
+
   const footer = h(
     "p",
     { class: "cover-actions" },
@@ -68,9 +72,11 @@ export const coverPanel = (now: () => number = Date.now): HTMLElement => {
       "Hide panel",
     ),
   );
+
   const load = async (): Promise<void> => {
     body.setAttribute("aria-busy", "true");
     body.replaceChildren(h("p", { role: "status" }, "Loading your calendar…"));
+
     try {
       const at = now();
       const { from, to } = coverWindow(at);
@@ -101,6 +107,8 @@ export const coverPanel = (now: () => number = Date.now): HTMLElement => {
       body.removeAttribute("aria-busy");
     }
   };
+
   void load();
+
   return panel;
 };

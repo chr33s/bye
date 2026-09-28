@@ -22,5 +22,6 @@ export const origins = (env: Pick<CoreEnv, "APP_ORIGIN" | "MAIL_ORIGIN">): Origi
 
 export const serviceDomain = (env: Pick<CoreEnv, "APP_ORIGIN">): string =>
   new URL(env.APP_ORIGIN).hostname.replace(/^app\./, "");
+
 export const publicOrigin = (env: Pick<CoreEnv, "APP_ORIGIN">): string =>
   env.APP_ORIGIN.replace("://app.", "://");

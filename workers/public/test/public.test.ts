@@ -8,6 +8,7 @@ const makeEnv = (
 ) => {
   const calls: Array<string> = [];
   const limited: Array<string> = [];
+
   const env = {
     APP_ORIGIN: "https://app.pub.test",
     PUBLISHED: {
@@ -34,7 +35,8 @@ const makeEnv = (
         gateway.unsubscribe ? gateway.unsubscribe(h, a, t) : { ok: true }
       ),
     },
-  } as unknown as PublicEnv;
+  } as PublicEnv;
+
   return { env, calls, limited };
 };
 
@@ -60,6 +62,7 @@ describe("public worker", () => {
       [publishedKey.post("ana", "hello-world")]: "<h1>Hello</h1>",
       [publishedKey.feed("ana")]: "<rss/>",
     });
+
     const post = await handlePublic(get("/@ana/hello-world"), env);
     expect(post.status).toBe(200);
     expect(await post.text()).toBe("<h1>Hello</h1>");
@@ -80,6 +83,7 @@ describe("public worker", () => {
         }),
       },
     );
+
     const res = await handlePublic(get("/s/spc_1/abcdefghijklmnop1234"), env);
     const body = await res.text();
     expect(calls).toEqual(["share:spc_1:abcdefghijklmnop1234"]);
@@ -117,14 +121,17 @@ describe("public worker", () => {
   it("[P02] subscribing gives identical responses for existing and new subscribers and forwards a normalized address", async () => {
     // MailCore distinguishes the two cases internally; the public response must not.
     const existing = new Set(["reader@example.com"]);
+
     const { env, calls, limited } = makeEnv(
       {},
       { subscribe: async (_h, a) => ({ ok: !existing.has(a) }) },
     );
+
     const known = await handlePublic(
       post("/@ana/subscribe", "email=%20Reader%40Example.com%20"),
       env,
     );
+
     const fresh = await handlePublic(post("/@ana/subscribe", "email=new%40example.com"), env);
     expect(calls).toEqual(["sub:ana:reader@example.com", "sub:ana:new@example.com"]);
     expect(limited).toEqual([
@@ -153,6 +160,7 @@ describe("public worker", () => {
       {},
       { confirmSubscription: async (_h, t) => ({ ok: t === "goodtoken12345678" }) },
     );
+
     const ok = await handlePublic(get("/@ana/confirm/goodtoken12345678"), env);
     expect([ok.status, ok.headers.get("cache-control")]).toEqual([200, "no-store"]);
     expect(await ok.text()).toContain("You're subscribed.");
@@ -166,12 +174,15 @@ describe("public worker", () => {
       {},
       { unsubscribe: async (_h, _a, t) => ({ ok: t === "tok_valid_unsub_1234" }) },
     );
+
     const ok = await handlePublic(
       post("/@ana/unsubscribe", "email=R%40X.com&token=tok_valid_unsub_1234"),
       env,
     );
+
     expect([ok.status, ok.headers.get("cache-control")]).toEqual([200, "no-store"]);
     expect(await ok.text()).toContain("You're unsubscribed.");
+
     // RFC 8058: mail clients POST `List-Unsubscribe=One-Click` to the header URL with its query.
     const oneClick = await handlePublic(
       post(
@@ -180,6 +191,7 @@ describe("public worker", () => {
       ),
       env,
     );
+
     expect(oneClick.status).toBe(200);
     const bad = await handlePublic(post("/@ana/unsubscribe", "email=r%40x.com&token=forged"), env);
     expect(bad.status).toBe(400);
@@ -193,10 +205,12 @@ describe("public worker", () => {
 
   it("[P02] the footer's GET unsubscribe link shows a confirm form and never unsubscribes by itself", async () => {
     const { env, calls } = makeEnv({});
+
     const page = await handlePublic(
       get("/@ana/unsubscribe?email=r%40x.com&token=tok_valid_unsub_1234"),
       env,
     );
+
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain('<form method="post" action="/@ana/unsubscribe">');
@@ -230,8 +244,10 @@ describe("public worker", () => {
         },
       },
     );
+
     const errors: Array<string> = [];
     const spy = vi.spyOn(console, "error").mockImplementation((l) => void errors.push(String(l)));
+
     try {
       for (const req of [
         get("/s/spc_1/abcdefghijklmnop1234"),
@@ -242,6 +258,7 @@ describe("public worker", () => {
         expect(res.headers.get("cache-control")).toBe("no-store");
         expect(await res.text()).not.toContain("secret detail");
       }
+
       (broken.env as { PUBLISHED: unknown }).PUBLISHED = {
         get: async () => {
           throw new Error("r2 down");
@@ -257,20 +274,24 @@ describe("public worker", () => {
   it("forms are read with a byte cap even without content-length; oversize posts never reach MailCore", async () => {
     const { env, calls } = makeEnv({});
     let pulled = 0;
+
     const stream = new ReadableStream<Uint8Array>({
       pull(controller) {
         pulled++;
+
         if (pulled > 1000) controller.close();
         else
           controller.enqueue(new TextEncoder().encode(`email=a%40b.com&pad=${"x".repeat(1024)}`));
       },
     });
+
     const req = new Request("https://pub.test/@ana/subscribe", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: stream,
       duplex: "half",
     } as RequestInit);
+
     const res = await handlePublic(req, env);
     expect(res.status).toBe(413);
     expect(pulled).toBeLessThan(10);

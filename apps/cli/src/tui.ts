@@ -1,4 +1,4 @@
-import type { Layer } from "effect";
+import { Predicate, type Layer } from "effect";
 import type { MailDraftContent, OccurrenceWire } from "@bye/contracts";
 import { addDays, parseLocalDate, ymd } from "@bye/native-shared/calendar-form";
 import type { AfterSendChoice } from "@bye/native-shared/after-send";
@@ -9,6 +9,7 @@ import type { DeliveryWire } from "@bye/native-shared/wire";
 import { UsageError } from "./args.ts";
 import { type CliApi, CliApiError } from "./client.ts";
 import { invoke } from "./commands.ts";
+import type { JsonValue } from "./json.ts";
 import { sanitize } from "./format.ts";
 import {
   type AgendaDay,
@@ -39,14 +40,18 @@ import {
 // testable core (keys in, frames out); `runTui` wires it to the terminal.
 
 /** Ctrl-S answers: send, optionally with an after-send action (E08/E09). */
-const SEND_KEYS: Readonly<Record<string, AfterSendChoice>> = {
-  y: "none",
-  d: "done",
-  b: "follow-up",
-  r: "follow-up-if-no-reply",
-  c: "clear",
-};
+const SEND_KEYS = new Map<string, AfterSendChoice>([
+  ["y", "none"],
+  ["d", "done"],
+  ["b", "follow-up"],
+  ["r", "follow-up-if-no-reply"],
+  ["c", "clear"],
+]);
+
 export { decodeKeys, sanitize };
+
+/** Command flags; an absent (`undefined`) value is not passed. */
+type FlagValues = Readonly<Record<string, string | true | undefined>>;
 
 export interface TuiOptions {
   readonly api: Layer.Layer<CliApi>;
@@ -75,20 +80,20 @@ export interface TuiSession {
 }
 
 /** A structured, terminal-safe error line: what failed, the API error code and status, and why. */
-export const describeError = (label: string, error: unknown): string =>
-  error instanceof CliApiError
-    ? `${label} failed — ${sanitize(error.code)} (${error.status === 0 ? "network" : `HTTP ${error.status}`}): ${sanitize(error.message)}`
-    : error instanceof UsageError
-      ? `${label}: ${sanitize(error.message)}`
-      : `${label} failed: ${sanitize(error instanceof Error ? error.message : String(error))}`;
+export const describeError = (label: string, cause: unknown): string =>
+  cause instanceof CliApiError
+    ? `${label} failed — ${sanitize(cause.code)} (${cause.status === 0 ? "network" : `HTTP ${cause.status}`}): ${sanitize(cause.message)}`
+    : cause instanceof UsageError
+      ? `${label}: ${sanitize(cause.message)}`
+      : `${label} failed: ${sanitize(cause instanceof Error ? cause.message : String(cause))}`;
 
-const UNITS: Readonly<Record<string, number>> = {
-  m: 60_000,
-  min: 60_000,
-  h: 3_600_000,
-  d: 86_400_000,
-  w: 604_800_000,
-};
+const UNITS = new Map<string, number>([
+  ["m", 60_000],
+  ["min", 60_000],
+  ["h", 3_600_000],
+  ["d", 86_400_000],
+  ["w", 604_800_000],
+]);
 
 /**
  * When to bubble up or send: "now", a relative "2h" / "in 3d" / "+30m", "tomorrow" (08:00), or an
@@ -96,19 +101,26 @@ const UNITS: Readonly<Record<string, number>> = {
  */
 export const parseWhen = (input: string, now: number): number | "now" | null => {
   const value = input.trim().toLowerCase();
+
   if (value === "now") return "now";
   const relative = /^(?:in\s+|\+)?(\d+)\s*(min|m|h|d|w)$/.exec(value);
-  if (relative) return now + Number(relative[1]) * UNITS[relative[2]!]!;
+
+  if (relative) return now + Number(relative[1]) * UNITS.get(relative[2]!)!;
+
   if (value === "tomorrow") {
     const d = new Date(now);
     d.setDate(d.getDate() + 1);
     d.setHours(8, 0, 0, 0);
+
     return d.getTime();
   }
+
   // A bare date is that local day at 08:00 (like "tomorrow"); Date.parse would read it as UTC.
   const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+
   if (day) return new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3]), 8).getTime();
   const at = Date.parse(input.trim());
+
   return Number.isNaN(at) ? null : at;
 };
 
@@ -116,6 +128,7 @@ export const parseWhen = (input: string, now: number): number | "now" | null => 
 const senderAddress = (sender: string | undefined): string | undefined => {
   const match = /<([^<>\s]+@[^<>\s]+)>/.exec(sender ?? "");
   const address = match?.[1] ?? sender?.trim();
+
   return address && address.includes("@") ? address : undefined;
 };
 
@@ -145,17 +158,18 @@ const REPLY_LABEL: Readonly<Record<ComposeMode, string>> = {
   forward: "Forward",
 };
 
-const PARTSTAT_KEYS: Readonly<Record<string, "accept" | "tentative" | "decline">> = {
-  Y: "accept",
-  T: "tentative",
-  D: "decline",
-};
+const PARTSTAT_KEYS = new Map<string, "accept" | "tentative" | "decline">([
+  ["Y", "accept"],
+  ["T", "tentative"],
+  ["D", "decline"],
+]);
 
 export const createTui = (options: TuiOptions): TuiSession => {
   const now = options.now ?? Date.now;
   const timeZone = options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const size = options.size ?? (() => ({ columns: 80, rows: 24 }));
   const today = () => formatTime(now(), timeZone).slice(0, 10);
+
   let s: TuiState = {
     screen: "mail",
     view: "imbox",
@@ -175,27 +189,31 @@ export const createTui = (options: TuiOptions): TuiSession => {
     help: { scroll: 0, back: "mail" },
     timeZone,
   };
+
   let finished = false;
   let calendarId: string | undefined;
+
   const set = (patch: Partial<TuiState>) => {
     s = { ...s, ...patch };
   };
+
   const bodyHeight = () => Math.max(4, size().rows - 4);
 
   /**
    * Run a CLI command, so the TUI sends exactly the requests `bye <path>` would.
    * Consequential commands (send, screening) are only reached through a confirmation prompt.
    */
-  const exec = <A = unknown>(
+  const exec = <A = JsonValue>(
     path: string,
     positionals: ReadonlyArray<string> = [],
-    flags: Readonly<Record<string, string | true>> = {},
+    flags: FlagValues = {},
   ): Promise<A> => invoke<A>(path, positionals, flags, options);
 
   /** Run an action; its result (or structured error) becomes the status line. */
   const attempt = async (label: string, run: () => Promise<string | void>) => {
     try {
       const text = await run();
+
       if (text !== undefined) set({ status: { level: "info", text } });
     } catch (error) {
       set({ status: { level: "error", text: describeError(label, error) } });
@@ -211,6 +229,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
       const page = await exec<{ items?: ReadonlyArray<ThreadRow> }>("mail view", [s.view], {
         limit: "100",
       });
+
       const rows = page.items ?? [];
       set({ rows, index: Math.min(s.index, Math.max(0, rows.length - 1)) });
     });
@@ -219,11 +238,13 @@ export const createTui = (options: TuiOptions): TuiSession => {
   const runSearch = (query: string, fresh = true) =>
     attempt("Search", async () => {
       if (!query.trim()) return "Search cancelled";
+
       const result = await exec<{ results?: ReadonlyArray<SearchHit>; lagging?: boolean }>(
         "search",
         [query],
         { limit: "50" },
       );
+
       const hits = result.results ?? [];
       set({
         search: { query, hits, lagging: result.lagging === true },
@@ -233,8 +254,10 @@ export const createTui = (options: TuiOptions): TuiSession => {
 
   const loadBodies = async () => {
     const t = s.thread;
+
     if (!t) return;
     const fetchText = options.fetchText;
+
     // Bounded fan-out: a long thread fetches four bodies at a time, each batch shown as it lands.
     for (let i = 0; i < t.deliveries.length; i += 4) {
       const bodies: Record<string, string | Error> = {};
@@ -255,12 +278,14 @@ export const createTui = (options: TuiOptions): TuiSession => {
           }
         }),
       );
+
       // The user may have left or switched threads meanwhile.
       if (s.thread?.thread.threadId !== t.thread.threadId) return;
       set({ thread: { ...s.thread, bodies: { ...s.thread.bodies, ...bodies } } });
       options.onUpdate?.();
     }
   };
+
   /** Bodies load in the background so the thread (with snippets) shows at once. */
   let background: Promise<void> = Promise.resolve();
 
@@ -289,9 +314,11 @@ export const createTui = (options: TuiOptions): TuiSession => {
     if (s.search) await runSearch(s.search.query, false);
     else await loadView();
     const open = s.thread;
+
     if (s.screen === "thread" && open) {
       try {
         const detail = await fetchThread(open.thread.threadId);
+
         if (s.thread === open) set({ thread: { ...open, thread: detail.thread } });
       } catch {
         // The list reload already reported any API failure.
@@ -307,20 +334,26 @@ export const createTui = (options: TuiOptions): TuiSession => {
         row: s.thread.thread,
         sender: s.thread.deliveries[0]?.from.address ?? s.thread.thread.sender,
       };
+
     if (s.search) {
       const hit = s.search.hits[s.index];
+
       return hit?.threadId ? { threadId: hit.threadId, row: undefined } : null;
     }
+
     const row = s.rows[s.index];
+
     return row ? { threadId: row.threadId, row, sender: row.sender } : null;
   };
 
   /** A thread mutation, then a refresh; trash/spam from a thread returns to the list. */
-  const mutate = (label: string, done: string, run: () => Promise<unknown>, leave = false) =>
+  const mutate = (label: string, done: string, run: () => Promise<JsonValue>, leave = false) =>
     attempt(label, async () => {
       await run();
+
       if (leave && s.screen === "thread") set({ screen: "mail", thread: null });
       await refresh();
+
       return done;
     });
 
@@ -356,9 +389,11 @@ export const createTui = (options: TuiOptions): TuiSession => {
       const created = await exec<{ draftId: string } | string>("draft reply", [threadId], {
         mode,
       });
-      const draftId = typeof created === "string" ? created : created.draftId;
+
+      const draftId = Predicate.isString(created) ? created : created.draftId;
       const draft = await showDraft(draftId);
       openCompose(mode, { draftId, ...draft }, threadId);
+
       return `${REPLY_LABEL[mode]}: draft ready`;
     });
 
@@ -366,41 +401,44 @@ export const createTui = (options: TuiOptions): TuiSession => {
   const saveCompose = async (): Promise<ComposeState> => {
     const c = s.compose!;
     let { draftId, revision } = c;
+
     if (draftId === null) {
+      const createFlags = { ...c.fields, "reply-to-thread": c.threadId || undefined };
+
       const created = await exec<{ draftId: string; revision?: number } | string>(
         "draft create",
         [],
-        {
-          ...c.fields,
-          ...(c.threadId ? { "reply-to-thread": c.threadId } : {}),
-        },
+        createFlags,
       );
-      draftId = typeof created === "string" ? created : created.draftId;
+
+      draftId = Predicate.isString(created) ? created : created.draftId;
       revision =
-        typeof created !== "string" && created.revision !== undefined
+        !Predicate.isString(created) && created.revision !== undefined
           ? created.revision
           : (await showDraft(draftId)).revision;
     } else {
       const changed = COMPOSE_FIELDS.filter((f) => c.fields[f] !== c.saved[f]);
+
       if (changed.length > 0) {
-        const saved = await exec<{
-          _tag?: string;
-          revision?: number;
-          currentRevision?: number;
-          current?: { revision: number };
-        }>("draft save", [draftId], {
+        const saved = await exec<
+          | { _tag: "Conflict"; currentRevision?: number; current?: { revision: number } }
+          | { _tag?: undefined; revision?: number }
+        >("draft save", [draftId], {
           revision: String(revision),
           ...Object.fromEntries(changed.map((f) => [f, c.fields[f]])),
         });
-        if (saved._tag === "Conflict")
+
+        if (Predicate.isTagged(saved, "Conflict"))
           throw new Error(
             `the draft changed elsewhere (now revision ${saved.current?.revision ?? saved.currentRevision}); close it and reopen to see that version`,
           );
         revision = saved.revision ?? revision + 1;
       }
     }
+
     const next = { ...c, draftId, revision, saved: c.fields };
     set({ compose: next });
+
     return next;
   };
 
@@ -408,26 +446,34 @@ export const createTui = (options: TuiOptions): TuiSession => {
     attempt("Saving draft", async () => {
       const c = s.compose!;
       const dirty = COMPOSE_FIELDS.some((f) => c.fields[f] !== c.saved[f]);
+
       if (dirty) await saveCompose();
       set({ screen: c.back, compose: null });
+
       return dirty ? "Draft saved" : "Closed";
     });
 
   const send = (at?: number, after: AfterSendChoice = "none") =>
     attempt(at === undefined ? "Send" : "Send later", async () => {
       const c = await saveCompose();
-      const result = await exec<{
-        _tag?: string;
-        sendJobIds?: ReadonlyArray<string>;
-        sendJobId?: string;
-        dueAt?: number;
-        currentRevision?: number;
-      }>("draft send", [c.draftId!], {
+
+      const sendFlags = {
         revision: String(c.revision),
-        ...(at === undefined ? {} : { at: new Date(at).toISOString() }),
-        ...(after === "none" ? {} : { after }),
-      });
-      if (result._tag === "Conflict")
+        at: at === undefined ? undefined : new Date(at).toISOString(),
+        after: after === "none" ? undefined : after,
+      };
+
+      const result = await exec<
+        | { _tag: "Conflict"; currentRevision?: number }
+        | {
+            _tag?: undefined;
+            sendJobIds?: ReadonlyArray<string>;
+            sendJobId?: string;
+            dueAt?: number;
+          }
+      >("draft send", [c.draftId!], sendFlags);
+
+      if (Predicate.isTagged(result, "Conflict"))
         throw new Error(
           `the draft changed elsewhere (now revision ${result.currentRevision}); reopen it before sending`,
         );
@@ -438,7 +484,9 @@ export const createTui = (options: TuiOptions): TuiSession => {
         compose: null,
         undo: { draftId: c.draftId!, jobIds, dueAt, mode: c.mode, threadId: c.threadId },
       });
+
       if (c.back === "mail" || c.back === "thread") await refresh();
+
       return at === undefined
         ? "Sending. Press u to undo."
         : `Scheduled for ${formatTime(dueAt, timeZone)}. Press u to cancel.`;
@@ -448,24 +496,34 @@ export const createTui = (options: TuiOptions): TuiSession => {
   const undo = () =>
     attempt("Undo send", async () => {
       const u = s.undo;
+
       if (!u) return "Nothing to undo";
       // Every job is tried; a failed request keeps the jobs not yet settled available to retry.
       const late: Array<string> = [];
+
       for (const [i, job] of u.jobIds.entries()) {
-        let result: { _tag?: string; state?: string };
+        let result: { _tag: "TooLate"; state?: string } | { _tag?: undefined };
+
         try {
-          result = await exec<{ _tag?: string; state?: string }>("send cancel", [job]);
+          result = await exec<{ _tag: "TooLate"; state?: string } | { _tag?: undefined }>(
+            "send cancel",
+            [job],
+          );
         } catch (error) {
           set({ undo: { ...u, jobIds: u.jobIds.slice(i) } });
           throw error;
         }
-        if (result._tag === "TooLate") late.push(sanitize(String(result.state)));
+
+        if (Predicate.isTagged(result, "TooLate")) late.push(sanitize(String(result.state)));
       }
+
       set({ undo: null });
+
       if (late.length === u.jobIds.length)
         throw new Error(`too late: the message is already ${late.join(", ")}`);
       const draft = await showDraft(u.draftId);
       openCompose(u.mode, { draftId: u.draftId, ...draft }, u.threadId);
+
       return late.length === 0
         ? "Send cancelled; the draft is open again"
         : `Partly cancelled: ${late.length} of ${u.jobIds.length} sends were already ${late.join(", ")}; the draft is open again`;
@@ -478,10 +536,13 @@ export const createTui = (options: TuiOptions): TuiSession => {
         : "Follow up when? (2h, 3d, tomorrow, 2026-10-01T09:00, now):",
       submit: async (value) => {
         const when = parseWhen(value, now());
+
         if (when === null) {
           set({ status: { level: "error", text: `Follow up: can't read "${sanitize(value)}"` } });
+
           return;
         }
+
         await mutate(
           "Follow up",
           when === "now"
@@ -493,10 +554,9 @@ export const createTui = (options: TuiOptions): TuiSession => {
               [threadId],
               when === "now"
                 ? { pin: true }
-                : {
-                    at: new Date(when).toISOString(),
-                    ...(ifNoReply ? { "if-no-reply": true } : {}),
-                  },
+                : ifNoReply
+                  ? { at: new Date(when).toISOString(), "if-no-reply": true }
+                  : { at: new Date(when).toISOString() },
             ),
         );
       },
@@ -504,17 +564,22 @@ export const createTui = (options: TuiOptions): TuiSession => {
 
   const screen = (sender: string | undefined, allow: boolean) => {
     const address = senderAddress(sender);
+
     if (!address) {
       set({ status: { level: "error", text: "Screening: this thread has no sender address" } });
+
       return;
     }
+
     const shown = sanitize(address);
+
     if (allow)
       ask({
         label: `Approve ${shown} into (i)mbox, (f)eed or (p)aper trail? esc cancels`,
         choices: "ifp",
         submit: (key) => {
-          const to = key === "f" ? "feed" : key === "p" ? "paper-trail" : "imbox";
+          const to = { f: "feed", p: "paper-trail" }[key] ?? "imbox";
+
           return mutate("Approve sender", `Approved ${shown} into ${to}`, () =>
             exec("screen approve", [address], { to }),
           );
@@ -535,17 +600,24 @@ export const createTui = (options: TuiOptions): TuiSession => {
   const mailAction = async (key: string): Promise<boolean> => {
     if (key === "c") {
       openCompose("new", null, null);
+
       return true;
     }
+
     const t = target();
     const needs = ["r", "e", "f", "s", "l", "a", "b", "B", "p", "x", "d", "!", "R", "y", "n"];
+
     if (!needs.includes(key)) return false;
+
     if (!t) {
       set({ status: { level: "info", text: "Select a thread first" } });
+
       return true;
     }
+
     const id = t.threadId;
     let { row, sender } = t;
+
     // A search hit carries no thread state: read it, so seen and attention toggles act on the real
     // revision and flags, and screening knows the sender.
     if (!row && ["s", "l", "a", "y", "n"].includes(key)) {
@@ -555,10 +627,13 @@ export const createTui = (options: TuiOptions): TuiSession => {
         sender = detail.deliveries?.[0]?.from.address ?? detail.thread.sender;
       } catch (error) {
         set({ status: { level: "error", text: describeError("Reading thread", error) } });
+
         return true;
       }
     }
+
     const attention = row?.attention;
+
     switch (key) {
       case "r":
         await reply(id, "reply");
@@ -581,6 +656,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
         );
         break;
       }
+
       case "a": {
         const on = !attention?.setAside;
         await mutate("Set Aside", on ? "Set aside" : "No longer set aside", () =>
@@ -588,6 +664,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
         );
         break;
       }
+
       case "b":
         bubble(id);
         break;
@@ -618,6 +695,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
         screen(sender, key === "y");
         break;
     }
+
     return true;
   };
 
@@ -627,16 +705,19 @@ export const createTui = (options: TuiOptions): TuiSession => {
   const onMail = async (key: string) => {
     const length = s.search ? s.search.hits.length : s.rows.length;
     const page = bodyHeight();
+
     if (key === "j" || key === "down") moveIndex(1, length);
     else if (key === "k" || key === "up") moveIndex(-1, length);
     else if (key === "pagedown" || key === " ") moveIndex(page, length);
     else if (key === "pageup") moveIndex(-page, length);
     else if (key === "enter" || key === "o") {
       const t = target();
+
       if (t) await openThread(t.threadId);
       else if (s.search) set({ status: { level: "info", text: "This result isn't a thread" } });
     } else if (/^[0-9]$/.test(key)) {
       const nav = MAIL_VIEW_NAV[(Number(key) + 9) % 10];
+
       if (nav) {
         set({ view: nav.view, index: 0, search: null });
         await loadView();
@@ -659,6 +740,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
     const t = s.thread!;
     const { lines, starts } = threadLines(t, size().columns, timeZone);
     const maxScroll = Math.max(0, lines.length - bodyHeight());
+
     const scrollTo = (scroll: number) => {
       const clamped = Math.max(0, Math.min(maxScroll, scroll));
       // The current message follows the top of the viewport.
@@ -675,7 +757,9 @@ export const createTui = (options: TuiOptions): TuiSession => {
         },
       });
     };
+
     const files = t.deliveries[t.message]?.attachments ?? [];
+
     if (key === "j" || key === "down") scrollTo(t.scroll + 1);
     else if (key === "k" || key === "up") scrollTo(t.scroll - 1);
     else if (key === " " || key === "pagedown") scrollTo(t.scroll + bodyHeight());
@@ -685,6 +769,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
         0,
         Math.min(t.deliveries.length - 1, t.message + (key === "]" ? 1 : -1)),
       );
+
       set({
         thread: {
           ...t,
@@ -716,6 +801,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
   const onCompose = async (key: string) => {
     const c = s.compose!;
     const field = COMPOSE_FIELDS[c.focus]!;
+
     const focus = (to: number) => {
       const next = (to + COMPOSE_FIELDS.length) % COMPOSE_FIELDS.length;
       set({
@@ -726,6 +812,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
         },
       });
     };
+
     if (key === "tab") focus(c.focus + 1);
     else if (key === "shift-tab") focus(c.focus - 1);
     else if (key === "escape") await closeCompose();
@@ -736,13 +823,13 @@ export const createTui = (options: TuiOptions): TuiSession => {
               label: "Send? y, d +done, b +follow up, r +follow up if no reply, c +clear, n no",
               choices: "ydbrcn",
               submit: (answer) =>
-                answer === "n" ? Promise.resolve() : send(undefined, SEND_KEYS[answer]),
+                answer === "n" ? Promise.resolve() : send(undefined, SEND_KEYS.get(answer)),
             }
           : {
               label: "Send? y, b +follow up, r +follow up if no reply, n no",
               choices: "ybrn",
               submit: (answer) =>
-                answer === "n" ? Promise.resolve() : send(undefined, SEND_KEYS[answer]),
+                answer === "n" ? Promise.resolve() : send(undefined, SEND_KEYS.get(answer)),
             },
       );
     else if (key === "ctrl-l")
@@ -750,6 +837,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
         label: "Send when? (2h, tomorrow, 2026-10-01T09:00):",
         submit: async (value) => {
           const when = parseWhen(value, now());
+
           if (when === null || when === "now" || when <= now())
             set({
               status: {
@@ -762,6 +850,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
       });
     else {
       const edited = editText(c.fields[field], c.cursor, key, field === "body");
+
       if (edited)
         set({
           compose: { ...c, fields: { ...c.fields, [field]: edited.value }, cursor: edited.cursor },
@@ -781,6 +870,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
           [s.date],
           { tz: timeZone },
         );
+
         set({ days: [{ date: day.date ?? s.date, occurrences: day.occurrences ?? [] }] });
       } else {
         const agenda = await exec<{ days?: ReadonlyArray<AgendaDay> }>("cal agenda", [], {
@@ -788,8 +878,10 @@ export const createTui = (options: TuiOptions): TuiSession => {
           days: "7",
           tz: timeZone,
         });
+
         set({ days: agenda.days ?? [] });
       }
+
       const count = visibleOccurrences(s).length;
       set({ occurrence: Math.min(s.occurrence, Math.max(0, count - 1)) });
     });
@@ -801,6 +893,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
 
   const shiftDate = (days: number) => {
     const d = parseLocalDate(s.date);
+
     return d ? ymd(addDays(d, days)) : today();
   };
 
@@ -809,18 +902,23 @@ export const createTui = (options: TuiOptions): TuiSession => {
   /** The day the selected occurrence is listed under (agenda), else the anchor date. */
   const selectedDay = () => {
     let n = s.occurrence;
+
     for (const day of s.days) {
       if (n < day.occurrences.length) return day.date;
       n -= day.occurrences.length;
     }
+
     return s.date;
   };
 
   const respond = (answer: "accept" | "tentative" | "decline", scope?: "this" | "series") => {
     const o = selected();
+
     if (!o) return set({ status: { level: "info", text: "Select an event first" } });
+
     if (!o.invitation)
       return set({ status: { level: "info", text: "This event isn't an invitation to you" } });
+
     if (o.recurring && scope === undefined) {
       ask({
         label: `Reply ${answer} to (t)his occurrence or the whole (s)eries?`,
@@ -829,18 +927,22 @@ export const createTui = (options: TuiOptions): TuiSession => {
           await respond(answer, key === "t" ? "this" : "series");
         },
       });
+
       return;
     }
+
     return attempt("Reply to invitation", async () => {
       await exec("cal respond", [o.eventId, answer], scope === "this" ? { occurrence: o.key } : {});
       await loadCalendar();
       const what = scope === "series" ? " (every occurrence)" : "";
+
       return `Replied ${answer} to ${sanitize(o.data.summary || "(untitled)")}${what}`;
     });
   };
 
   const openForm = (occurrence: OccurrenceWire | null) => {
     const day = selectedDay();
+
     const fields = occurrence
       ? {
           title: occurrence.data.summary,
@@ -849,6 +951,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
           location: occurrence.data.location ?? "",
         }
       : { title: "", start: `${day}T09:00`, end: `${day}T10:00`, location: "" };
+
     set({
       screen: "form",
       form: {
@@ -866,53 +969,77 @@ export const createTui = (options: TuiOptions): TuiSession => {
 
   const defaultCalendar = async () => {
     if (calendarId) return calendarId;
+
     const list = await exec<{ items?: ReadonlyArray<{ id?: string; calendarId?: string }> }>(
       "cal calendars",
     );
+
     calendarId = firstCalendarId(list.items ?? []) ?? undefined;
+
     if (!calendarId) throw new Error("no calendar to add the event to");
+
     return calendarId;
   };
+
+  const SCOPE_KEYS = new Map<string, "this" | "future">([
+    ["t", "this"],
+    ["f", "future"],
+  ]);
 
   const saveEvent = async (scope?: "this" | "future" | "series") => {
     const f = s.form!;
     const o = f.occurrence;
+
     if (o?.recurring && scope === undefined) {
       ask({
         label: "Change (t)his occurrence, (f)uture ones, or the whole (s)eries?",
         choices: "tfs",
-        submit: (key) => saveEvent(key === "t" ? "this" : key === "f" ? "future" : "series"),
+        submit: (key) => saveEvent(SCOPE_KEYS.get(key) ?? "series"),
       });
+
       return;
     }
+
     await attempt(o ? "Save event" : "Create event", async () => {
       const location = f.fields.location.trim();
+
       if (!o) {
-        await exec("cal add", [], {
+        const addFlags = {
           "calendar-id": await defaultCalendar(),
           title: f.fields.title,
           start: f.fields.start,
           end: f.fields.end,
           tz: f.tz,
-          ...(location ? { location } : {}),
-        });
+          location: location || undefined,
+        };
+
+        await exec("cal add", [], addFlags);
       } else {
         const changed = EVENT_FIELDS.filter((k: EventField) => f.fields[k] !== f.saved[k]);
+
         if (changed.length === 0) {
           set({ screen: f.back, form: null });
+
           return "No changes";
         }
-        await exec("cal edit", [o.eventId], {
+
+        const editFlags = {
           revision: String(o.revision ?? 0),
           scope: scope ?? "series",
           // A recurring event's times were edited from this occurrence (it anchors a series edit).
-          ...(o.recurring ? { occurrence: o.key } : {}),
+          occurrence: o.recurring ? o.key : undefined,
+        };
+
+        await exec("cal edit", [o.eventId], {
+          ...editFlags,
           tz: f.tz,
           ...Object.fromEntries(changed.map((k) => [k, k === "location" ? location : f.fields[k]])),
         });
       }
+
       set({ screen: f.back, form: null });
       await loadCalendar();
+
       return o ? "Event updated" : "Event created";
     });
   };
@@ -920,6 +1047,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
   const onCalendar = async (key: string) => {
     const count = visibleOccurrences(s).length;
     const day = s.screen === "day";
+
     if (key === "j" || key === "down")
       set({ occurrence: Math.min(Math.max(0, count - 1), s.occurrence + 1) });
     else if (key === "k" || key === "up") set({ occurrence: Math.max(0, s.occurrence - 1) });
@@ -935,30 +1063,35 @@ export const createTui = (options: TuiOptions): TuiSession => {
     } else if (key === "c") openForm(null);
     else if (key === "e") {
       const o = selected();
+
       if (o) openForm(o);
-    } else if (Object.hasOwn(PARTSTAT_KEYS, key)) await respond(PARTSTAT_KEYS[key]!);
+    } else if (PARTSTAT_KEYS.has(key)) await respond(PARTSTAT_KEYS.get(key)!);
     else if (key === "m" || key === "q" || key === "escape") {
       set({ screen: "mail" });
+
       if (s.rows.length === 0 && !s.search) await loadView();
     }
   };
 
   const onEvent = async (key: string) => {
     const o = selected();
+
     if (key === "e" && o) openForm(o);
-    else if (Object.hasOwn(PARTSTAT_KEYS, key)) await respond(PARTSTAT_KEYS[key]!);
+    else if (PARTSTAT_KEYS.has(key)) await respond(PARTSTAT_KEYS.get(key)!);
     else if (key === "q" || key === "escape") set({ screen: s.calendar });
   };
 
   const onForm = async (key: string) => {
     const f = s.form!;
     const field = EVENT_FIELDS[f.focus]!;
+
     const focus = (to: number) => {
       const next = (to + EVENT_FIELDS.length) % EVENT_FIELDS.length;
       set({
         form: { ...f, focus: next, cursor: Array.from(f.fields[EVENT_FIELDS[next]!]).length },
       });
     };
+
     if (key === "tab" || key === "enter" || key === "down") focus(f.focus + 1);
     else if (key === "shift-tab" || key === "up") focus(f.focus - 1);
     else if (key === "escape")
@@ -966,6 +1099,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
     else if (key === "ctrl-s") await saveEvent();
     else {
       const edited = editText(f.fields[field], f.cursor, key, false);
+
       if (edited)
         set({
           form: { ...f, fields: { ...f.fields, [field]: edited.value }, cursor: edited.cursor },
@@ -975,6 +1109,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
 
   const onPrompt = async (key: string) => {
     const p = s.prompt!;
+
     if (key === "escape") set({ prompt: null, status: { level: "info", text: "Cancelled" } });
     else if (p.choices) {
       if (p.choices.includes(key)) {
@@ -986,6 +1121,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
       await p.submit(p.value);
     } else {
       const edited = editText(p.value, Array.from(p.value).length, key, false);
+
       if (edited) set({ prompt: { ...p, value: edited.value } });
     }
   };
@@ -993,15 +1129,21 @@ export const createTui = (options: TuiOptions): TuiSession => {
   const press = async (key: string) => {
     if (key === "ctrl-c") {
       finished = true;
+
       return;
     }
+
     if (s.prompt) return onPrompt(key);
     const typing = s.screen === "compose" || s.screen === "form";
+
     if (!typing && key === "?") {
       set({ screen: "help", help: { scroll: 0, back: s.screen === "help" ? "mail" : s.screen } });
+
       return;
     }
+
     if (!typing && key === "u" && s.screen !== "help") return undo();
+
     const handlers: Readonly<Record<Screen, (key: string) => Promise<void> | void>> = {
       mail: onMail,
       thread: onThread,
@@ -1017,6 +1159,7 @@ export const createTui = (options: TuiOptions): TuiSession => {
         else if (k === "q" || k === "escape") set({ screen: s.help.back });
       },
     };
+
     await handlers[s.screen](key);
   };
 
@@ -1038,13 +1181,16 @@ const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 /** Message documents come from the render origin by capability URL: no credentials, no redirects. */
 export const fetchRendered = async (url: string): Promise<string> => {
   const target = new URL(url);
+
   if (
     target.protocol !== "https:" &&
     !(target.protocol === "http:" && LOOPBACK.has(target.hostname))
   )
     throw new Error("render URL must be https");
   const response = await fetch(target, { redirect: "error", credentials: "omit" });
+
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
   return response.text();
 };
 
@@ -1059,6 +1205,7 @@ export const runTui = async (
   const size = () => ({ columns: output.columns || 80, rows: output.rows || 24 });
   let failed: unknown;
   let finish = () => undefined as void;
+
   // Any render or key-handling failure restores the terminal before it is reported.
   const safely = (run: () => void) => {
     try {
@@ -1068,6 +1215,7 @@ export const runTui = async (
       finish();
     }
   };
+
   const tui = createTui({
     api,
     newCommandId,
@@ -1075,6 +1223,7 @@ export const runTui = async (
     size,
     onUpdate: () => safely(paint),
   });
+
   const paint = () =>
     void output.write(
       `\u001b[H${tui
@@ -1082,20 +1231,26 @@ export const runTui = async (
         .map((line) => `${line}\u001b[K`)
         .join("\r\n")}\u001b[J`,
     );
+
   const draw = () => safely(paint);
   output.write("\u001b[?1049h\u001b[?25l");
+
   if (input.isTTY) input.setRawMode(true);
   input.setEncoding("utf8");
+
   try {
     await tui.start();
   } catch (error) {
     failed = error;
   }
+
   if (failed === undefined) draw();
+
   // Redraw once a second so the undo countdown stays current.
   const ticker = setInterval(() => {
     if (tui.state().undo) draw();
   }, 1000);
+
   return new Promise<number>((resolve) => {
     let queue = Promise.resolve();
     let finished = false;
@@ -1105,15 +1260,18 @@ export const runTui = async (
       clearInterval(ticker);
       input.off("data", onData);
       output.off("resize", draw);
+
       if (input.isTTY) input.setRawMode(false);
       input.pause();
       output.write("\u001b[?25h\u001b[?1049l");
+
       if (failed === undefined) return resolve(0);
       process.stderr.write(
         `bye tui: ${sanitize(failed instanceof Error ? failed.message : JSON.stringify(failed))}\n`,
       );
       resolve(1);
     };
+
     const onData = (chunk: string) => {
       queue = queue
         .then(async () => {
@@ -1122,15 +1280,18 @@ export const runTui = async (
             await tui.press(key);
             draw();
           }
+
           if (tui.done()) finish();
         })
-        .catch((error: unknown) => {
-          failed ??= error;
+        .catch((cause: unknown) => {
+          failed ??= cause;
           finish();
         });
     };
+
     input.on("data", onData);
     output.on("resize", draw);
+
     if (failed !== undefined) finish();
   });
 };

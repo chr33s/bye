@@ -16,13 +16,17 @@ export const scannerSignatureSource = (
 ): ScannerSignatureSource => {
   // Empty (an unset CI variable) means the default.
   const mode = env.SCANNER_SIGNATURES?.trim() || "mirror";
+
   if (mode === "mirror") return { mode };
+
   if (mode !== "baked")
     throw new Error(`SCANNER_SIGNATURES must be "mirror" or "baked", got ${mode}`);
   const image = env.SCANNER_IMAGE ?? "";
+
   if (!/@sha256:[0-9a-f]{64}$/.test(image))
     throw new Error(
       "SCANNER_SIGNATURES=baked requires SCANNER_IMAGE pinned by digest (…@sha256:…)",
     );
+
   return { mode, image };
 };

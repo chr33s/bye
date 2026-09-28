@@ -1,4 +1,12 @@
-import { ByeApiError, ByeClient, type Method, newCommandId, queryString } from "@bye/native-shared";
+import type { JsonObject } from "@bye/native-shared/json";
+import {
+  ByeApiError,
+  ByeClient,
+  type Method,
+  newCommandId,
+  queryString,
+  type RequestBody,
+} from "@bye/native-shared";
 import type { MailThreadSummary, MailViewPage } from "@bye/contracts";
 import type { MeWire } from "@bye/native-shared/wire";
 
@@ -18,15 +26,12 @@ export { ByeApiError as ApiRequestError, newCommandId };
 export const api = <T = unknown>(
   method: Method,
   path: string,
-  body?: unknown,
+  body?: RequestBody,
   signal?: AbortSignal,
 ): Promise<T> => client.request<T>(method, path, body, signal ? { signal } : {});
 
 /** A list route's items: every list route answers `{ items }`. */
-export const list = <T = Record<string, unknown>>(
-  path: string,
-  signal?: AbortSignal,
-): Promise<Array<T>> =>
+export const list = <T = JsonObject>(path: string, signal?: AbortSignal): Promise<Array<T>> =>
   api<{ readonly items: ReadonlyArray<T> }>("GET", path, undefined, signal).then((r) => [
     ...r.items,
   ]);
@@ -68,13 +73,18 @@ export type ViewPage = Pick<MailViewPage, "nextCursor" | "boundary"> & {
  * Save a binary response (attachment zips) as a download. The one web request outside ByeClient:
  * the shared client parses JSON/text bodies, and only the browser needs a Blob.
  */
-export const apiDownload = async (path: string, body: unknown, filename: string): Promise<void> => {
+export const apiDownload = async (
+  path: string,
+  body: RequestBody,
+  filename: string,
+): Promise<void> => {
   const res = await fetch(path, {
     method: "POST",
     credentials: "same-origin",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+
   if (!res.ok) throw new Error(`Download failed (${res.status})`);
   const url = URL.createObjectURL(await res.blob());
   const a = document.createElement("a");

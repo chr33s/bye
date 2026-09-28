@@ -1,3 +1,4 @@
+import type { JsonValue } from "./json.ts";
 import {
   Cause,
   Console,
@@ -8,6 +9,7 @@ import {
   Layer,
   Option,
   Path,
+  Predicate,
   Stdio,
   Terminal,
 } from "effect";
@@ -19,7 +21,12 @@ import {
   GlobalFlag,
 } from "effect/unstable/cli";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import type { CalendarCommandInput, MailboxCommandInput, QueryParams } from "@bye/native-shared";
+import type {
+  CalendarCommandInput,
+  MailboxCommandInput,
+  QueryParams,
+  RequestBody,
+} from "@bye/native-shared";
 import { CliApi, type CliConfig } from "./client.ts";
 import type { InstanceDeps } from "./instance.ts";
 
@@ -72,13 +79,17 @@ const setting = <const Id extends string, A>(id: Id, flag: Flag.Flag<A>, descrip
   GlobalFlag.Setting(id)({ flag: flag.pipe(Flag.withDescription(description)) });
 
 export const Json = setting("json", bool("json"), "Machine-readable output");
+
 export const Yes = setting("yes", bool("yes"), "Confirm a consequential action");
+
 export const Verbose = setting("verbose", bool("verbose"), "Print the effective target to stderr");
+
 export const MailboxFlag = setting(
   "mailbox",
   opt("mailbox"),
   "Mailbox ID (default: the saved one)",
 );
+
 export const CalendarFlag = setting(
   "calendar",
   opt("calendar"),
@@ -122,8 +133,8 @@ export class Invocation extends Context.Service<
     readonly newCommandId: () => string;
     readonly verbose: boolean;
     readonly stderr: (text: string) => void;
-    readonly succeed: (value: unknown, json: boolean) => void;
-    readonly fail: (error: unknown, json: boolean) => void;
+    readonly succeed: (value: JsonValue, json: boolean) => void;
+    readonly fail: (cause: unknown, json: boolean) => void;
     /** Local commands (login, instance, tui) report an exit code directly. */
     readonly exit: (code: number) => void;
     /** This machine's config store, for `bye login` and `bye instance`. */
@@ -135,8 +146,11 @@ export class Invocation extends Context.Service<
 export const signedIn = Effect.gen(function* () {
   const api = yield* CliApi;
   const { verbose, stderr } = yield* Invocation;
+
   if (!api.config.token) return yield* Effect.fail(new NotSignedIn(api.config));
+
   if (verbose || (yield* Verbose)) stderr(`bye: ${api.config.apiUrl} (${api.config.source})`);
+
   return api;
 });
 
@@ -151,6 +165,7 @@ export const report = <A>(
     const invocation = yield* Invocation;
     const json = yield* Json;
     const exit = yield* Effect.exit(Effect.provide(body, invocation.api));
+
     if (Exit.isSuccess(exit)) done(exit.value, json);
     else invocation.fail(Cause.squash(exit.cause), json);
   });
@@ -168,7 +183,7 @@ export const action = <const Name extends string, const Config extends Command.C
   config: Config,
   run: (
     input: Command.Command.Config.Infer<Config>,
-  ) => Effect.Effect<unknown, unknown, CliApi | Invocation | Settings>,
+  ) => Effect.Effect<JsonValue, unknown, CliApi | Invocation | Settings>,
 ) =>
   Command.make(name, config, (input) =>
     Effect.gen(function* () {
@@ -180,6 +195,7 @@ export const action = <const Name extends string, const Config extends Command.C
               new UsageError(`\`${name}\` is a consequential action; re-run with --yes to confirm`),
             );
           yield* signedIn;
+
           return yield* run(input);
         }),
         invocation.succeed,
@@ -194,6 +210,7 @@ export const action = <const Name extends string, const Config extends Command.C
 // The CLI module's platform services back prompts and file-typed params, which bye doesn't use,
 // so the interactive --wizard built-in is left out.
 const unused = Effect.die("unused");
+
 const environment = Layer.mergeAll(
   ParserConfig.layer({
     builtIns: [GlobalFlag.Help, GlobalFlag.Version, GlobalFlag.Completions, GlobalFlag.LogLevel],
@@ -232,10 +249,12 @@ export const execute = async (
   invocation: Invocation["Service"],
 ): Promise<Execution> => {
   const printed: Array<string> = [];
+
   const capture: Console.Console = Object.assign(Object.create(console), {
     log: (...parts: ReadonlyArray<unknown>) => void printed.push(parts.join(" ")),
     error: (...parts: ReadonlyArray<unknown>) => void printed.push(parts.join(" ")),
   });
+
   const exit = await Effect.runPromiseExit(
     Command.runWith(command, { version: VERSION, renderErrors: false })(argv).pipe(
       Effect.provideService(Invocation, invocation),
@@ -243,9 +262,11 @@ export const execute = async (
       Effect.provide(environment),
     ) as Effect.Effect<void, unknown>,
   );
+
   if (Exit.isSuccess(exit)) return { printed };
   const failure = Cause.squash(exit.cause);
-  return CliError.isCliError(failure) && failure._tag === "ShowHelp"
+
+  return CliError.isCliError(failure) && Predicate.isTagged(failure, "ShowHelp")
     ? { printed, usage: failure }
     : { printed, failure };
 };
@@ -256,10 +277,12 @@ export const execute = async (
 export const mailbox = Effect.gen(function* () {
   const api = yield* CliApi;
   const id = (yield* MailboxFlag) ?? api.config.mailboxId;
+
   if (!id)
     return yield* Effect.fail(
       new UsageError("no mailbox selected: pass --mailbox or run `bye login --mailbox <id>`"),
     );
+
   return id;
 });
 
@@ -267,10 +290,12 @@ export const mailbox = Effect.gen(function* () {
 export const calendar = Effect.gen(function* () {
   const api = yield* CliApi;
   const id = (yield* CalendarFlag) ?? api.config.calendarId;
+
   if (!id)
     return yield* Effect.fail(
       new UsageError("no calendar selected: pass --calendar or run `bye login --calendar <id>`"),
     );
+
   return id;
 });
 
@@ -280,10 +305,10 @@ export const commandId = Effect.map(Invocation, (i) => i.newCommandId());
 export const get = (path: string, query?: QueryParams) =>
   Effect.flatMap(CliApi, (api) => api.request("GET", path, undefined, query));
 
-export const post = (path: string, body: unknown) =>
+export const post = (path: string, body: RequestBody) =>
   Effect.flatMap(CliApi, (api) => api.request("POST", path, body));
 
-export const patch = (path: string, body: unknown) =>
+export const patch = (path: string, body: RequestBody) =>
   Effect.flatMap(CliApi, (api) => api.request("PATCH", path, body));
 
 export const del = (path: string, query?: QueryParams) =>
@@ -300,12 +325,18 @@ export const mailboxCommand = (
   mailboxId: string,
   commandId: string,
   command: MailboxCommandInput,
-) => post(`/v1/mailboxes/${encodeURIComponent(mailboxId)}/commands`, { commandId, ...command });
+) =>
+  // Commands are typed by the contract; only `SetPreference.value` is open, and it is JSON on the wire.
+  post(`/v1/mailboxes/${encodeURIComponent(mailboxId)}/commands`, {
+    commandId,
+    ...command,
+  } as RequestBody);
 
 /** A typed mailbox command against the selected mailbox. */
 export const mailCommand = (command: MailboxCommandInput) =>
   Effect.gen(function* () {
     const id = yield* mailbox;
+
     return yield* mailboxCommand(id, yield* commandId, command);
   });
 
@@ -313,6 +344,7 @@ export const mailCommand = (command: MailboxCommandInput) =>
 export const calendarCommand = (command: CalendarCommandInput) =>
   Effect.gen(function* () {
     const id = yield* calendar;
+
     return yield* post(`/v1/calendars/${encodeURIComponent(id)}/commands`, {
       schemaVersion: 1,
       command: { commandId: yield* commandId, ...command },

@@ -20,6 +20,14 @@ export interface DeadLetterRow {
   readonly note: string | null;
 }
 
+/** The parts of a held queue message a replay inspects before re-sending it verbatim. */
+type HeldBody = {
+  readonly type?: string;
+  readonly ingestionId?: string;
+  readonly mailboxId?: string;
+  readonly sendJobId?: string;
+};
+
 export const isDeadLetterQueue = (queueName: string): boolean =>
   /dlq$|[-_]dlq[-_]|deadletter/i.test(queueName);
 
@@ -47,8 +55,10 @@ type SourceBinding = (typeof SOURCE_BINDING)[keyof typeof SOURCE_BINDING];
 export const sourceBindingFor = (queueName: string): SourceBinding | null => {
   for (const segment of queueName.toLowerCase().split("-")) {
     const id = segment.endsWith("dlq") ? segment.slice(0, -3) : segment;
+
     if (Object.hasOwn(SOURCE_BINDING, id)) return SOURCE_BINDING[id as keyof typeof SOURCE_BINDING];
   }
+
   return null;
 };
 
@@ -58,6 +68,7 @@ export const captureDeadLetters = async (
 ): Promise<void> => {
   for (const msg of batch.messages) {
     const body = msg.body as { type?: string; eventId?: string } | null;
+
     try {
       await env.DIRECTORY.prepare(
         "INSERT OR IGNORE INTO dead_letters (id, queue, message_type, event_id, body, attempts, received_at, state) VALUES (?, ?, ?, ?, ?, ?, ?, 'held')",
@@ -110,8 +121,10 @@ export const replayDeadLetter = async (env: CoreEnv, id: string): Promise<Replay
   )
     .bind(id)
     .first<DeadLetterRow>();
+
   if (!row) return { _tag: "NotFound" };
-  const body = JSON.parse(row.body) as Record<string, unknown>;
+  const body: HeldBody = JSON.parse(row.body);
+
   const settle = async (state: "replayed" | "obsolete", note: string | null) =>
     env.DIRECTORY.prepare(
       "UPDATE dead_letters SET state = ?, resolved_at = ?, note = ? WHERE id = ?",
@@ -123,23 +136,31 @@ export const replayDeadLetter = async (env: CoreEnv, id: string): Promise<Replay
     const receipt = await env.INGRESS_JOURNALS.getByName(
       journalPartition(String(body.ingestionId)),
     ).get(String(body.ingestionId));
+
     if (receipt && (receipt.state === "committed" || receipt.state === "rejected")) {
       await settle("obsolete", `receipt already ${receipt.state}`);
+
       return { _tag: "Obsolete", reason: `receipt ${receipt.state}` };
     }
   }
+
   if (body.type === "dispatch") {
     const job = await mailbox(env, String(body.mailboxId)).sendJob(String(body.sendJobId));
+
     if (!job || job.state !== "ready") {
       await settle("obsolete", `send job ${job?.state ?? "missing"}`);
+
       return { _tag: "Obsolete", reason: `send job ${job?.state ?? "missing"}` };
     }
   }
+
   const binding = sourceBindingFor(row.queue);
+
   if (!binding) return { _tag: "Unroutable" };
   await env[binding].send(body, { contentType: "json" });
   await settle("replayed", null);
   metric("dlq.replayed", 1, { queue: binding });
+
   return { _tag: "Replayed" };
 };
 

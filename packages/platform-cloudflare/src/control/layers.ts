@@ -13,7 +13,7 @@ import {
   Unavailable,
   WorldPublishing,
 } from "@bye/application";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Predicate } from "effect";
 import type { SharedSpaceStore } from "../shared/space.ts";
 import type { WorldStore } from "../shared/world.ts";
 import type { ControlAuth } from "./auth.ts";
@@ -37,7 +37,7 @@ import { type D1Like, primary, q } from "./d1.ts";
 /** Every Promise-returning method of an adapter, as an Effect failing with `Rejection`. */
 export type Lifted<C> = {
   readonly [
-    K in keyof C as C[K] extends (...args: never) => Promise<unknown> ? K : never
+    K in keyof C as C[K] extends (...args: never) => Promise<infer _Result> ? K : never
   ]: C[K] extends (...args: infer P) => Promise<infer R>
     ? (...args: P) => Effect.Effect<R, Rejection>
     : never;
@@ -49,21 +49,26 @@ export const attempt = <A>(fn: () => Promise<A>): Effect.Effect<A, Rejection> =>
     Effect.catch((e) => (isRejection(e) ? Effect.fail(e) : Effect.die(e))),
   );
 
+/** An adapter method after lifting: its arguments are forwarded untouched. */
+type LiftedMethod = (...args: Array<unknown>) => Effect.Effect<unknown, Rejection>;
+
 /** Lift an adapter instance's methods (walking its prototype chain) into Effects. */
 export const lift = <C extends object>(instance: C): Lifted<C> => {
-  const out: Record<string, unknown> = {};
+  const out: Record<string, LiftedMethod> = {};
+
   for (
     let proto = Object.getPrototypeOf(instance);
     proto && proto !== Object.prototype;
     proto = Object.getPrototypeOf(proto)
   ) {
     for (const key of Object.getOwnPropertyNames(proto)) {
-      const method = (instance as Record<string, unknown>)[key];
-      if (key === "constructor" || key in out || typeof method !== "function") continue;
-      out[key] = (...args: Array<unknown>) =>
-        attempt(async () => (method as (...a: Array<unknown>) => unknown).apply(instance, args));
+      const method = instance[key as keyof C];
+
+      if (key === "constructor" || key in out || !Predicate.isFunction(method)) continue;
+      out[key] = (...args) => attempt(async () => method.apply(instance, args));
     }
   }
+
   return out as Lifted<C>;
 };
 
@@ -71,27 +76,35 @@ export const lift = <C extends object>(instance: C): Lifted<C> => {
 export class AuthService extends Context.Service<AuthService, Lifted<ControlAuth>>()(
   "control/Auth",
 ) {}
+
 export class OrgsService extends Context.Service<OrgsService, Lifted<ControlOrganizations>>()(
   "control/Orgs",
 ) {}
+
 export class DomainsService extends Context.Service<DomainsService, Lifted<ControlDomains>>()(
   "control/Domains",
 ) {}
+
 export class BillingService extends Context.Service<BillingService, Lifted<ControlBilling>>()(
   "control/Billing",
 ) {}
+
 export class CommerceService extends Context.Service<CommerceService, Lifted<ControlCommerce>>()(
   "control/Commerce",
 ) {}
+
 export class LifecycleService extends Context.Service<LifecycleService, Lifted<ControlLifecycle>>()(
   "control/Lifecycle",
 ) {}
+
 export class SendingService extends Context.Service<SendingService, Lifted<SendingPolicy>>()(
   "control/Sending",
 ) {}
+
 export class SupportService extends Context.Service<SupportService, Lifted<ControlSupport>>()(
   "control/Support",
 ) {}
+
 export class RegistryService extends Context.Service<
   RegistryService,
   Lifted<ControlSharedRegistry>
@@ -121,6 +134,7 @@ const authenticateWith = (auth: ControlAuth) => (token: string) =>
   attempt(async (): Promise<AuthenticatedRequest> => {
     const cred = await auth.authenticate(token);
     const principal = await auth.principal(cred);
+
     return {
       principal,
       credentialId: principal.sessionId,
@@ -183,6 +197,7 @@ export const policyServicesLayer = (
 export const controlServicesLayer = (a: ControlAdapters) => {
   const orgs = lift(a.orgs);
   const lifecycle = lift(a.lifecycle);
+
   return Layer.mergeAll(
     // Application ports.
     Layer.succeed(Credentials, {
@@ -204,6 +219,7 @@ export const controlServicesLayer = (a: ControlAdapters) => {
             "SELECT primary_address FROM users WHERE id = ?",
             userId,
           ).first<{ primary_address: string }>();
+
           return u ? u.primary_address : reject("not_found", "user");
         }),
       close: lifecycle.closeAccount,
@@ -225,13 +241,23 @@ export const controlServicesLayer = (a: ControlAdapters) => {
 /** Every service `controlServicesLayer` provides (for request-layer typing). */
 export type ControlServices = Layer.Success<ReturnType<typeof controlServicesLayer>>;
 
-const toSharedFailure = (e: unknown): SharedFailure => {
-  if (isRejection(e)) return e;
-  throw e;
-};
+const sync = <A>(fn: () => A) =>
+  Effect.try({
+    try: fn,
+    catch: (e): SharedFailure => {
+      if (isRejection(e)) return e;
+      throw e;
+    },
+  });
 
-const sync = <A>(fn: () => A) => Effect.try({ try: fn, catch: toSharedFailure });
-const promise = <A>(fn: () => Promise<A>) => Effect.tryPromise({ try: fn, catch: toSharedFailure });
+const promise = <A>(fn: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: fn,
+    catch: (e): SharedFailure => {
+      if (isRejection(e)) return e;
+      throw e;
+    },
+  });
 
 /** In-authority implementation (inside SharedSpaceDO RPC handlers, or tests with local stores). */
 export const makeLocalSharedSpaces = (
@@ -255,7 +281,9 @@ export const makeLocalWorldPublishing = (
   publish: (authorId, op) =>
     sync(() => {
       const result = resolve(authorId).publishFromMail(op);
+
       if ("copies" in result) for (const c of result.copies) copy(c.from, c.to);
+
       return { postId: result.postId, revision: result.revision };
     }),
 });

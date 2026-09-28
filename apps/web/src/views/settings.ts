@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import type { MailboxCommandInput } from "@bye/native-shared";
 import { degrade } from "../core/degrade.ts";
 import { api, list } from "../api.ts";
@@ -23,8 +24,17 @@ import { mailCommand, mb, remember, state, withStepUp, zone } from "../core/stat
 
 const reload = () => window.dispatchEvent(new HashChangeEvent("hashchange"));
 
+interface Preferences {
+  readonly theme?: string;
+  readonly density?: string;
+  readonly remoteImages?: string;
+  readonly shortcuts?: boolean;
+  readonly undoWindowMs?: number;
+  readonly calendarPanel?: boolean;
+}
+
 interface Prefs {
-  readonly preferences: Readonly<Record<string, unknown>>;
+  readonly preferences: Preferences;
   readonly notifications: {
     readonly quietHours: { start: string; end: string; timeZone: string } | null;
     readonly devices: Readonly<Record<string, { enabled: boolean }>>;
@@ -42,23 +52,23 @@ interface Prefs {
 
 export const applyTheme = (theme: string | null): void => {
   const t = theme === "light" || theme === "dark" ? theme : null;
+
   if (t) document.documentElement.setAttribute("data-theme", t);
   else document.documentElement.removeAttribute("data-theme");
 };
 
 const select = (
   label: string,
-  value: unknown,
+  value: string | number | boolean,
   options: ReadonlyArray<readonly [string, string]>,
   onchange: (v: string) => void,
 ) => {
   const s = h(
     "select",
     { onchange: () => onchange(s.value) },
-    options.map(([v, l]) =>
-      h("option", { value: v, ...(String(value) === v ? { selected: true } : {}) }, l),
-    ),
+    options.map(([v, l]) => h("option", { value: v, selected: String(value) === v }, l)),
   );
+
   return field(label, s);
 };
 
@@ -66,17 +76,21 @@ const subscribePush = async (): Promise<void> => {
   if (!("serviceWorker" in navigator) || !("PushManager" in window))
     throw new Error("This browser doesn't support push notifications");
   const { publicKey } = await api<{ publicKey: string }>("GET", "/v1/push/vapid-key");
+
   if ((await Notification.requestPermission()) !== "granted")
     throw new Error("Notifications were not allowed");
   const registration = await navigator.serviceWorker.ready;
+
   const subscription = await registration.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToBytes(publicKey),
   });
+
   const json = subscription.toJSON() as {
     endpoint: string;
     keys: { p256dh: string; auth: string };
   };
+
   await api("POST", "/v1/push/subscriptions", {
     kind: "webpush",
     endpoint: json.endpoint,
@@ -110,15 +124,21 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
       signal,
     ).catch(degrade([])),
   ]);
+
   const p = prefs.preferences;
+
   const setPref =
-    (key: Extract<MailboxCommandInput, { _tag: "SetPreference" }>["key"]) => (value: unknown) =>
+    (key: Extract<MailboxCommandInput, { _tag: "SetPreference" }>["key"]) =>
+    (value: string | number | boolean) =>
       act("Saved", () => mailCommand({ _tag: "SetPreference", key, value }))();
+
   const quietStart = h("input", {
     type: "time",
     value: prefs.notifications.quietHours?.start ?? "",
   });
+
   const quietEnd = h("input", { type: "time", value: prefs.notifications.quietHours?.end ?? "" });
+
   const optKind = h(
     "select",
     {},
@@ -126,9 +146,10 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
     h("option", { value: "domain" }, "Domain"),
     h("option", { value: "thread" }, "Conversation"),
   );
+
   const optSubject = h("input", { placeholder: "address, domain or thread ID" });
   const away = prefs.away;
-  const awayOn = h("input", { type: "checkbox", ...(away?.enabled ? { checked: true } : {}) });
+  const awayOn = h("input", { type: "checkbox", checked: away?.enabled });
   const awayStart = h("input", { type: "datetime-local" });
   const awayEnd = h("input", { type: "datetime-local" });
   const awaySubject = h("input", { value: away?.subject ?? "Away" });
@@ -137,12 +158,14 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
   const fwdToken = h("input", { placeholder: "verification code" });
   const idAddress = h("input", { type: "email", required: true });
   const idName = h("input", {});
+
   const idKind = h(
     "select",
     {},
     h("option", { value: "hosted" }, "Address on this account"),
     h("option", { value: "external" }, "External address (send-as)"),
   );
+
   const verifyToken = h("input", { placeholder: "code from the verification email" });
   show(
     section(
@@ -198,7 +221,7 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
         ),
         select(
           "Undo window",
-          String(typeof p.undoWindowMs === "number" ? p.undoWindowMs : 10_000),
+          String(p.undoWindowMs ?? 10_000),
           [
             ["5000", "5 seconds"],
             ["10000", "10 seconds"],
@@ -430,7 +453,7 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
                   _tag: "AddIdentity",
                   address: idAddress.value,
                   kind: choice(idKind.value, ["hosted", "external"], "hosted"),
-                  ...(idName.value ? { name: idName.value } : {}),
+                  name: idName.value || undefined,
                 }),
               ),
             reload,
@@ -453,7 +476,8 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
               const r = await mailCommand<{ secret?: string } | string>({
                 _tag: "RotateSpeakeasy",
               });
-              alert(`New passcode: ${typeof r === "string" ? r : (r.secret ?? "")}`);
+
+              alert(`New passcode: ${Predicate.isString(r) ? r : (r.secret ?? "")}`);
             }),
           },
           "Rotate passcode",
@@ -480,14 +504,16 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
   );
 };
 
+interface SecurityStatus {
+  readonly totpEnabled?: boolean;
+  readonly recoveryCodesRemaining?: number;
+}
+
 export const renderSecurity = async (signal: AbortSignal): Promise<void> => {
   const [status, passkeys, sessions, support] = await Promise.all([
-    api<{ totpEnabled?: boolean; recoveryCodesRemaining?: number }>(
-      "GET",
-      "/v1/security",
-      undefined,
-      signal,
-    ).catch(degrade({} as { totpEnabled?: boolean; recoveryCodesRemaining?: number })),
+    api<SecurityStatus>("GET", "/v1/security", undefined, signal).catch(
+      degrade<SecurityStatus>({}),
+    ),
     list<{ id: string; label: string; createdAt?: number; lastUsedAt?: number | null }>(
       "/v1/security/passkeys",
       signal,
@@ -500,13 +526,16 @@ export const renderSecurity = async (signal: AbortSignal): Promise<void> => {
       degrade([]),
     ),
   ]);
+
   const codes = h("div", { "aria-live": "polite" });
   const totpArea = h("div", { "aria-live": "polite" });
+
   const totpCode = h("input", {
     inputmode: "numeric",
     autocomplete: "one-time-code",
     "aria-label": "Code from your authenticator app",
   });
+
   const label = h("input", { placeholder: "e.g. YubiKey", "aria-label": "Passkey name" });
   const reason = h("input", { "aria-label": "Why support needs access" });
   show(
@@ -590,6 +619,7 @@ export const renderSecurity = async (signal: AbortSignal): Promise<void> => {
                   const r = await withStepUp(() =>
                     api<{ secret: string; otpauthUri: string }>("POST", "/v1/security/totp", {}),
                   );
+
                   totpArea.replaceChildren(
                     h("p", {}, "Add this key to your authenticator app, then enter a code:"),
                     h("code", {}, r.secret),
@@ -628,6 +658,7 @@ export const renderSecurity = async (signal: AbortSignal): Promise<void> => {
             const r = await withStepUp(() =>
               api<{ codes: ReadonlyArray<string> }>("POST", "/v1/security/recovery-codes", {}),
             );
+
             codes.replaceChildren(
               h("p", {}, "Save these now — they won't be shown again:"),
               h(
@@ -741,34 +772,42 @@ export const renderDevices = async (signal: AbortSignal): Promise<void> => {
       lastUsedAt: number | null;
     }>("/v1/tokens", signal).catch(degrade([])),
   ]);
+
   const label = h("input", { name: "label", required: true, placeholder: "e.g. Build server CLI" });
+
   const kind = h(
     "select",
     { name: "kind" },
     h("option", { value: "cli" }, "Command-line tool"),
     h("option", { value: "agent" }, "Agent"),
   );
+
   const scopeNames = ["read", "draft", "send", "screen", "delete", "calendar", "publish"] as const;
+
   const boxes = scopeNames.map((scope) =>
     h("input", {
       type: "checkbox",
       name: scope,
       value: scope,
-      ...(scope === "read" || scope === "draft" ? { checked: true } : {}),
+      checked: scope === "read" || scope === "draft",
     }),
   );
+
   const result = h("div", { role: "status", "aria-live": "polite" });
+
   const submit = async (event: Event) => {
     event.preventDefault();
     result.textContent = "Creating…";
+
     try {
       const token = await withStepUp(() =>
         api<{ id: string; token: string; scopes: Array<string> }>("POST", "/v1/tokens", {
           kind: kind.value,
           label: label.value,
-          scopes: boxes.filter((b) => b.checked).map((b) => b.value),
+          scopes: boxes.flatMap((b) => (b.checked ? [b.value] : [])),
         }),
       );
+
       result.replaceChildren(
         h(
           "p",
@@ -781,6 +820,7 @@ export const renderDevices = async (signal: AbortSignal): Promise<void> => {
       result.textContent = errorMessage(error);
     }
   };
+
   show(
     section(
       "devices-title",

@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { ApiError } from "@bye/contracts";
-import type { SharedMessageShape } from "@bye/application";
+import type { MailboxSelection } from "@bye/application";
 import {
   type MailboxDelivery,
   type MailboxThread,
@@ -14,14 +14,23 @@ import type { CoreEnv } from "./env.ts";
 // unwraps their `RpcResult` envelopes, so no caller re-types a stub or casts its result.
 
 export const mailbox = (env: CoreEnv, id: string) => env.MAILBOXES.getByName(id);
+
 export const calendar = (env: CoreEnv, id: string) => env.CALENDARS.getByName(id);
+
 export const space = (env: CoreEnv, spaceId: string) =>
   env.SHARED_SPACES.getByName(`space:${spaceId}`);
+
 export const world = (env: CoreEnv, handle: string) =>
   env.SHARED_SPACES.getByName(`world:${handle}`);
 
 /** The success value carried by an authority's `RpcResult` envelope. */
 export type Settled<R> = R extends { readonly ok: true; readonly value: infer A } ? A : never;
+
+type SharedMessage = Effect.Success<
+  ReturnType<MailboxSelection["Service"]["selectMessages"]>
+>["messages"][number];
+
+type RejectionDetails = NonNullable<Parameters<typeof publicError>[1]>;
 
 type Envelope =
   | { readonly ok: true; readonly value: unknown }
@@ -29,7 +38,7 @@ type Envelope =
       readonly ok: false;
       readonly code: RejectionCode;
       readonly message: string;
-      readonly details?: Readonly<Record<string, unknown>>;
+      readonly details?: RejectionDetails;
     };
 
 /**
@@ -42,18 +51,20 @@ export const call = <R extends Envelope>(
   Effect.flatMap(Effect.promise(f), (r) => {
     if (r.ok) return Effect.succeed(r.value as Settled<R>);
     const pub = publicError(r.code, r.details);
+
     return Effect.fail(
-      new ApiError({
-        code: pub.code,
-        message: r.message,
-        ...(pub.details ? { details: { ...pub.details } } : {}),
-      }),
+      new ApiError(
+        pub.details
+          ? { code: pub.code, message: r.message, details: { ...pub.details } }
+          : { code: pub.code, message: r.message },
+      ),
     );
   });
 
 /** Promise form for queue/workflow code: the value, or the rejection re-raised as `Rejection`. */
 export const settle = async <R extends Envelope>(p: Promise<R>): Promise<Settled<R>> => {
   const r = await p;
+
   return r.ok ? (r.value as Settled<R>) : reject(r.code, r.message, r.details);
 };
 
@@ -63,7 +74,9 @@ export const settleOr = async <R extends Envelope>(
   ...codes: ReadonlyArray<RejectionCode>
 ): Promise<Settled<R> | null> => {
   const r = await p;
+
   if (r.ok) return r.value as Settled<R>;
+
   return codes.includes(r.code) ? null : reject(r.code, r.message, r.details);
 };
 
@@ -80,14 +93,16 @@ export const sharedMessageOf = async (
   refs: ReadonlyArray<string>,
 ): Promise<{
   readonly subject: string;
-  readonly messages: ReadonlyArray<SharedMessageShape>;
+  readonly messages: ReadonlyArray<SharedMessage>;
 } | null> => {
   const detail = (await settleOr(mailbox(env, mailboxId).thread(threadId), "not_found")) as {
     readonly thread: MailboxThread;
     readonly deliveries: ReadonlyArray<MailboxDelivery>;
   } | null;
+
   if (!detail) return null;
   const wanted = new Set(refs);
+
   return {
     subject: detail.thread.subject,
     messages: detail.deliveries

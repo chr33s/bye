@@ -11,13 +11,16 @@ export const makeTestCalendarStore = (
 ) => {
   const storage = new MemoryDurableStorage();
   const clock = new TestClock(start);
+
   const store = CalendarStore.open(storage, clock, {
     ownerId: CALENDAR_TEST_OWNER,
     selfAddresses: ["me@bye.test"],
     defaultZone: "UTC",
     ...config,
   });
+
   let n = 0;
   const cmd = (): string => `cmd_test_${++n}`;
+
   return { storage, clock, store, cmd, owner: config.ownerId ?? CALENDAR_TEST_OWNER };
 };

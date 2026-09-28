@@ -10,18 +10,20 @@ import { coverPanel, coverPanelEnabled } from "./cover-panel.ts";
 // empty, attention piles (Reply Later, Set Aside, Bubble Up), Focus & Reply, Read Together, the
 // expanded Feed with visit markers, and a unified view across linked mailboxes.
 
-const EMPTY: Readonly<Record<string, string>> = {
-  screener: "Nobody is waiting to be screened.",
-  "reply-later": "Nothing to reply to later.",
-  "set-aside": "Nothing set aside.",
-  "bubble-up": "No follow-ups.",
-  spam: "No spam.",
-  "screened-out": "Nobody screened out.",
-  trash: "Trash is empty.",
-};
+const EMPTY = new Map([
+  ["screener", "Nobody is waiting to be screened."],
+  ["reply-later", "Nothing to reply to later."],
+  ["set-aside", "Nothing set aside."],
+  ["bubble-up", "No follow-ups."],
+  ["spam", "No spam."],
+  ["screened-out", "Nobody screened out."],
+  ["trash", "Trash is empty."],
+]);
 
 const DISPOSITIONS = ["spam", "screened-out", "trash"] as const;
+
 const DISPOSITION_VIEWS: ReadonlySet<string> = new Set(DISPOSITIONS);
+
 const DESTINATIONS = ["imbox", "feed", "paper-trail"] as const;
 
 const addressOf = (sender: string): string => /<([^>]+)>/.exec(sender)?.[1] ?? sender;
@@ -37,6 +39,7 @@ interface ListState {
 
 const rowActions = (row: ThreadRow, view: string): HTMLElement => {
   const id = row.threadId;
+
   const attention = (flag: "replyLater" | "setAside" | "unfollowed", on: boolean, label: string) =>
     h(
       "button",
@@ -50,8 +53,10 @@ const rowActions = (row: ThreadRow, view: string): HTMLElement => {
       },
       label,
     );
+
   if (view === "screener") {
     const sender = addressOf(row.sender);
+
     return h(
       "div",
       { class: "row-actions", role: "group", "aria-label": `Screen ${sender}` },
@@ -73,6 +78,7 @@ const rowActions = (row: ThreadRow, view: string): HTMLElement => {
       ),
     );
   }
+
   if (DISPOSITION_VIEWS.has(view)) {
     return h(
       "div",
@@ -91,7 +97,9 @@ const rowActions = (row: ThreadRow, view: string): HTMLElement => {
       ),
     );
   }
+
   const buttons: Array<HTMLElement> = [];
+
   if (view === "set-aside") buttons.push(attention("setAside", false, "Done"));
   else if (view === "reply-later") buttons.push(attention("replyLater", false, "Done"));
   else if (view === "bubble-up") {
@@ -127,6 +135,7 @@ const rowActions = (row: ThreadRow, view: string): HTMLElement => {
       attention("setAside", true, "Set aside"),
     );
   }
+
   return h("div", { class: "row-actions" }, buttons);
 };
 
@@ -143,8 +152,8 @@ const screen = (
             sender,
             decision,
             destination: choice(extra.destination ?? "imbox", DESTINATIONS, "imbox"),
-            ...(extra.asSeen ? { asSeen: true } : {}),
-            ...(extra.reply ? { reply: true } : {}),
+            asSeen: extra.asSeen || undefined,
+            reply: extra.reply || undefined,
           }
         : { sender, decision },
     ),
@@ -154,13 +163,15 @@ const threadItem = (row: ThreadRow, s: ListState): HTMLElement => {
   const selectBox = h("input", {
     type: "checkbox",
     "aria-label": `Select ${row.subject || "(no subject)"}`,
-    ...(s.selected.has(row.threadId) ? { checked: true } : {}),
+    checked: s.selected.has(row.threadId),
     onchange: (e) =>
       (e.target as HTMLInputElement).checked
         ? s.selected.add(row.threadId)
         : s.selected.delete(row.threadId),
   });
+
   const bubble = row.attention?.bubble;
+
   const badges = [
     row.newSinceVisit ? h("span", { class: "badge" }, "New since last visit") : null,
     row.quarantined ? h("span", { class: "badge warn" }, "Quarantined") : null,
@@ -174,7 +185,9 @@ const threadItem = (row: ThreadRow, s: ListState): HTMLElement => {
     bubble?._tag === "Pinned" ? h("span", { class: "badge" }, "Pinned") : null,
     ...(row.labels ?? []).map((l) => h("span", { class: "label" }, l)),
   ];
+
   const bundle = row.bundleCount > 1 && row.bundleKey;
+
   return h(
     "li",
     { class: row.newForYou ? "thread unseen" : "thread", "data-thread": row.threadId },
@@ -209,17 +222,23 @@ const readTogether = async (threadIds: ReadonlyArray<string> | "new-for-you") =>
 
 const bulkBar = (s: ListState): HTMLElement => {
   const ids = () => [...s.selected];
+
   const senders = () => [
     ...new Set(
       s.paged.items.filter((r) => s.selected.has(r.threadId)).map((r) => addressOf(r.sender)),
     ),
   ];
-  const need = (fn: () => Promise<unknown>) => async () => {
-    if (s.selected.size === 0) throw new Error("Select at least one conversation");
-    await fn();
-    s.selected.clear();
-  };
+
+  const need =
+    <R>(fn: () => Promise<R>) =>
+    async () => {
+      if (s.selected.size === 0) throw new Error("Select at least one conversation");
+      await fn();
+      s.selected.clear();
+    };
+
   const buttons: Array<HTMLElement> = [];
+
   if (s.view === "screener") {
     const dest = h(
       "select",
@@ -228,6 +247,7 @@ const bulkBar = (s: ListState): HTMLElement => {
       h("option", { value: "feed" }, "Newsletters"),
       h("option", { value: "paper-trail" }, "Receipts"),
     );
+
     buttons.push(
       dest,
       h(
@@ -263,6 +283,7 @@ const bulkBar = (s: ListState): HTMLElement => {
             need(async () => {
               const first = s.paged.items.find((r) => s.selected.has(r.threadId));
               await screen(senders(), "allow", { destination: dest.value, reply: true });
+
               if (first) location.hash = `#/compose?thread=${encodeURIComponent(first.threadId)}`;
             }),
           ),
@@ -379,7 +400,9 @@ const bulkBar = (s: ListState): HTMLElement => {
             "Scheduled",
             need(async () => {
               const at = Date.parse(when.value);
+
               if (!Number.isFinite(at)) throw new Error("Pick a date and time");
+
               for (const threadId of ids()) await mailCommand({ _tag: "BubbleUp", threadId, at });
             }),
             refresh,
@@ -402,8 +425,10 @@ const bulkBar = (s: ListState): HTMLElement => {
         "Pin now",
       ),
     );
+
     if (s.view === "reply-later")
       buttons.unshift(h("a", { href: "#/focus", class: "button primary" }, "Reply Queue"));
+
     if (s.view === "imbox")
       buttons.unshift(
         h(
@@ -416,6 +441,7 @@ const bulkBar = (s: ListState): HTMLElement => {
         ),
       );
   }
+
   return h(
     "div",
     { class: "bulk", role: "toolbar", "aria-label": "Actions for selected conversations" },
@@ -433,6 +459,7 @@ export const renderView = async (
   const list = h("ul", { class: "threads" });
   const more = h("button", { type: "button", class: "more" }, "Load more");
   const body = h("div", {});
+
   const load = async () => {
     const page = await api<ViewPage>(
       "GET",
@@ -440,17 +467,21 @@ export const renderView = async (
       undefined,
       signal,
     );
+
     if (!s.boundary) s.boundary = page.boundary;
     s.paged = appendPage(s.paged, page, (r) => r.threadId);
     renderRows();
   };
+
   const renderRows = () => {
     body.replaceChildren();
+
     if (s.paged.items.length === 0) {
-      body.append(h("div", { class: "empty" }, h("p", {}, EMPTY[view] ?? "Nothing here.")));
+      body.append(h("div", { class: "empty" }, h("p", {}, EMPTY.get(view) ?? "Nothing here.")));
     } else if (view === "imbox") {
       const fresh = s.paged.items.filter((r) => r.newForYou);
       const seen = s.paged.items.filter((r) => !r.newForYou);
+
       if (fresh.length) {
         body.append(
           h("h2", {}, "New for you"),
@@ -474,6 +505,7 @@ export const renderView = async (
           ),
         );
       }
+
       if (seen.length)
         body.append(
           h("h2", {}, "Previously seen"),
@@ -487,14 +519,17 @@ export const renderView = async (
       list.replaceChildren(...s.paged.items.map((r) => threadItem(r, s)));
       body.append(list);
     }
+
     more.hidden = s.paged.done;
   };
+
   more.addEventListener("click", act("Loaded more", load));
   // The calendar cover panel (C09) is optional and shown in the Imbox only.
   const cover = view === "imbox" && !label ? coverPanelEnabled(signal) : Promise.resolve(false);
   // If the list itself fails, the route's error state wins; the preference read is then moot.
   cover.catch(bestEffort);
   await load();
+
   if (view === "feed" || view === "paper-trail")
     void mailCommand({ _tag: "VisitView", view }).catch(bestEffort);
   show(
@@ -515,11 +550,13 @@ export const renderFeed = async (signal: AbortSignal): Promise<void> => {
     thread: ThreadRow;
     latest: { deliveryId: string; renderUrl: string; subject: string; date: number } | null;
   };
+
   let cursor: string | null = null;
   const list = h("ol", { class: "feed" });
   const more = h("button", { type: "button", class: "more" }, "Load more");
   let previousVisitAt = 0;
   let position: string | null = null;
+
   const load = async () => {
     const page = await api<{
       items: ReadonlyArray<FeedItem>;
@@ -527,10 +564,13 @@ export const renderFeed = async (signal: AbortSignal): Promise<void> => {
       position: string | null;
       previousVisitAt: number;
     }>("GET", `/v1/mailboxes/${mb()}/feed${query({ cursor, limit: 10 })}`, undefined, signal);
+
     previousVisitAt = previousVisitAt || page.previousVisitAt;
     position = position ?? page.position;
+
     for (const item of page.items) {
       const fresh = item.thread.newSinceVisit || (item.latest?.date ?? 0) > previousVisitAt;
+
       const frame = item.latest
         ? h("iframe", {
             title: item.latest.subject || "Newsletter",
@@ -540,6 +580,7 @@ export const renderFeed = async (signal: AbortSignal): Promise<void> => {
             src: item.latest.renderUrl,
           })
         : null;
+
       const details = h(
         "details",
         { open: true, "data-thread": item.thread.threadId },
@@ -556,6 +597,7 @@ export const renderFeed = async (signal: AbortSignal): Promise<void> => {
           "Open conversation",
         ),
       );
+
       details.addEventListener("toggle", () => {
         if (details.open)
           void mailCommand({
@@ -566,12 +608,15 @@ export const renderFeed = async (signal: AbortSignal): Promise<void> => {
       });
       list.append(h("li", {}, details));
     }
+
     cursor = page.nextCursor;
     more.hidden = cursor === null;
   };
+
   more.addEventListener("click", act("Loaded more", load));
   await load();
   void mailCommand({ _tag: "VisitView", view: "feed" }).catch(bestEffort);
+
   const collapseAll = h(
     "button",
     {
@@ -580,6 +625,7 @@ export const renderFeed = async (signal: AbortSignal): Promise<void> => {
     },
     "Collapse all",
   );
+
   const expandAll = h(
     "button",
     {
@@ -588,6 +634,7 @@ export const renderFeed = async (signal: AbortSignal): Promise<void> => {
     },
     "Expand all",
   );
+
   show(
     section(
       "view-title",
@@ -603,6 +650,7 @@ export const renderFeed = async (signal: AbortSignal): Promise<void> => {
       more,
     ),
   );
+
   if (position) list.querySelector(`[data-thread="${CSS.escape(position)}"]`)?.scrollIntoView();
 };
 
@@ -619,26 +667,31 @@ interface ThreadDetailLite {
   }>;
 }
 
-const sequential = async (
+const sequential = async <R>(
   title: string,
   threadIds: ReadonlyArray<string>,
   signal: AbortSignal,
-  onDone: (threadId: string) => Promise<unknown>,
+  onDone: (threadId: string) => Promise<R>,
 ) => {
   let index = 0;
   const pane = h("div", {});
+
   const render = async () => {
     if (index >= threadIds.length) {
       pane.replaceChildren(h("p", { class: "empty" }, "All done."));
+
       return;
     }
+
     const id = threadIds[index]!;
+
     const detail = await api<ThreadDetailLite>(
       "GET",
       `/v1/mailboxes/${mb()}/threads/${encodeURIComponent(id)}`,
       undefined,
       signal,
     );
+
     const latest = detail.deliveries.at(-1);
     pane.replaceChildren(
       h(
@@ -698,16 +751,21 @@ const sequential = async (
       observedRevision: detail.thread.revision,
     }).catch(bestEffort);
   };
+
   await render();
   show(section("view-title", title, pane));
 };
 
 /** Focus & Reply (E07): Reply Later threads one at a time, distraction-free. */
 export const renderFocus = async (signal: AbortSignal): Promise<void> => {
-  const queue = await list<{ thread: ThreadRow }>(`/v1/mailboxes/${mb()}/focus`, signal);
+  const queue = await list<{ thread?: ThreadRow; threadId?: string }>(
+    `/v1/mailboxes/${mb()}/focus`,
+    signal,
+  );
+
   await sequential(
     "Reply Queue",
-    queue.map((q) => q.thread?.threadId ?? (q as unknown as ThreadRow).threadId),
+    queue.map((q) => (q.thread?.threadId ?? q.threadId) as string),
     signal,
     (threadId) => mailCommand({ _tag: "SetAttention", threadId, flag: "replyLater", on: false }),
   );
@@ -719,6 +777,7 @@ export const renderBatch = async (batchId: string, signal: AbortSignal): Promise
     `/v1/mailboxes/${mb()}/batches/${encodeURIComponent(batchId)}`,
     signal,
   );
+
   await sequential(
     "Read All",
     batch.map((b) => b.thread.threadId),
@@ -732,12 +791,14 @@ export const renderBundle = async (bundleKey: string, signal: AbortSignal): Prom
     `/v1/mailboxes/${mb()}/bundles/${encodeURIComponent(bundleKey)}`,
     signal,
   );
+
   const s: ListState = {
     view: "bundle",
     paged: { items: rows, cursor: null, done: true },
     boundary: 0,
     selected: new Set(),
   };
+
   show(
     section(
       "view-title",
@@ -758,9 +819,11 @@ export const renderUnified = async (view: string, signal: AbortSignal): Promise<
     identity: { address: string; name: string | null } | null;
     thread: ThreadRow;
   };
+
   let cursor: string | null = null;
   const list = h("ul", { class: "threads" });
   const more = h("button", { type: "button", class: "more" }, "Load more");
+
   const load = async () => {
     const page = await api<{ items: ReadonlyArray<Row>; cursor: string | null }>(
       "GET",
@@ -768,6 +831,7 @@ export const renderUnified = async (view: string, signal: AbortSignal): Promise<
       undefined,
       signal,
     );
+
     for (const r of page.items) {
       list.append(
         h(
@@ -789,11 +853,14 @@ export const renderUnified = async (view: string, signal: AbortSignal): Promise<
         ),
       );
     }
+
     cursor = page.cursor;
     more.hidden = cursor === null;
   };
+
   more.addEventListener("click", act("Loaded more", load));
   await load();
+
   if (!list.children.length) list.append(h("li", { class: "empty" }, "Nothing here."));
   show(section("view-title", `All accounts: ${view}`, list, more));
   announce(`${list.children.length} conversations`);

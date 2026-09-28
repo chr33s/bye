@@ -1,3 +1,4 @@
+import { Option, Predicate, Schema } from "effect";
 import { reject } from "../durable/rpc.ts";
 import {
   migrate,
@@ -48,6 +49,7 @@ export const SEARCH_MIGRATIONS: ReadonlyArray<Migration> = [
 ];
 
 export const SEARCH_CHUNK_CHARS = 16 * 1024;
+
 export const SEARCH_MAX_BODY_CHARS = 512 * 1024;
 
 export interface SearchDocument {
@@ -85,6 +87,11 @@ export interface SearchPage {
   readonly watermark: number;
 }
 
+type ClauseSubqueryResult = {
+  readonly sql: string;
+  readonly args: ReadonlyArray<SqlValue>;
+};
+
 export class SearchShard {
   readonly sql: Sql;
 
@@ -99,12 +106,15 @@ export class SearchShard {
         "SELECT version FROM search_docs WHERE doc_id = ?",
         doc.docId,
       );
+
       if (existing && Number(existing.version) >= doc.version) return "stale";
       this.deleteRows(doc.docId);
       const body = (doc.body ?? "").slice(0, SEARCH_MAX_BODY_CHARS);
+
       const participants = [doc.from ?? "", ...(doc.to ?? []), ...(doc.participants ?? [])]
         .filter(Boolean)
         .join(" ");
+
       const attachments = (doc.attachments ?? []).join(" ");
       const chunks = chunk(body);
       chunks.forEach((c, i) => {
@@ -141,6 +151,7 @@ export class SearchShard {
         (doc.attachments?.length ?? 0) > 0,
         body.length + (doc.subject?.length ?? 0) + participants.length,
       );
+
       return "indexed";
     });
   }
@@ -152,6 +163,7 @@ export class SearchShard {
         "SELECT version FROM search_docs WHERE doc_id = ?",
         docId,
       );
+
       if (existing && Number(existing.version) > version) return "stale";
       this.deleteRows(docId);
       this.sql.run(
@@ -161,6 +173,7 @@ export class SearchShard {
         docId,
         version,
       );
+
       return "removed";
     });
   }
@@ -210,11 +223,12 @@ export class SearchShard {
     input: string | SearchQuery,
     options: { readonly limit?: number; readonly cursor?: string } = {},
   ): SearchPage {
-    const q = typeof input === "string" ? parseSearchQuery(input) : input;
+    const q = Predicate.isString(input) ? parseSearchQuery(input) : input;
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
     // Every term, filter value and kind binds one parameter; DO SQLite allows 100 per statement.
     const kinds = [...new Set(q.kinds)];
     const terms = q.clauses.length + q.from.length + q.to.length + q.labels.length + kinds.length;
+
     if (terms > MAX_SEARCH_TERMS)
       reject("bad_request", "search query has too many terms", {
         terms,
@@ -229,6 +243,7 @@ export class SearchShard {
       where.push(`d.doc_id ${c.negated ? "NOT IN" : "IN"} (${sub.sql})`);
       args.push(...sub.args);
     }
+
     for (const f of q.from) {
       if (f.includes("@")) {
         where.push("d.from_addr = ?");
@@ -240,44 +255,54 @@ export class SearchShard {
         args.push(f.toLowerCase());
       }
     }
+
     for (const t of q.to) {
       where.push("instr(lower(d.to_addrs), ?) > 0");
       args.push((t.includes("@") ? ` ${t} ` : t).toLowerCase());
     }
+
     for (const l of q.labels) {
       where.push("instr(lower(d.labels), lower(?)) > 0");
       args.push(JSON.stringify(l));
     }
+
     if (kinds.length > 0) {
       where.push(`d.kind IN (${placeholders(kinds.length)})`);
       args.push(...kinds);
     }
+
     if (q.hasAttachment !== undefined) {
       where.push("d.has_attachment = ?");
       args.push(q.hasAttachment ? 1 : 0);
     }
+
     if (q.before !== undefined) {
       where.push("d.date < ?");
       args.push(q.before);
     }
+
     if (q.after !== undefined) {
       where.push("d.date >= ?");
       args.push(q.after);
     }
+
     if (q.scope === "trash" || q.scope === "spam") {
       where.push("d.view = ?");
       args.push(q.scope);
     } else if (q.scope === "mail") {
       where.push("d.view NOT IN ('trash','spam')");
     }
+
     if (q.view) {
       where.push("d.view = ?");
       args.push(q.view);
     }
+
     if (cursor) {
       where.push("(d.date < ? OR (d.date = ? AND d.doc_id < ?))");
       args.push(cursor.d, cursor.d, cursor.id);
     }
+
     const rows = this.sql.all<{
       doc_id: string;
       kind: string;
@@ -290,6 +315,7 @@ export class SearchShard {
       ...args,
       limit + 1,
     );
+
     const page = rows.slice(0, limit).map((r) => ({
       docId: r.doc_id,
       kind: r.kind,
@@ -298,7 +324,9 @@ export class SearchShard {
       date: Number(r.date),
       version: Number(r.version),
     }));
+
     const last = page.at(-1);
+
     return {
       candidates: page,
       nextCursor:
@@ -307,11 +335,9 @@ export class SearchShard {
     };
   }
 
-  private clauseSubquery(c: SearchClause): {
-    readonly sql: string;
-    readonly args: ReadonlyArray<SqlValue>;
-  } {
+  private clauseSubquery(c: SearchClause): ClauseSubqueryResult {
     const value = c.value.normalize("NFC");
+
     if (CJK.test(value)) {
       // unicode61 does not segment CJK; trigram handles substrings of ≥3 chars, LIKE covers shorter ones.
       return Array.from(value).length >= 3
@@ -324,6 +350,7 @@ export class SearchShard {
             args: [value],
           };
     }
+
     if (!hasWordChars(value)) {
       // Pure punctuation: a substring scan. instr() has no pattern-length cap, unlike LIKE.
       return {
@@ -331,6 +358,7 @@ export class SearchShard {
         args: [value],
       };
     }
+
     // Terms and phrases are both quoted literals; addresses/punctuation become token phrases.
     return {
       sql: "SELECT doc_id FROM search_fts WHERE search_fts MATCH ?",
@@ -345,45 +373,55 @@ export class SearchShard {
  */
 export const MAX_SEARCH_TERMS = 64;
 
+const decodeCursorFields = Schema.decodeUnknownOption(
+  Schema.Struct({ d: Schema.Finite, id: Schema.String }),
+);
+
 /** Opaque page cursor; anything that doesn't decode to `{d, id}` is a client error. */
 const decodeSearchCursor = (
   cursor: string | undefined,
 ): { readonly d: number; readonly id: string } | undefined => {
   if (!cursor) return undefined;
   let parsed: unknown;
+
   try {
     parsed = JSON.parse(atob(cursor));
   } catch {
     return reject("bad_request", "invalid cursor");
   }
-  const c = parsed as { d?: unknown; id?: unknown } | null;
-  if (
-    typeof c !== "object" ||
-    c === null ||
-    typeof c.d !== "number" ||
-    !Number.isFinite(c.d) ||
-    typeof c.id !== "string"
-  )
-    return reject("bad_request", "invalid cursor");
-  return { d: c.d, id: c.id };
+
+  const c = decodeCursorFields(parsed);
+
+  if (Option.isNone(c)) return reject("bad_request", "invalid cursor");
+
+  return { d: c.value.d, id: c.value.id };
 };
 
 const chunk = (text: string): Array<string> => {
   if (text.length <= SEARCH_CHUNK_CHARS) return [text];
   const out: Array<string> = [];
+
   for (let i = 0; i < text.length; i += SEARCH_CHUNK_CHARS)
     out.push(text.slice(i, i + SEARCH_CHUNK_CHARS));
+
   return out;
 };
 
 export const SEARCH_SHARD_BUDGET_BYTES = 10 * 1024 * 1024 * 1024;
 
+type SearchShardHealthResult = {
+  readonly alert: boolean;
+  readonly rollover: boolean;
+  readonly ratio: number;
+};
+
 /** Alert at 50% of a shard budget; split/rebuild before 70% (§12). */
 export const searchShardHealth = (
   storedBytes: number,
   budget = SEARCH_SHARD_BUDGET_BYTES,
-): { readonly alert: boolean; readonly rollover: boolean; readonly ratio: number } => {
+): SearchShardHealthResult => {
   const ratio = storedBytes / budget;
+
   return { alert: ratio >= 0.5, rollover: ratio >= 0.7, ratio };
 };
 
@@ -391,6 +429,7 @@ export const searchShardHealth = (
 export const searchShardName = (scope: string, date: number, bucketMonths = 12): string => {
   const d = new Date(date);
   const bucket = Math.floor((d.getUTCFullYear() * 12 + d.getUTCMonth()) / bucketMonths);
+
   return `${scope}:${bucketMonths}m:${bucket}`;
 };
 
@@ -412,12 +451,15 @@ export const authorizeSearchResults = async <T>(
   readonly more: boolean;
 }> => {
   const seen = new Set<string>();
+
   const unique = pages
     .flatMap((p) => p.candidates)
     .filter((c) => (seen.has(c.docId) ? false : (seen.add(c.docId), true)))
     .sort((a, b) => b.date - a.date || (a.docId < b.docId ? 1 : a.docId > b.docId ? -1 : 0));
+
   const merged = unique.slice(0, limit);
   const hydrated = await hydrate(merged);
+
   return {
     results: hydrated.filter((x): x is T => x !== undefined),
     watermark: Math.min(...pages.map((p) => p.watermark), Number.MAX_SAFE_INTEGER),

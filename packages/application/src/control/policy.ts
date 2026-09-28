@@ -1,5 +1,5 @@
 import { Context, Effect } from "effect";
-import { Forbidden, type PrincipalShape, requireScope, type Unavailable } from "../services.ts";
+import { Forbidden, type PrincipalContext, requireScope, type Unavailable } from "../services.ts";
 
 // Directory, Authorization and SendingPolicy as Effect services (§7.1 "Directory, Authorization and
 // Policy are services"). Callers depend on these tags; the platform package provides D1-backed
@@ -103,16 +103,20 @@ export class SendingPolicyService extends Context.Service<
 export const requireOrgAdminAccess = (orgId: string, scope: "read" | "admin" = "admin") =>
   Effect.gen(function* () {
     const principal = yield* requireScope(scope);
+
     if (!principal.organizationIds.includes(orgId))
       return yield* new Forbidden({ reason: "not a member of organization" });
     const role = yield* (yield* Authorization).orgRole(orgId, principal.userId);
+
     if (role !== "owner" && role !== "admin")
       return yield* new Forbidden({ reason: "administrator role required" });
+
     // The verified role travels with the principal, so nothing downstream re-reads it.
-    const access: PrincipalShape & { readonly orgRole: "owner" | "admin" } = {
+    const access: PrincipalContext & { readonly orgRole: "owner" | "admin" } = {
       ...principal,
       orgRole: role,
     };
+
     return access;
   });
 
@@ -120,7 +124,9 @@ export const requireOrgAdminAccess = (orgId: string, scope: "read" | "admin" = "
 export const requireOperatorAccess = () =>
   Effect.gen(function* () {
     const principal = yield* requireScope("admin");
+
     if (!(yield* Authorization).isOperator(principal.userId))
       return yield* new Forbidden({ reason: "operator only" });
+
     return principal;
   });

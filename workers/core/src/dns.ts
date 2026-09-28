@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { isForbiddenIp, isForbiddenProxyTarget } from "@bye/mail-codec";
 
 // Resolved-address checks for outbound fetches of user-controlled URLs (§10 image proxy): DNS
@@ -19,19 +20,24 @@ export const forbiddenResolution = async (
   doh: DohFetch,
 ): Promise<string | null> => {
   const host = hostname.replace(/^\[|\]$/g, "");
+
   if (/^[\d.]+$/.test(host) || host.includes(":"))
     return isForbiddenIp(host) ? "forbidden address" : null;
+
   // A and AAAA are queried together (fixed pair): one round trip of latency per hop, not two.
   const lookup = async (type: "A" | "AAAA"): Promise<ReadonlyArray<string> | null> => {
     try {
       const response = await doh(`${DOH_ENDPOINT}?name=${encodeURIComponent(host)}&type=${type}`, {
         headers: { accept: "application/dns-json" },
       });
+
       if (!response.ok) return null;
+
       const body = (await response.json().catch(() => null)) as {
         Status?: number;
         Answer?: ReadonlyArray<DohAnswer>;
       } | null;
+
       return body
         ? (body.Answer ?? []).filter((a) => a.type === 1 || a.type === 28).map((a) => a.data)
         : null;
@@ -39,10 +45,14 @@ export const forbiddenResolution = async (
       return null;
     }
   };
+
   const [v4, v6] = await Promise.all([lookup("A"), lookup("AAAA")]);
+
   if (v4 === null || v6 === null) return "resolution failed";
   const answers = [...v4, ...v6];
+
   if (answers.length === 0) return "did not resolve";
+
   return answers.some((ip) => isForbiddenIp(ip)) ? "resolves to a forbidden address" : null;
 };
 
@@ -69,18 +79,27 @@ export const guardedFetch = (
   doh: DohFetch = (u, i) => fetchFn(u, { ...i, signal: AbortSignal.timeout(timeoutMs) }),
 ): typeof fetch =>
   (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    const raw =
-      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const raw = Predicate.isString(input)
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+
     let url: URL;
+
     try {
       url = new URL(raw);
     } catch {
       return blocked();
     }
+
     if (url.protocol !== "https:" || isForbiddenProxyTarget(url.toString())) return blocked();
     const why = await forbiddenResolution(url.hostname, doh);
+
     if (why === "resolution failed") throw new TypeError("destination could not be resolved");
+
     if (why !== null) return blocked();
+
     return fetchFn(input, {
       ...init,
       redirect: "manual",
@@ -97,21 +116,29 @@ export const readCapped = async (response: Response, max: number): Promise<Uint8
   const reader = response.body.getReader();
   const chunks: Array<Uint8Array> = [];
   let total = 0;
+
   for (;;) {
     const { done, value } = await reader.read();
+
     if (done) break;
     total += value.byteLength;
+
     if (total > max) {
       await reader.cancel().catch(() => undefined);
+
       return null;
     }
+
     chunks.push(value);
   }
+
   const out = new Uint8Array(total);
   let offset = 0;
+
   for (const c of chunks) {
     out.set(c, offset);
     offset += c.byteLength;
   }
+
   return out;
 };

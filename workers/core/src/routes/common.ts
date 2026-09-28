@@ -1,8 +1,10 @@
 // Shared HTTP route helpers: authentication, request-scoped layers, parsing, auth utilities.
 import { mint, verify } from "../capability.ts";
+
 export { publicOrigin, serviceDomain } from "../origins.ts";
+
 import { escapeHtml } from "../html.ts";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Schema, Predicate } from "effect";
 import {
   authenticateRequest,
   type CalendarRepository,
@@ -10,6 +12,7 @@ import {
   type MailboxFacts,
   type MailboxRepository,
   type MailboxSelection,
+  type RequestPayload,
   type SharedSpaces,
   Forbidden,
   Principal,
@@ -64,6 +67,7 @@ export const requestId = () => crypto.randomUUID();
 
 export const bearer = (request: Request): string | undefined => {
   const h = request.headers.get("authorization");
+
   return h?.startsWith("Bearer ") ? h.slice(7).trim() : undefined;
 };
 
@@ -93,7 +97,7 @@ export const authed =
       request: Request;
       params: Params;
       env: CoreEnv;
-      body: unknown;
+      body: RequestPayload;
       url: URL;
     }) => Effect.Effect<A, unknown, AppServices>,
     options: {
@@ -105,21 +109,25 @@ export const authed =
   async (request, params, env) => {
     const id = requestId();
     const url = new URL(request.url);
+
     const body =
       request.method === "GET" || request.method === "HEAD" || options.rawBody
         ? undefined
-        : await readJson(request).catch((e: unknown) => e);
+        : await readJson(request).catch((e) => e);
+
     if (body instanceof Error)
       return errorResponse(
-        (body as { _tag?: string })._tag === "PayloadTooLarge"
+        Predicate.isTagged(body as { _tag?: string }, "PayloadTooLarge")
           ? "payload_too_large"
           : "bad_request",
         body.message || "invalid body",
         id,
       );
     const control = await controlLayer(env);
+
     const effect = Effect.gen(function* () {
       const auth = yield* authenticateRequest(credentialsOf(request), env.APP_ORIGIN);
+
       const value = yield* program({ request, params, env, body, url }).pipe(
         Effect.provide(requestAuthLayer(auth)),
         // X02 / P0#10: every write through the API is attributed to the exact credential (kind + ID)
@@ -132,10 +140,11 @@ export const authed =
                 auth,
                 request.method,
                 url.pathname,
-                exit._tag === "Success" ? "ok" : "failed",
+                Predicate.isTagged(exit, "Success") ? "ok" : "failed",
               ),
         ),
       );
+
       return options.raw ? options.raw(value) : json(value ?? { ok: true }, options.status ?? 200);
     }).pipe(
       Effect.provide(
@@ -148,6 +157,7 @@ export const authed =
         ),
       ),
     );
+
     return runHttp(effect as Effect.Effect<Response, unknown>, id);
   };
 
@@ -170,11 +180,7 @@ export const authedBody = <S extends Schema.Codec<unknown, unknown>, A>(
     (input) =>
       Effect.flatMap(
         Effect.mapError(
-          (
-            Schema.decodeUnknownEffect(schema as never) as (
-              u: unknown,
-            ) => Effect.Effect<S["Type"], unknown>
-          )(input.body ?? {}),
+          Schema.decodeUnknownEffect(schema as never)(input.body ?? {}),
           (e) =>
             new ApiError({
               code: "bad_request",
@@ -201,6 +207,7 @@ export { escapeHtml };
 /** The consent page's only inline content; its CSP allows exactly this stylesheet by hash. */
 export const CONSENT_STYLE =
   "body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem}button{font:inherit;padding:.5rem 1rem;margin-right:.5rem}";
+
 /** base64(sha256(CONSENT_STYLE)); a test recomputes it, so an edit to the style can't drift. */
 export const CONSENT_STYLE_HASH = "sha256-E0F0TbT/oggDEpjTnARjsSQ0TiJmiuBOG0rm1nanz8U=";
 
@@ -237,33 +244,44 @@ export const readTextCapped = async (
   maxBytes: number,
 ): Promise<string | null> => {
   const declared = Number(request.headers.get("content-length") ?? "");
+
   if (Number.isFinite(declared) && declared > maxBytes) return null;
+
   if (!request.body) return "";
   const reader = request.body.getReader();
   const chunks: Array<Uint8Array> = [];
   let total = 0;
+
   for (;;) {
     const { done, value } = await reader.read();
+
     if (done) break;
     total += value.byteLength;
+
     if (total > maxBytes) {
       await reader.cancel().catch(() => undefined);
+
       return null;
     }
+
     chunks.push(value);
   }
+
   const bytes = new Uint8Array(total);
   let offset = 0;
+
   for (const c of chunks) {
     bytes.set(c, offset);
     offset += c.byteLength;
   }
+
   return new TextDecoder().decode(bytes);
 };
 
 export const oauthForm = async (request: Request): Promise<URLSearchParams> => {
   // An oversized body reads as an empty form, which every caller rejects as invalid_request.
   const text = (await readTextCapped(request, OAUTH_FORM_MAX_BYTES)) ?? "";
+
   if ((request.headers.get("content-type") ?? "").includes("application/json")) {
     try {
       return new URLSearchParams(
@@ -273,6 +291,7 @@ export const oauthForm = async (request: Request): Promise<URLSearchParams> => {
       return new URLSearchParams();
     }
   }
+
   return new URLSearchParams(text);
 };
 
@@ -301,6 +320,7 @@ export const verifySignupToken = async (
   now: number,
 ): Promise<boolean> => {
   const fields = await verify(env.SESSION_KEY, "signup", token, 1, now);
+
   return fields !== null && fields[0] === userId;
 };
 
@@ -318,9 +338,11 @@ export const sameOriginJson = (request: Request, env: CoreEnv): boolean =>
 
 export const currentSession = async (request: Request, env: CoreEnv) => {
   const token = readCookie(request.headers.get("cookie"), SESSION_COOKIE);
+
   if (!token || !checkCsrf(request.method, request.headers, env.APP_ORIGIN)) return null;
   const { auth } = await controlAdapters(env);
   const cred = await auth.authenticate(token).catch(() => null);
+
   return cred?.kind === "session" ? cred.session : null;
 };
 
@@ -334,10 +356,12 @@ export const verifyTurnstile = async (
   form.set("secret", env.TURNSTILE_SECRET);
   form.set("response", token);
   form.set("remoteip", ip);
+
   const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
     method: "POST",
     body: form,
   });
+
   return ((await response.json()) as { success?: boolean }).success === true;
 };
 
@@ -378,17 +402,16 @@ export const auditWrite = (
     }
   });
 
-const apiErrorOf = (
-  code: RejectionCode,
-  message: string,
-  details?: Readonly<Record<string, unknown>>,
-) => {
+type RejectionDetails = NonNullable<Parameters<typeof publicError>[1]>;
+
+const apiErrorOf = (code: RejectionCode, message: string, details?: RejectionDetails) => {
   const pub = publicError(code, details);
-  return new ApiError({
-    code: pub.code,
-    message,
-    ...(pub.details ? { details: { ...pub.details } } : {}),
-  });
+
+  return new ApiError(
+    pub.details
+      ? { code: pub.code, message, details: { ...pub.details } }
+      : { code: pub.code, message },
+  );
 };
 
 /**
@@ -405,9 +428,10 @@ export const ctl = <A>(fn: () => Promise<A>) =>
   });
 
 /** Unwrap a DO RPC result envelope into a value or a public error. */
-export const rpcResult = <A>(fn: () => Promise<unknown>) =>
+export const rpcResult = <A, R>(fn: () => Promise<R>) =>
   Effect.flatMap(Effect.promise(fn), (raw) => {
     const r = raw as RpcResult<A>;
+
     return r.ok ? Effect.succeed(r.value) : Effect.fail(apiErrorOf(r.code, r.message, r.details));
   });
 
@@ -426,6 +450,7 @@ export const verifyDownload = async (
   now: number,
 ): Promise<boolean> => {
   const fields = await verify(env.SESSION_KEY, "export", token, 1, now);
+
   return fields !== null && fields[0] === key;
 };
 
@@ -439,8 +464,9 @@ export const personalOrgOf = (env: CoreEnv, userId: string) =>
     .first<{ id: string }>()
     .then((r) => r?.id ?? null);
 
-export const validTimeZone = (tz: unknown): string | undefined => {
-  if (typeof tz !== "string" || tz.length === 0 || tz.length > 64) return undefined;
+export const validTimeZone = <T>(tz: T): string | undefined => {
+  if (!Predicate.isString(tz) || tz.length === 0 || tz.length > 64) return undefined;
+
   try {
     return new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone;
   } catch {
@@ -452,8 +478,10 @@ export const validTimeZone = (tz: unknown): string | undefined => {
 export const requireUser = (scope: "read" | "admin" = "read") =>
   Effect.gen(function* () {
     const principal = yield* requireScope(scope);
+
     if (principal.kind !== "user")
       return yield* new Forbidden({ reason: "requires an interactive session" });
+
     return principal;
   });
 
@@ -470,13 +498,17 @@ export const closeLiveSockets = async (
   credentialId: string | null,
 ): Promise<void> => {
   type Live = { closeSockets(id?: string): Promise<number> };
-  const close = (stub: unknown) => {
+
+  const close = <S>(stub: S) => {
     const live = stub as Live;
+
     return (credentialId === null ? live.closeSockets() : live.closeSockets(credentialId)).catch(
       () => 0,
     );
   };
+
   const db = env.DIRECTORY.withSession("first-primary");
+
   const ids = async (sql: string) =>
     (
       await db
@@ -485,6 +517,7 @@ export const closeLiveSockets = async (
         .all<{ id: string }>()
         .catch(() => ({ results: [] as Array<{ id: string }> }))
     ).results.map((r) => r.id);
+
   // The four lookups are independent (fixed tuple); the closes then run in bounded batches so a
   // well-connected user's step-up or logout isn't one sequential RPC per authority.
   const [mailboxes, owned, granted, spaces] = await Promise.all([
@@ -493,11 +526,13 @@ export const closeLiveSockets = async (
     ids("SELECT DISTINCT space_id AS id FROM calendar_grants WHERE grantee_user_id = ?"),
     ids("SELECT space_id AS id FROM space_memberships WHERE user_id = ?"),
   ]);
+
   const stubs = [
     ...mailboxes.map((id) => env.MAILBOXES.getByName(id)),
     ...[...new Set([...owned, ...granted])].map((id) => env.CALENDARS.getByName(id)),
     ...spaces.map((id) => env.SHARED_SPACES.getByName(`space:${id}`)),
   ];
+
   for (let i = 0; i < stubs.length; i += LIVE_CLOSE_CONCURRENCY)
     await Promise.all(stubs.slice(i, i + LIVE_CLOSE_CONCURRENCY).map(close));
 };

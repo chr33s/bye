@@ -33,7 +33,9 @@ describe("image proxy", () => {
       "javascript:alert(1)",
       "not a url",
     ];
+
     for (const url of forbidden) expect(isForbiddenProxyTarget(url), url).toBe(true);
+
     for (const url of [
       "https://cdn.example/a.png",
       "http://images.example.org:80/b.gif",

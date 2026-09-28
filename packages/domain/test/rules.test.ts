@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   advanceNewsletterRecipientOutcome,
@@ -97,13 +98,16 @@ describe("newsletter operation checks", () => {
       "broadcast-cancel": capability({ supported: false }),
       events: capability({ eventCoverage: ["delivered", "hard-bounce"] }),
     });
+
     expect(checkOperation(c, "broadcast-cancel")).toEqual({
       _tag: "Unsupported",
       operation: "broadcast-cancel",
       detail: "Acme does not support broadcast-cancel",
     });
+
     const detail = (r: ReturnType<typeof checkOperation>) =>
-      r._tag === "Unsupported" ? r.detail : "ok";
+      Predicate.isTagged(r, "Unsupported") ? r.detail : "ok";
+
     expect(detail(checkOperation(c, "broadcast-send", { recipients: 101 }))).toBe(
       "101 recipients exceeds 100",
     );
@@ -177,6 +181,7 @@ describe("ambiguous operation retries", () => {
     expect(
       retryDecision({ ...base, outcome: { _tag: "NotAccepted", retryable: false, detail: "400" } }),
     ).toEqual({ _tag: "Hold", reason: "rejected" });
+
     // Exhaustion wins over every retryable outcome.
     for (const outcome of [unknown, { _tag: "NotAccepted", retryable: true, detail: "" } as const])
       expect(retryDecision({ ...base, outcome, attempts: 3 })).toEqual({
@@ -257,6 +262,7 @@ describe("newsletter consent", () => {
       _tag: "Ignored",
       reason: "no-consent",
     });
+
     for (const at of [99, 100])
       expect(applyConsent(unsubscribed, { _tag: "Confirm", evidence: "old", at })).toEqual({
         _tag: "Ignored",

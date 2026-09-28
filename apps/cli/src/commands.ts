@@ -1,4 +1,4 @@
-import { Effect, type Layer } from "effect";
+import { Effect, type Layer, Option } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import type { CalTimeWire, MailDraftContent } from "@bye/contracts";
 import { MAIL_VIEWS } from "@bye/domain";
@@ -29,6 +29,7 @@ import {
   UsageError,
 } from "./args.ts";
 import type { CliApi } from "./client.ts";
+import type { JsonValue } from "./json.ts";
 import { OPS_COMMANDS } from "./ops.ts";
 import { UPLOAD_COMMANDS } from "./upload.ts";
 
@@ -42,8 +43,10 @@ const recipients = (value: string | undefined) => addresses(value).map((address)
 /** Wall-clock time in an IANA zone (C03: stored with its original representation). */
 const calTime = (local: string, tzid: string): CalTimeWire => {
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(local);
+
   if (!m) throw new UsageError(`invalid local time ${local}`);
   const date = { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
+
   return m[4] === undefined
     ? { kind: "date", date }
     : {
@@ -62,11 +65,15 @@ const addresses = (value: string | undefined): Array<string> =>
         .filter((s) => s.length > 0);
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
 const localDate = (value: string) => {
   const m = DATE.exec(value)!;
+
   return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
 };
+
 const invalidDate = (value: string) => `invalid date ${value} (want YYYY-MM-DD)`;
+
 /** An optional YYYY-MM-DD flag. */
 const dateFlag = (name: string) =>
   opt(name).pipe(
@@ -77,29 +84,40 @@ const dateFlag = (name: string) =>
   );
 
 const threadIds = Argument.String("threadId").pipe(Argument.variadic({ min: 1 }));
+
 /** Free text from the remaining arguments (put words that start with `-` after `--`). */
 const words = (name: string, min = 0) => Argument.String(name).pipe(Argument.variadic({ min }));
 
 const today = () => new Date().toLocaleDateString("en-CA");
+
 const zone = (tz: string | undefined) => tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 const PARTSTATS = { accept: "ACCEPTED", tentative: "TENTATIVE", decline: "DECLINED" } as const;
+
 /** Earlier names for the follow-up choices, still accepted by `--after`. */
-const LEGACY_AFTER_SEND: Readonly<Record<string, AfterSendChoice>> = {
-  bubble: "follow-up",
-  "bubble-no-reply": "follow-up-if-no-reply",
+const LEGACY_AFTER_SEND = new Map<string, AfterSendChoice>([
+  ["bubble", "follow-up"],
+  ["bubble-no-reply", "follow-up-if-no-reply"],
+]);
+
+// Flag.Literals needs a non-empty tuple; both sources are static and non-empty.
+const literals = (values: ReadonlyArray<string>): readonly [string, ...Array<string>] => {
+  const [first = "", ...rest] = values;
+
+  return [first, ...rest];
 };
-const AFTER_SEND = [
+
+const AFTER_SEND = literals([
   ...AFTER_SEND_CHOICES.map((c) => c.value),
-  ...Object.keys(LEGACY_AFTER_SEND),
-] as unknown as readonly [string, ...Array<string>];
+  ...LEGACY_AFTER_SEND.keys(),
+]);
 
 const mail = group("mail", "Mail views, threads and triage", [
   action(
     "view",
     { summary: "List a mailbox view" },
     {
-      view: Argument.Literals("view", MAIL_VIEWS as unknown as readonly [string, ...Array<string>]),
+      view: Argument.Literals("view", literals(MAIL_VIEWS)),
       limit: optInt("limit"),
       cursor: opt("cursor"),
     },
@@ -159,18 +177,20 @@ const mail = group("mail", "Mail views, threads and triage", [
     },
     ({ threadId, at, ifNoReply, pin, pop, off }) => {
       if (off) return mailCommand({ _tag: "ClearBubble", threadId });
+
       if (pop) return mailCommand({ _tag: "PopBubble", threadId });
+
       if (pin) return mailCommand({ _tag: "PinBubble", threadId });
+
       if (at === undefined)
         return Effect.fail(
           new UsageError("pass --at <iso> [--if-no-reply], --pin, --pop or --off"),
         );
-      return mailCommand({
-        _tag: "BubbleUp",
-        threadId,
-        at,
-        ...(ifNoReply ? { condition: "if-no-reply" as const } : {}),
-      });
+
+      if (ifNoReply)
+        return mailCommand({ _tag: "BubbleUp", threadId, at, condition: "if-no-reply" });
+
+      return mailCommand({ _tag: "BubbleUp", threadId, at });
     },
     // `bubble` was this command's first name; scripts that use it keep working.
   ).pipe(Command.withAlias("bubble")),
@@ -208,6 +228,7 @@ const mail = group("mail", "Mail views, threads and triage", [
 ]);
 
 const DESTINATIONS = ["imbox", "feed", "paper-trail"] as const;
+
 const senders = Argument.String("address").pipe(Argument.variadic({ min: 1 }));
 
 const screen = group("screen", "New senders: first-time senders waiting for approval", [
@@ -254,6 +275,7 @@ const search = action(
   { query: words("query", 1), limit: optInt("limit") },
   ({ query, limit }) => {
     const q = query.join(" ");
+
     return q.trim().length === 0
       ? Effect.fail(new UsageError("missing <query>"))
       : scoped("mailboxes", "/search", { q, limit });
@@ -283,6 +305,7 @@ const draft = group("draft", "Drafts: compose, reply and send", [
     (input) =>
       Effect.gen(function* () {
         const id = yield* mailbox;
+
         return yield* post("/v1/drafts", {
           commandId: yield* commandId,
           mailboxId: id,
@@ -313,18 +336,22 @@ const draft = group("draft", "Drafts: compose, reply and send", [
     ({ draftId, revision, at, after }) =>
       Effect.gen(function* () {
         const id = yield* mailbox;
+
         // Follow-ups (bubble in a day) count from when the message goes out, not from now.
         const afterSend = afterSendFor(
-          LEGACY_AFTER_SEND[after] ?? (after as AfterSendChoice),
+          LEGACY_AFTER_SEND.get(after) ?? (after as AfterSendChoice),
           at ?? Date.now(),
         );
-        return yield* post(`/v1/drafts/${encodeURIComponent(draftId)}/send`, {
+
+        const body = {
           commandId: yield* commandId,
           mailboxId: id,
           revision,
           sendAt: at,
-          ...(afterSend ? { afterSend } : {}),
-        });
+          afterSend: afterSend || undefined,
+        };
+
+        return yield* post(`/v1/drafts/${encodeURIComponent(draftId)}/send`, body);
       }),
   ),
   action(
@@ -361,12 +388,17 @@ const draft = group("draft", "Drafts: compose, reply and send", [
       Effect.gen(function* () {
         const draftId = encodeURIComponent(input.draftId);
         const id = yield* mailbox;
+
         const current = (yield* get(
           `/v1/mailboxes/${encodeURIComponent(id)}/drafts/${draftId}`,
         )) as {
           readonly revision: number;
           readonly content: MailDraftContent;
         };
+
+        // A new plain-text body replaces any HTML alternative, so the two never disagree.
+        const replacesBody = input.body !== undefined;
+
         const content = {
           ...current.content,
           ...Object.fromEntries(
@@ -374,10 +406,11 @@ const draft = group("draft", "Drafts: compose, reply and send", [
               input[key] === undefined ? [] : [[key, recipients(input[key])]],
             ),
           ),
-          ...(input.subject !== undefined ? { subject: input.subject } : {}),
-          // A new plain-text body replaces any HTML alternative, so the two never disagree.
-          ...(input.body !== undefined ? { text: input.body, html: undefined } : {}),
+          subject: input.subject ?? current.content.subject,
+          text: replacesBody ? input.body : current.content.text,
+          html: replacesBody ? undefined : current.content.html,
         };
+
         return yield* patch(`/v1/drafts/${draftId}`, {
           commandId: yield* commandId,
           mailboxId: id,
@@ -396,6 +429,7 @@ const send = group("send", "Send jobs and their per-recipient outcomes", [
     ({ sendJobId }) =>
       Effect.gen(function* () {
         const id = yield* mailbox;
+
         return yield* post(`/v1/send-jobs/${encodeURIComponent(sendJobId)}/cancel`, {
           commandId: yield* commandId,
           mailboxId: id,
@@ -494,6 +528,7 @@ const cal = group("cal", "Calendar: events, planning, timer and feeds", [
       const start = input.from ?? Date.now();
       const from = new Date(start).toISOString();
       const to = new Date(input.to ?? start + 7 * 86_400_000).toISOString();
+
       return scoped("calendars", "/events", { from, to, tz: input.tz });
     },
   ),
@@ -511,10 +546,12 @@ const cal = group("cal", "Calendar: events, planning, timer and feeds", [
     (input) =>
       Effect.suspend(() => {
         const tzid = zone(input.tz);
+        const data = { summary: input.title, location: input.location || undefined };
+
         return calendarCommand({
           type: "CreateEvent",
           calendarId: input.calendarId,
-          data: { summary: input.title, ...(input.location ? { location: input.location } : {}) },
+          data,
           start: calTime(input.start, tzid),
           end: calTime(input.end, tzid),
         });
@@ -538,7 +575,7 @@ const cal = group("cal", "Calendar: events, planning, timer and feeds", [
     { summary: "Year view: event counts per day" },
     { year: Argument.Int("year").pipe(Argument.optional), tz: opt("tz") },
     ({ year, tz }) =>
-      scoped("calendars", `/year/${year._tag === "Some" ? year.value : new Date().getFullYear()}`, {
+      scoped("calendars", `/year/${Option.getOrElse(year, () => new Date().getFullYear())}`, {
         tz: zone(tz),
       }),
   ),
@@ -560,6 +597,7 @@ const cal = group("cal", "Calendar: events, planning, timer and feeds", [
       },
       ({ title, date, firstWeekday }) => {
         const text = title.join(" ").trim();
+
         return text
           ? calendarCommand({
               type: "AddWeekTask",
@@ -605,6 +643,7 @@ const cal = group("cal", "Calendar: events, planning, timer and feeds", [
           Effect.gen(function* () {
             const id = yield* calendar;
             const calendarIds = addresses(calendars);
+
             return yield* post(`/v1/calendars/${encodeURIComponent(id)}/feed-tokens`, {
               schemaVersion: 1,
               commandId: yield* commandId,
@@ -620,6 +659,7 @@ const cal = group("cal", "Calendar: events, planning, timer and feeds", [
         ({ tokenHash }) =>
           Effect.gen(function* () {
             const id = yield* calendar;
+
             return yield* del(
               `/v1/calendars/${encodeURIComponent(id)}/feed-tokens/${encodeURIComponent(tokenHash)}`,
               {
@@ -644,7 +684,7 @@ const cal = group("cal", "Calendar: events, planning, timer and feeds", [
       tz: opt("tz"),
     },
     ({ date, tz }) =>
-      scoped("calendars", `/day/${date._tag === "Some" ? date.value : today()}`, { tz: zone(tz) }),
+      scoped("calendars", `/day/${Option.getOrElse(date, today)}`, { tz: zone(tz) }),
   ),
   action(
     "respond",
@@ -655,12 +695,14 @@ const cal = group("cal", "Calendar: events, planning, timer and feeds", [
       occurrence: opt("occurrence"),
     },
     ({ eventId, answer, occurrence }) =>
-      calendarCommand({
-        type: "RespondInvitation",
-        eventId,
-        partstat: PARTSTATS[answer],
-        ...(occurrence ? { occurrenceKey: occurrence } : {}),
-      }),
+      occurrence
+        ? calendarCommand({
+            type: "RespondInvitation",
+            eventId,
+            partstat: PARTSTATS[answer],
+            occurrenceKey: occurrence,
+          })
+        : calendarCommand({ type: "RespondInvitation", eventId, partstat: PARTSTATS[answer] }),
   ),
   action(
     "edit",
@@ -678,23 +720,27 @@ const cal = group("cal", "Calendar: events, planning, timer and feeds", [
     },
     (input) =>
       Effect.suspend(() => {
-        const data = {
-          ...(input.title !== undefined ? { summary: input.title } : {}),
-          ...(input.location !== undefined ? { location: input.location } : {}),
+        const data = { summary: input.title, location: input.location };
+        const hasData = data.summary !== undefined || data.location !== undefined;
+
+        const changes = {
+          start: input.start === undefined ? undefined : calTime(input.start, zone(input.tz)),
+          end: input.end === undefined ? undefined : calTime(input.end, zone(input.tz)),
+          data: hasData ? data : undefined,
         };
-        return calendarCommand({
-          type: "UpdateEvent",
+
+        const update = {
+          type: "UpdateEvent" as const,
           eventId: input.eventId,
           expectedRevision: input.revision,
           scope: input.scope,
-          // For the whole series the occurrence anchors the times: the series moves by the same amount.
-          ...(input.occurrence ? { occurrenceKey: input.occurrence } : {}),
-          changes: {
-            ...(input.start !== undefined ? { start: calTime(input.start, zone(input.tz)) } : {}),
-            ...(input.end !== undefined ? { end: calTime(input.end, zone(input.tz)) } : {}),
-            ...(Object.keys(data).length > 0 ? { data } : {}),
-          },
-        });
+          changes,
+        };
+
+        // For the whole series the occurrence anchors the times: the series moves by the same amount.
+        return calendarCommand(
+          input.occurrence ? { ...update, occurrenceKey: input.occurrence } : update,
+        );
       }),
   ),
 ]);
@@ -723,7 +769,7 @@ const API = root(COMMANDS);
  * Run one API command for a caller that wants its value (the TUI): consequential commands are
  * confirmed (the caller asked first), and failures are thrown rather than printed.
  */
-export const invoke = async <A = unknown>(
+export const invoke = async <A = JsonValue>(
   path: string,
   positionals: ReadonlyArray<string>,
   flags: Readonly<Record<string, string | true | undefined>>,
@@ -733,6 +779,7 @@ export const invoke = async <A = unknown>(
     | { readonly ok: true; readonly value: unknown }
     | { readonly ok: false; readonly error: unknown }
     | undefined;
+
   const argv = [
     ...path.split(" "),
     // An absent value means the flag isn't passed (never the text "undefined").
@@ -743,6 +790,7 @@ export const invoke = async <A = unknown>(
     "--",
     ...positionals,
   ];
+
   const result = await execute(API, argv, {
     api: options.api,
     newCommandId: options.newCommandId,
@@ -752,9 +800,14 @@ export const invoke = async <A = unknown>(
     fail: (error) => (outcome = { ok: false, error }),
     exit: () => undefined,
   });
+
   if (result.usage) throw new UsageError(result.usage.errors.map((e) => e.message).join("; "));
+
   if (result.failure !== undefined) throw result.failure;
+
   if (!outcome) throw new Error(`no command ${path}`);
+
   if (!outcome.ok) throw outcome.error;
+
   return outcome.value as A;
 };

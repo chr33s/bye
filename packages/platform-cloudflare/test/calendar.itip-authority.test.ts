@@ -10,18 +10,22 @@ import { Effect } from "effect";
 // may only be caused by the owner. Day photos are bound to the space they were uploaded to (C08).
 
 const START = Date.parse("2026-09-25T12:00:00Z");
+
 const GUEST = "usr_guest0000000000000000";
+
 const at = (day: number, hour: number) =>
   calTimed({ year: 2026, month: 10, day, hour, minute: 0, second: 0 }, "UTC");
 
 const setup = () => {
   const ctx = makeTestCalendarStore({}, START);
+
   const { calendarId } = ctx.store.createCalendar({
     commandId: ctx.cmd(),
     actor: ctx.owner,
     name: "Personal",
     color: "#f00",
   });
+
   return { ...ctx, calendarId };
 };
 
@@ -48,12 +52,14 @@ const message = (method: "REQUEST" | "CANCEL", uid: string, organizer: string) =
 describe("inbound iTIP never claims a locally created event", () => {
   it("REQUEST and CANCEL for an organizer-less event's UID are unauthorized and change nothing", () => {
     const { store, cmd, owner, calendarId } = setup();
+
     const { eventId, uid } = store.createEvent({
       commandId: cmd(),
       actor: owner,
       calendarId,
       series: { start: at(1, 9), end: at(1, 10), data: { summary: "Private" } },
     });
+
     store.grantCalendar({
       commandId: cmd(),
       actor: owner,
@@ -61,6 +67,7 @@ describe("inbound iTIP never claims a locally created event", () => {
       grantee: GUEST,
       role: "read",
     });
+
     for (const [i, method] of (["REQUEST", "CANCEL"] as const).entries()) {
       const [result] = calendarExecute(store, null, {
         type: "ReceiveInvitation",
@@ -68,8 +75,10 @@ describe("inbound iTIP never claims a locally created event", () => {
         sender: "guest@example.test",
         ics: message(method, uid, "guest@example.test"),
       }) as Array<{ _tag: string }>;
+
       expect(result?._tag, method).toBe("Unauthorized");
     }
+
     const after = store.getEvent(owner, eventId);
     expect(after.series.data.summary).toBe("Private");
     expect(after.series.data.status).toBe("confirmed");
@@ -89,6 +98,7 @@ describe("inbound iTIP never claims a locally created event", () => {
 
   it("iTIP never mutates a read-only subscription's copy of an event", () => {
     const { store, cmd, owner } = setup();
+
     const { calendarId } = store.addSubscription({
       commandId: cmd(),
       actor: owner,
@@ -96,6 +106,7 @@ describe("inbound iTIP never claims a locally created event", () => {
       color: "#00f",
       url: "https://calendars.example.com/team.ics",
     });
+
     store.applySubscriptionFetch({
       calendarId,
       fetchId: "f1",
@@ -105,14 +116,17 @@ describe("inbound iTIP never claims a locally created event", () => {
         "",
       ),
     });
+
     const [result] = store.receiveInvitation({
       ingestionId: "ing_sub",
       sender: "boss@example.com",
       ics: message("CANCEL", "shared-1@example.com", "boss@example.com"),
     });
+
     // No invitation copy exists, so the cancel finds nothing; the subscription row is untouched.
     expect(result).toMatchObject({ _tag: "Apply", action: "cancel" });
     expect((result as { eventId?: string }).eventId).toBeUndefined();
+
     const feedCopy = store
       .listOccurrences({
         actor: owner,
@@ -120,18 +134,22 @@ describe("inbound iTIP never claims a locally created event", () => {
         to: Date.parse("2030-01-02T00:00:00Z"),
       })
       .find((o) => o.uid === "shared-1@example.com");
+
     expect(feedCopy?.calendarId).toBe(calendarId);
     expect(feedCopy?.data.status).not.toBe("cancelled");
   });
 
   it("an invitation from its organizer still applies (negative control)", () => {
     const { store } = setup();
+
     const [created] = store.receiveInvitation({
       ingestionId: "ing_1",
       sender: "boss@example.com",
       ics: message("REQUEST", "remote-9@example.com", "boss@example.com"),
     });
+
     expect(created).toMatchObject({ _tag: "Apply", action: "create" });
+
     const [cancelled] = store.receiveInvitation({
       ingestionId: "ing_2",
       sender: "boss@example.com",
@@ -140,6 +158,7 @@ describe("inbound iTIP never claims a locally created event", () => {
         "SEQUENCE:2",
       ),
     });
+
     expect(cancelled).toMatchObject({ _tag: "Apply", action: "cancel" });
   });
 });
@@ -154,6 +173,7 @@ describe("outbound iTIP is owner-only", () => {
       grantee: GUEST,
       role: "write",
     });
+
     return ctx;
   };
 
@@ -170,6 +190,7 @@ describe("outbound iTIP is owner-only", () => {
         attendees: [{ address: "victim@example.test" }],
       }),
     ).toThrow(/owner/);
+
     // Adding attendees to an organizer-less event.
     const plain = calendarExecute(store, GUEST, {
       type: "CreateEvent",
@@ -179,6 +200,7 @@ describe("outbound iTIP is owner-only", () => {
       end: at(3, 10),
       data: { summary: "plain" },
     }) as { eventId: string };
+
     expect(() =>
       calendarExecute(store, GUEST, {
         type: "UpdateEvent",
@@ -189,6 +211,7 @@ describe("outbound iTIP is owner-only", () => {
         changes: { attendees: [{ address: "victim@example.test" }] },
       }),
     ).toThrow(/owner/);
+
     // The owner's own invitation: the grantee can neither move it nor delete it.
     const meeting = store.createEvent({
       commandId: cmd(),
@@ -197,6 +220,7 @@ describe("outbound iTIP is owner-only", () => {
       series: { start: at(4, 9), end: at(4, 10), data: { summary: "Kickoff" } },
       attendees: [{ address: "guest@example.net" }],
     });
+
     const sent = itipOutbox(store).length;
     expect(sent).toBe(1);
     expect(() =>
@@ -222,6 +246,7 @@ describe("outbound iTIP is owner-only", () => {
 
   it("grantees still edit events without invitees; the owner still sends invitations", () => {
     const { store, cmd, owner, calendarId } = withWriter();
+
     const plain = calendarExecute(store, GUEST, {
       type: "CreateEvent",
       commandId: cmd(),
@@ -230,6 +255,7 @@ describe("outbound iTIP is owner-only", () => {
       end: at(3, 10),
       data: { summary: "plain" },
     }) as { eventId: string };
+
     // Clients send the (unchanged, empty) attendee list with every edit.
     expect(
       calendarExecute(store, GUEST, {
@@ -272,11 +298,13 @@ describe("day photos are bound to their calendar space", () => {
   it("SetDayDecoration refuses a photo key from another space", async () => {
     const { store, owner } = setup();
     const layer = calendarRepositoryLocal(() => store);
+
     const set = (photoKey: string) =>
       Effect.runPromise(
         Effect.flip(
           Effect.gen(function* () {
             const repo = yield* CalendarRepository;
+
             return yield* repo.execute("cal_mine", owner, {
               type: "SetDayDecoration",
               commandId: `set:${photoKey}`,
@@ -286,6 +314,7 @@ describe("day photos are bound to their calendar space", () => {
           }).pipe(Effect.provide(layer)),
         ),
       ).catch(() => null);
+
     const refused = await set("cal/cal_victim/photo/0123456789abcdef0001");
     expect(refused).toMatchObject({ code: "bad_request" });
     expect(store.dayContext(calParseDate("2030-01-01")).photoKey).toBeUndefined();

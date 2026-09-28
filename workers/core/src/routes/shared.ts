@@ -43,12 +43,15 @@ import { authed, authedBody, readTextCapped } from "./common.ts";
 import { OrgsService, RegistryService } from "@bye/platform-cloudflare";
 
 const MEDIA_MAX_BYTES = 10 * 1024 * 1024;
+
 const CSV_MAX_BYTES = 1024 * 1024;
+
 /**
  * Per-author World media storage (private uploads under t/<user>/world-media/). Media is outside
  * the mailbox quota, so it gets its own bound: bytes and objects, counted from the listing.
  */
 const MEDIA_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+
 const MEDIA_MAX_OBJECTS = 1000;
 
 const tooLarge = (message: string) =>
@@ -59,18 +62,22 @@ const mediaUsage = async (env: CoreEnv, userId: string) => {
   let bytes = 0;
   let objects = 0;
   let cursor: string | undefined;
+
   do {
-    const listed = await env.PARTS.list({
-      prefix: `t/${userId}/world-media/`,
-      limit: 1000,
-      ...(cursor ? { cursor } : {}),
-    });
+    const listed = await env.PARTS.list(
+      cursor
+        ? { prefix: `t/${userId}/world-media/`, limit: 1000, cursor }
+        : { prefix: `t/${userId}/world-media/`, limit: 1000 },
+    );
+
     for (const o of listed.objects) {
       bytes += o.size ?? 0;
       objects += 1;
     }
+
     cursor = listed.truncated ? listed.cursor : undefined;
   } while (cursor && objects < MEDIA_MAX_OBJECTS && bytes < MEDIA_MAX_TOTAL_BYTES);
+
   return { bytes, objects };
 };
 
@@ -83,7 +90,9 @@ const myWorld = (env: CoreEnv, userId: string) =>
       try: () => worldAuthor(env, userId),
       catch: () => new ApiError({ code: "unavailable", message: "world unavailable" }),
     });
+
     if (!author) return yield* new NotFound({ resource: "author" });
+
     return { author, stub: world(env, author.handle) };
   });
 
@@ -128,8 +137,10 @@ const orgSpace = (env: CoreEnv, spaceId: string, scope: "read" | "draft" | "admi
   Effect.gen(function* () {
     const principal = yield* requireScope(scope);
     const s = yield* (yield* RegistryService).spaceOrg(spaceId);
+
     if (!s || !principal.organizationIds.includes(s.orgId))
       return yield* new NotFound({ resource: "space" });
+
     return { principal, orgId: s.orgId, stub: space(env, spaceId) };
   });
 
@@ -155,6 +166,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       ({ body, env }) =>
         Effect.gen(function* () {
           const principal = yield* requireScope("admin");
+
           if (!principal.organizationIds.includes(body.organizationId))
             return yield* new Forbidden({ reason: "not a member of organization" });
           const spaceId = `spc_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -173,6 +185,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
             "team",
             principal.userId,
           );
+
           return { spaceId };
         }),
       { status: 201 },
@@ -185,11 +198,13 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const principal = yield* requireScope("read");
         const all = yield* (yield* RegistryService).spacesForOrgs(principal.organizationIds);
+
         const member = yield* Effect.forEach(
           all,
           (s) => call(() => space(env, s.id).isMember(principal.userId)),
           { concurrency: 4 },
         );
+
         return { items: all.filter((_, i) => member[i] === true) };
       }),
     ),
@@ -200,6 +215,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(({ env, params }) =>
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!);
+
         return { items: yield* call(() => stub.listMembers(principal.userId)) };
       }),
     ),
@@ -212,9 +228,11 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
         const { principal, orgId, stub } = yield* orgSpace(env, params.id!, "admin");
         // Only active organization members can join the organization's spaces.
         const m = yield* (yield* OrgsService).membership(orgId, params.userId!);
+
         if (!m || m.status !== "active")
           return yield* badRequest("user is not an active organization member");
         yield* call(() => stub.setMember(principal.userId, params.userId!, body.role));
+
         return { userId: params.userId, role: body.role };
       }),
     ),
@@ -226,6 +244,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!, "admin");
         yield* call(() => stub.setMember(principal.userId, params.userId!, null));
+
         return { removed: true };
       }),
     ),
@@ -237,6 +256,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!);
         const items = yield* call(() => stub.listThreads(principal.userId));
+
         // Deliveries still propagating into this space (§6 row 6): clients show "syncing".
         return {
           items,
@@ -252,6 +272,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!);
         const thread = yield* call(() => stub.readThread(principal.userId, params.threadId!));
+
         return {
           ...thread,
           pendingPropagation: yield* Effect.promise(() =>
@@ -269,7 +290,9 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!);
         const cursor = Number(url.searchParams.get("cursor") ?? "0");
+
         if (!Number.isInteger(cursor) || cursor < 0) return yield* badRequest("invalid cursor");
+
         return yield* call(() => stub.changes(principal.userId, cursor));
       }),
     ),
@@ -280,6 +303,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(({ env, params }) =>
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!);
+
         return { items: yield* call(() => stub.comments(principal.userId, params.threadId!)) };
       }),
     ),
@@ -293,7 +317,9 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
         Effect.gen(function* () {
           const { principal, stub } = yield* orgSpace(env, params.id!, "draft");
           const text = body.body.trim();
+
           if (!text) return yield* badRequest("comment body required");
+
           return {
             commentId: yield* call(() => stub.addComment(principal.userId, params.threadId!, text)),
           };
@@ -307,6 +333,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(({ env, params }) =>
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!);
+
         return { items: yield* call(() => stub.listCollections(principal.userId)) };
       }),
     ),
@@ -320,7 +347,9 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
         Effect.gen(function* () {
           const { principal, stub } = yield* orgSpace(env, params.id!, "draft");
           const name = body.name.trim();
+
           if (!name) return yield* badRequest("name required");
+
           return {
             collectionId: yield* call(() =>
               stub.createCollection(principal.userId, name, body.shareWithMembers ?? false),
@@ -336,6 +365,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(({ env, params }) =>
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!);
+
         return {
           items: yield* call(() => stub.collectionTimeline(principal.userId, params.collectionId!)),
         };
@@ -353,6 +383,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
           yield* call(() =>
             stub.addToCollection(principal.userId, params.collectionId!, body.threadId),
           );
+
           return { added: true };
         }),
       { status: 201 },
@@ -365,6 +396,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!);
         const kind = url.searchParams.get("kind") === "collection" ? "collection" : "thread";
+
         return {
           items: yield* call(() =>
             stub.grantsFor(principal.userId, kind, url.searchParams.get("resourceId") ?? ""),
@@ -383,6 +415,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
           const { principal, stub } = yield* orgSpace(env, params.id!, "draft");
           yield* requireStepUp("sharing");
           const kind = body.resourceKind ?? body.kind ?? "thread";
+
           return {
             grantId: yield* call(() =>
               stub.grant(principal.userId, kind, body.resourceId, body.grantee),
@@ -399,6 +432,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!, "admin");
         yield* call(() => stub.revoke(principal.userId, params.grantId!));
+
         return { revoked: true };
       }),
     ),
@@ -414,6 +448,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
           // The same organization binding as every /v1/spaces/:id route: a member removed from or
           // suspended in the space's organization can no longer share into it.
           yield* sharingSpace(env, body.spaceId);
+
           const input = {
             spaceId: body.spaceId,
             sourceMailboxId: body.mailboxId,
@@ -422,6 +457,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
             grantees: body.grantees ?? [],
             includeFuture: body.includeFuture ?? false,
           };
+
           const sharedThreadId = yield* shareThread(input);
           yield* (yield* RegistryService).registerSharedThread({
             mailboxId: input.sourceMailboxId,
@@ -430,6 +466,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
             sharedThreadId,
             includeFuture: input.includeFuture,
           });
+
           return sharedThreadId;
         }),
       { status: 201 },
@@ -447,13 +484,15 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
           // Organization binding first (as `orgSpace` routes): the space authority only knows
           // space membership, which org removal/suspension does not update.
           yield* sharingSpace(env, body.spaceId);
+
+          const link = {
+            spaceId: body.spaceId,
+            threadId: body.threadId,
+            includeFuture: body.includeFuture ?? false,
+          };
+
           return yield* createPublicThreadLink(
-            {
-              spaceId: body.spaceId,
-              threadId: body.threadId,
-              includeFuture: body.includeFuture ?? false,
-              ...(body.expiresAt !== undefined ? { expiresAt: body.expiresAt } : {}),
-            },
+            body.expiresAt !== undefined ? { ...link, expiresAt: body.expiresAt } : link,
             publicOrigin(env),
           );
         }),
@@ -467,6 +506,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(({ env, params }) =>
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!);
+
         return yield* call(() => stub.previewPublicLink(principal.userId, params.threadId!));
       }),
     ),
@@ -477,6 +517,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
     authed(({ env, params }) =>
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!);
+
         return {
           items: yield* call(() => stub.listPublicLinks(principal.userId, params.threadId!)),
         };
@@ -490,6 +531,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const { principal, stub } = yield* orgSpace(env, params.id!, "admin");
         yield* call(() => stub.revokePublicLink(principal.userId, params.linkId!));
+
         return { revoked: true };
       }),
     ),
@@ -520,6 +562,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const principal = yield* requireScope("read");
         const { author } = yield* myWorld(env, principal.userId);
+
         return {
           handle: author.handle,
           url: `${publicOrigin(env)}/@${author.handle}/`,
@@ -535,6 +578,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const principal = yield* requireScope("read");
         const { stub } = yield* myWorld(env, principal.userId);
+
         return { items: yield* call(() => stub.listPosts(principal.userId)) };
       }),
     ),
@@ -549,6 +593,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
           const principal = yield* requireScope("publish");
           const input = yield* postInput(principal.userId, body);
           const { stub } = yield* myWorld(env, principal.userId);
+
           return yield* call(() => stub.createDraft(principal.userId, input));
         }),
       { status: 201 },
@@ -562,6 +607,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
         const principal = yield* requireScope("publish");
         const input = yield* postInput(principal.userId, body);
         const { stub } = yield* myWorld(env, principal.userId);
+
         return { revision: yield* call(() => stub.editPost(principal.userId, params.id!, input)) };
       }),
     ),
@@ -573,6 +619,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const principal = yield* requireScope("read");
         const { stub } = yield* myWorld(env, principal.userId);
+
         return yield* call(() => stub.previewPost(principal.userId, params.id!));
       }),
     ),
@@ -593,9 +640,11 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
         const { author, stub } = yield* myWorld(env, principal.userId);
         const post = yield* call(() => stub.previewPost(principal.userId, params.id!));
         yield* call(() => stub.unpublish(principal.userId, params.id!));
+
         const { purged } = yield* Effect.promise(() =>
           refreshSite(env, author.handle, [post.slug]),
         );
+
         return { unpublished: true, purged };
       }),
     ),
@@ -608,6 +657,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const principal = yield* requireScope("read");
         const { stub } = yield* myWorld(env, principal.userId);
+
         return yield* call(() =>
           stub.newsletterStatus(
             principal.userId,
@@ -626,6 +676,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const principal = yield* requireScope("publish");
         const { author, stub } = yield* myWorld(env, principal.userId);
+
         const publication = yield* call(() =>
           stub.cancelNewsletter(
             principal.userId,
@@ -633,8 +684,10 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
             Number(url.searchParams.get("revision") ?? "1"),
           ),
         );
+
         // Try the provider step now; the cron reconciler finishes it otherwise.
         yield* Effect.promise(() => runNewsletter(env, author.handle).catch(() => undefined));
+
         return publication;
       }),
     ),
@@ -647,9 +700,11 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         yield* requireOperatorAccess();
         const L = ledgerOf(env, params.handle!);
+
         const [health, held, publications] = yield* Effect.promise(() =>
           Promise.all([L("health"), L("heldOps"), L("publications")]),
         );
+
         return { health, held, publications };
       }),
     ),
@@ -661,6 +716,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       Effect.gen(function* () {
         const operator = yield* requireOperatorAccess();
         const L = ledgerOf(env, params.handle!);
+
         const op = yield* Effect.tryPromise({
           try: () =>
             L(
@@ -672,12 +728,14 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
             ),
           catch: () => new ApiError({ code: "conflict", message: "operation cannot be resolved" }),
         });
+
         const publication = op.publicationId
           ? yield* Effect.tryPromise({
               try: () => L("resumeHeld", op.publicationId!),
               catch: () => new ApiError({ code: "conflict", message: "publication not resumable" }),
             }).pipe(Effect.orElseSucceed(() => null))
           : null;
+
         return { op, publication };
       }),
     ),
@@ -690,12 +748,15 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
       ({ env, request, url }) =>
         Effect.gen(function* () {
           const principal = yield* requireScope("publish");
+
           const contentType = (request.headers.get("content-type") ?? "")
             .split(";")[0]!
             .trim()
             .toLowerCase();
+
           if (!/^image\/(png|jpeg|gif|webp)$/.test(contentType))
             return yield* badRequest("media must be png, jpeg, gif or webp");
+
           // Streaming cap: a missing or false content-length never buffers past the limit.
           const bytes = yield* Effect.tryPromise({
             try: () => readBodyCapped(request, MEDIA_MAX_BYTES),
@@ -704,11 +765,14 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
                 ? new ApiError({ code: "payload_too_large", message: "media too large" })
                 : new ApiError({ code: "bad_request", message: "unreadable body" }),
           });
+
           if (bytes.byteLength === 0) return yield* tooLarge("media too large or empty");
+
           // Public media is raster-only, verified by magic bytes (never SVG/HTML) and matching the declaration.
           if (sniffRaster(bytes) !== contentType)
             return yield* badRequest("content does not match the declared image type");
           const used = yield* Effect.promise(() => mediaUsage(env, principal.userId));
+
           if (
             used.objects >= MEDIA_MAX_OBJECTS ||
             used.bytes + bytes.byteLength > MEDIA_MAX_TOTAL_BYTES
@@ -718,6 +782,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
           yield* Effect.promise(() =>
             env.PARTS.put(contentKey, bytes, { httpMetadata: { contentType } }),
           );
+
           return {
             contentKey,
             name: (url.searchParams.get("name") ?? "image").slice(0, 120),
@@ -736,6 +801,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
         Effect.gen(function* () {
           const principal = yield* requireScope("publish");
           const csv = yield* Effect.promise(() => readTextCapped(request, CSV_MAX_BYTES));
+
           if (csv === null) return yield* tooLarge("csv too large");
           const { author, stub } = yield* myWorld(env, principal.userId);
           const r = yield* call(() => stub.importSubscribers(principal.userId, csv));
@@ -743,6 +809,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
           // sending budget and refused while they are suspended (SendingPolicy). Once the policy
           // refuses the sender, the rest are not attempted; invitations stay pending.
           let halted = false;
+
           const sent = yield* Effect.forEach(
             r.invitations,
             (i) =>
@@ -753,18 +820,20 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
                       actorUserId: principal.userId,
                     }).then(
                       () => 1,
-                      (error: unknown) => {
+                      (error) => {
                         if (
                           error instanceof SystemMailRefused &&
                           (error.reason === "budget" || error.reason === "suspended")
                         )
                           halted = true;
+
                         return 0;
                       },
                     ),
               ),
             { concurrency: 4 },
           );
+
           return {
             invited: r.invitations.length,
             confirmationsSent: sent.reduce((a: number, b) => a + b, 0),
@@ -782,6 +851,7 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
         Effect.gen(function* () {
           const principal = yield* requireScope("publish");
           const { stub } = yield* myWorld(env, principal.userId);
+
           return yield* call(() => stub.exportSubscribers(principal.userId));
         }),
       {

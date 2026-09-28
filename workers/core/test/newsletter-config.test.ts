@@ -18,24 +18,25 @@ import {
   sealField,
 } from "../src/newsletter-config.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, makeHarness } from "./harness.ts";
+import { type Harness, makeHarness, executionContext } from "./harness.ts";
 
 // infra/onboarding/spec.md §38: runtime newsletter configuration on first use — operator-only setup with
 // one Resend API key, automatic webhook provisioning/recovery, sealed storage, runtime-over-env
 // precedence without mixing, qualification gating and webhook verification with the stored secret.
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 const API_KEY = "re_live_KEYKEYKEYKEYKEY123";
+
 const SEAL_KEY = btoa(String.fromCharCode(...new Uint8Array(32).fill(7)))
   .replace(/\+/g, "-")
   .replace(/\//g, "_")
   .replace(/=+$/, "");
+
 const SECRET_BYTES = new TextEncoder().encode("runtime-webhook-secret");
+
 const SIGNING_SECRET = `whsec_${btoa(String.fromCharCode(...SECRET_BYTES))}`;
+
 const LEGACY_SECRET = `whsec_${btoa("legacy-secret-bytes")}`;
 
 interface Hook {
@@ -49,22 +50,28 @@ const fakeResend = () => {
   const hooks = new Map<string, Hook>();
   const calls: Array<string> = [];
   let seq = 0;
+
   const state = {
     exposeSecret: true,
     fault: undefined as ((method: string, path: string) => Response | undefined) | undefined,
   };
-  const json = (status: number, body: unknown) =>
+
+  const json = <BodyValue>(status: number, body: BodyValue) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : input);
     const method = init?.method ?? "GET";
     const path = url.pathname;
     calls.push(`${method} ${path}`);
+
     if (new Headers(init?.headers).get("authorization") !== `Bearer ${API_KEY}`)
       return json(401, { name: "invalid_api_key" });
     const injected = state.fault?.(method, path);
+
     if (injected) return injected;
     let m: RegExpExecArray | null;
+
     if (method === "GET" && path === "/webhooks")
       return json(200, {
         data: [...hooks.values()].map((w) => ({
@@ -73,31 +80,42 @@ const fakeResend = () => {
           events: w.events,
         })),
       });
+
     if (method === "POST" && path === "/webhooks") {
       const body = JSON.parse(init?.body as string) as { endpoint: string; events: Array<string> };
       const id = `wh_${++seq}`;
       hooks.set(id, { id, endpoint: body.endpoint, events: body.events });
+
       return json(201, { object: "webhook", id, signing_secret: SIGNING_SECRET });
     }
+
     if ((m = /^\/webhooks\/([^/]+)$/.exec(path)) && method === "GET") {
       const w = hooks.get(m[1]!);
+
       if (!w) return json(404, { name: "not_found" });
-      return json(200, { ...w, ...(state.exposeSecret ? { signing_secret: SIGNING_SECRET } : {}) });
+
+      return json(200, state.exposeSecret ? { ...w, signing_secret: SIGNING_SECRET } : { ...w });
     }
+
     if ((m = /^\/webhooks\/([^/]+)$/.exec(path)) && method === "DELETE") {
       hooks.delete(m[1]!);
+
       return json(200, { object: "webhook", id: m[1], deleted: true });
     }
+
     return json(404, { name: "not_found" });
   }) as typeof fetch;
+
   return { hooks, calls, fetchFn, state };
 };
 
 const signWebhook = async (bytes: Uint8Array, id: string, body: string, at = Date.now()) => {
   const ts = String(Math.floor(at / 1000));
+
   const sig = btoa(
     String.fromCharCode(...(await hmacSha256(bytes as never, `${id}.${ts}.${body}`))),
   );
+
   return { "svix-id": id, "svix-timestamp": ts, "svix-signature": `v1,${sig}` };
 };
 
@@ -110,29 +128,43 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "test", steppedUp);
+
     return { ...account, cookie: `__Host-session=${session.token}` };
   };
 
-  const call = async (cookie: string | null, method: string, path: string, json?: unknown) => {
+  const call = async <JsonValue>(
+    cookie: string | null,
+    method: string,
+    path: string,
+    json?: JsonValue,
+  ) => {
+    const requestHeaders = new Headers();
+
+    if (cookie) requestHeaders.set("cookie", cookie);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (json !== undefined) requestHeaders.set("content-type", "application/json");
+
     const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(cookie ? { cookie } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(json !== undefined ? { "content-type": "application/json" } : {}),
-        },
-        ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
-      }),
+      new Request(
+        `${h.env.APP_ORIGIN}${path}`,
+        json !== undefined
+          ? { method, headers: requestHeaders, body: JSON.stringify(json) }
+          : { method, headers: requestHeaders },
+      ),
       h.env,
       ctx,
     );
+
     const text = await r.text();
+
     return { status: r.status, text, body: text ? (JSON.parse(text) as any) : null };
   };
 
@@ -152,6 +184,7 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
   const operator = async (steppedUp = true) => {
     const op = await signup("op@bye.test", steppedUp);
     (h.env as { OPERATOR_USER_IDS?: string }).OPERATOR_USER_IDS = op.userId;
+
     return op;
   };
 
@@ -209,6 +242,7 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
       provider: "resend",
       apiKey: API_KEY,
     });
+
     expect([refused.status, refused.body.error.code, refused.body.error.details?.stepUp]).toEqual([
       403,
       "forbidden",
@@ -219,25 +253,30 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
 
   it("requires a recent step-up", async () => {
     const op = await operator(false);
+
     const r = await call(op.cookie, "POST", "/v1/newsletter/config", {
       provider: "resend",
       apiKey: API_KEY,
     });
+
     expect([r.status, r.body.error.details?.stepUp]).toEqual([403, true]);
     expect(resend.calls).toEqual([]);
   });
 
   it("creates the webhook, seals both secrets, never returns or logs the key, then stays configured", async () => {
     const logs: Array<string> = [];
+
     for (const level of ["log", "warn", "error", "info"] as const)
       vi.spyOn(console, level).mockImplementation(
         (...a: Array<unknown>) => void logs.push(a.join(" ")),
       );
     const op = await operator();
+
     const r = await call(op.cookie, "POST", "/v1/newsletter/config", {
       provider: "resend",
       apiKey: API_KEY,
     });
+
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ status: "ready", qualified: true, canConfigure: false });
     expect(r.text).not.toContain(API_KEY);
@@ -248,17 +287,20 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
 
     const row = await h.d1
       .prepare("SELECT * FROM newsletter_provider_config WHERE id = 'default'")
-      .first<Record<string, unknown>>();
+      .first<Record<string, string | number | null>>();
+
     const dump = JSON.stringify(row);
     expect(dump).not.toContain(API_KEY);
     expect(dump).not.toContain(SIGNING_SECRET);
     expect(row).toMatchObject({ provider: "resend", provider_webhook_id: "wh_1", status: "ready" });
     const keys = newsletterSealKeys(h.env)!;
+
     const sealed = (field: "api_key" | "webhook_secret") => ({
       keyVersion: row!.key_version as number,
       iv: row![`${field}_iv`] as string,
       ciphertext: row![`${field}_ciphertext`] as string,
     });
+
     expect(await openField(keys, "webhook_secret", sealed("webhook_secret"))).toBe(SIGNING_SECRET);
     expect(await openField(keys, "api_key", sealed("api_key"))).toBe(API_KEY);
     // Field isolation: a ciphertext moved to the other column does not open as that column.
@@ -268,12 +310,15 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
       expect(l).not.toContain(API_KEY);
       expect(l).not.toContain(SIGNING_SECRET);
     }
+
     // Subsequent views do not prompt again; a second setup is refused.
     expect((await call(op.cookie, "GET", "/v1/newsletter/config")).body.status).toBe("ready");
+
     const again = await call(op.cookie, "POST", "/v1/newsletter/config", {
       provider: "resend",
       apiKey: API_KEY,
     });
+
     expect([again.status, again.body.error.code]).toEqual([409, "conflict"]);
     expect(resend.calls.filter((c) => c === "POST /webhooks")).toHaveLength(1);
   });
@@ -282,9 +327,11 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
     const op = await operator();
     const ana = await signup("ana@bye.test");
     expect(await configure()).toMatchObject({ _tag: "Ready" });
+
     const before = await h.d1
       .prepare("SELECT account_ref FROM newsletter_provider_config WHERE id = 'default'")
       .first<{ account_ref: string }>();
+
     // The stored credentials stop opening (e.g. a different seal key after a restore).
     (h.env as { NEWSLETTER_CONFIG_SEAL_KEY?: string }).NEWSLETTER_CONFIG_SEAL_KEY =
       SEAL_KEY.replace(/^./, (c) => (c === "A" ? "B" : "A"));
@@ -297,16 +344,20 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
       status: "needs-attention",
       canConfigure: false,
     });
+
     // Repair with the same single key: the old webhook is reused (secret retrievable) and the row
     // replaced with a new account reference, so work bound to the old one stays held.
     const r = await call(op.cookie, "POST", "/v1/newsletter/config", {
       provider: "resend",
       apiKey: API_KEY,
     });
+
     expect([r.status, r.body.status]).toEqual([200, "ready"]);
+
     const after = await h.d1
       .prepare("SELECT account_ref FROM newsletter_provider_config WHERE id = 'default'")
       .first<{ account_ref: string }>();
+
     expect(after!.account_ref).not.toBe(before!.account_ref);
     expect(await loadRuntimeNewsletterConfig(h.env)).toMatchObject({ _tag: "Present" });
     expect(resend.hooks.size).toBe(1);
@@ -351,6 +402,7 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
 
   it("decodes the body with the contract schema and never echoes the key on a bad request", async () => {
     const op = await operator();
+
     for (const body of [
       { provider: "mailchimp", apiKey: API_KEY },
       { provider: "resend" },
@@ -360,11 +412,14 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
       expect([r.status, r.body.error.code]).toEqual([400, "bad_request"]);
       expect(r.text).not.toContain(API_KEY);
     }
+
     const long = `re_${"x".repeat(600)}`;
+
     const r = await call(op.cookie, "POST", "/v1/newsletter/config", {
       provider: "resend",
       apiKey: long,
     });
+
     expect(r.status).toBe(400);
     expect(r.text).not.toContain(long);
     expect(resend.calls).toEqual([]);
@@ -406,22 +461,26 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
             : ((t as any)[k]?.bind?.(t) ?? (t as any)[k]),
       }),
     } as CoreEnv;
+
     const r = await configureNewsletterProvider(
       failing,
       { provider: "resend", apiKey: API_KEY, actorId: "u_op" },
       resend.fetchFn,
     );
+
     expect(r).toMatchObject({ _tag: "Rejected", code: "unavailable" });
     expect(resend.hooks.size).toBe(0);
     expect(resend.calls).toContain("DELETE /webhooks/wh_1");
 
     // Cleanup that cannot be confirmed leaves an operator-visible reconciliation record.
     resend.state.fault = (m) => (m === "DELETE" ? new Response("", { status: 502 }) : undefined);
+
     const r2 = await configureNewsletterProvider(
       failing,
       { provider: "resend", apiKey: API_KEY, actorId: "u_op" },
       resend.fetchFn,
     );
+
     expect(r2._tag).toBe("NeedsAttention");
     const op = await operator();
     expect((await call(op.cookie, "GET", "/v1/newsletter/config")).body).toMatchObject({
@@ -439,10 +498,13 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
     resend.state.fault = (m, p) => {
       if (m === "POST" && p === "/webhooks") {
         resend.hooks.set("wh_lost", { id: "wh_lost", endpoint: endpoint(), events: [] });
+
         return new Response("", { status: 504 });
       }
+
       return undefined;
     };
+
     expect((await configure())._tag).toBe("NeedsAttention");
     resend.state.fault = undefined;
     expect(await configure()).toMatchObject({ _tag: "Ready" });
@@ -456,6 +518,7 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
       { provider: "resend", apiKey: "re_wrong_key_value_123", actorId: "u" },
       resend.fetchFn,
     );
+
     expect(r).toMatchObject({ _tag: "Rejected", code: "bad_request" });
     expect(await loadRuntimeNewsletterConfig(h.env)).toEqual({ _tag: "None" });
   });
@@ -521,12 +584,14 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
       _tag: "Blocked",
       reason: "newsletter credentials could not be opened",
     });
+
     // And the webhook no longer verifies with either secret.
     const body = JSON.stringify({
       type: "email.delivered",
       created_at: new Date().toISOString(),
       data: {},
     });
+
     expect(await postWebhook(await signWebhook(SECRET_BYTES, "m1", body), body)).toBe(401);
   });
 
@@ -536,6 +601,7 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
       created_at: new Date().toISOString(),
       data: { broadcast_id: "bc_x", to: ["x@example.net"] },
     });
+
     // Missing config: authentication failure, never accepted unsigned.
     expect(await postWebhook(await signWebhook(SECRET_BYTES, "m1", body), body)).toBe(401);
     await configure();
@@ -546,9 +612,11 @@ describe("[infra/onboarding/spec.md §38] newsletter configuration on first use"
         body,
       ),
     ).toBe(401);
+
     const rows = await h.d1
       .prepare("SELECT account, state FROM newsletter_events WHERE event_id = 'm1'")
       .first<{ account: string; state: string }>();
+
     expect(rows?.account).toMatch(/^resend_/);
   });
 });

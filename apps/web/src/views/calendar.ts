@@ -1,3 +1,4 @@
+import type { JsonObject } from "@bye/native-shared/json";
 import { api, list, ApiRequestError, apiRaw, newCommandId, query } from "../api.ts";
 import { degrade, bestEffort } from "../core/degrade.ts";
 import {
@@ -36,6 +37,7 @@ import {
 // week tasks, habits, the timer, day context (label, photo, journal), feeds, subscriptions and ICS.
 
 export type { CalView };
+
 const CAL_VIEWS: ReadonlyArray<CalView> = ["day", "week", "agenda", "month", "year"];
 
 interface Occurrence {
@@ -56,7 +58,7 @@ interface Occurrence {
   readonly columns?: number;
 }
 
-interface Preferences {
+type Preferences = {
   readonly firstWeekday?: number;
   readonly hour12?: boolean;
   readonly timeZone?: string;
@@ -64,6 +66,12 @@ interface Preferences {
   readonly lastDate?: string;
   readonly nightHoursCollapsed?: boolean;
   readonly waking?: { readonly startMinute: number; readonly endMinute: number };
+};
+
+interface DayContext {
+  readonly label?: string | null;
+  readonly photoUrl?: string | null;
+  readonly journal?: { readonly body: string; readonly revision: number } | null;
 }
 
 interface CalendarInfo {
@@ -83,7 +91,7 @@ const revisions = new Map<string, number>();
 
 const loadPreferences = (signal: AbortSignal) =>
   api<Preferences>("GET", `/v1/calendars/${cal()}/preferences`, undefined, signal).catch(
-    degrade({} as Preferences),
+    degrade<Preferences>({}),
   );
 
 const loadCalendars = (signal: AbortSignal) =>
@@ -99,7 +107,9 @@ const savePreferences = (preferences: Preferences) =>
   }).catch(bestEffort);
 
 const toMs = (d: LocalDate) => new Date(d.year, d.month - 1, d.day).getTime();
+
 const sameDay = (ms: number, d: LocalDate) => ymd(toLocalDate(new Date(ms))) === ymd(d);
+
 const timeLabel = (ms: number, hour12: boolean) =>
   new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12 });
 
@@ -123,6 +133,7 @@ const dayColumn = (
   const night = nightHours(prefs.waking);
   const visibleStart = collapsed ? night.before : 0;
   const visibleMinutes = collapsed ? night.waking.endMinute - night.waking.startMinute : 24 * 60;
+
   const col = h(
     "div",
     { class: "day", role: "gridcell", "aria-label": new Date(toMs(day)).toDateString() },
@@ -136,13 +147,16 @@ const dayColumn = (
       ),
     ),
   );
+
   for (const o of occurrences.filter((o) => sameDay(o.startMs, day))) {
     const start = new Date(o.startMs);
     const minute = start.getHours() * 60 + start.getMinutes();
     const top = o.allDay ? 0 : Math.max(0, ((minute - visibleStart) / visibleMinutes) * 100);
+
     const height = o.allDay
       ? 4
       : Math.max(2, ((o.endMs - o.startMs) / 60_000 / visibleMinutes) * 100);
+
     const width = 100 / (o.columns ?? 1);
     const node = occurrenceLink(o, prefs.hour12 ?? false);
     node.setAttribute(
@@ -151,6 +165,7 @@ const dayColumn = (
     );
     col.append(node);
   }
+
   return col;
 };
 
@@ -161,16 +176,20 @@ export const renderCalendar = async (
   routeDate?: string,
 ): Promise<void> => {
   const prefs = await loadPreferences(signal);
+
   const view: CalView = CAL_VIEWS.includes(routeView as CalView)
     ? (routeView as CalView)
     : (prefs.lastView ?? (remember.get("calView") as CalView | null) ?? "week");
+
   const anchor =
     parseLocalDate(routeDate ?? params.get("date") ?? prefs.lastDate ?? "") ??
     toLocalDate(new Date());
+
   const firstWeekday = prefs.firstWeekday ?? 1;
   const collapsed = prefs.nightHoursCollapsed ?? false;
   const hour12 = prefs.hour12 ?? false;
   const hidden = new Set((remember.get("calHidden") ?? "").split(",").filter(Boolean));
+
   if (view !== prefs.lastView || ymd(anchor) !== prefs.lastDate)
     void savePreferences({ lastView: view, lastDate: ymd(anchor) });
   remember.set("calView", view);
@@ -179,6 +198,7 @@ export const renderCalendar = async (
   const visibleIds = calendars.map(calId).filter((id) => id && !hidden.has(id));
   const { from, days } = range(view, anchor, firstWeekday);
   const to = addDays(from, days);
+
   const occurrences =
     view === "year"
       ? []
@@ -258,12 +278,15 @@ export const renderCalendar = async (
   );
 
   let body: HTMLElement;
+
   if (view === "agenda") {
     const byDay = new Map<string, Array<Occurrence>>();
+
     for (const o of occurrences) {
       const k = ymd(toLocalDate(new Date(o.startMs)));
       byDay.set(k, [...(byDay.get(k) ?? []), o]);
     }
+
     body =
       byDay.size === 0
         ? h("p", { class: "empty" }, "Nothing scheduled.")
@@ -329,6 +352,7 @@ export const renderCalendar = async (
       undefined,
       signal,
     ).catch(degrade({ counts: {} }));
+
     const counts = new Map<string, number>(Object.entries(overview.counts ?? {}));
     body = h(
       "div",
@@ -378,6 +402,7 @@ export const renderCalendar = async (
   } else {
     const daysShown =
       view === "day" ? [anchor] : Array.from({ length: 7 }, (_, i) => addDays(from, i));
+
     body = h(
       "div",
       {
@@ -408,6 +433,7 @@ export const renderCalendar = async (
               checked: !hidden.has(calId(c)),
               onchange: (e: Event) => {
                 const next = new Set(hidden);
+
                 if ((e.target as HTMLInputElement).checked) next.delete(calId(c));
                 else next.add(calId(c));
                 remember.set("calHidden", [...next].join(","));
@@ -448,6 +474,7 @@ const localInput = (ms: number | undefined, allDay: boolean): string => {
   if (ms === undefined) return "";
   const d = new Date(ms);
   const date = ymd(toLocalDate(d));
+
   return allDay
     ? date
     : `${date}T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -461,35 +488,45 @@ export const renderEventEditor = async (
 ): Promise<void> => {
   const calendars = await loadCalendars(signal);
   let existing: Occurrence | undefined;
+
   if (eventId) {
     const key = params.get("key") ?? "";
+
     const around = key
       ? Date.parse(`${key.slice(0, 4)}-${key.slice(4, 6)}-${key.slice(6, 8)}T00:00:00Z`)
       : Date.now();
+
     const window = await api<{ occurrences: ReadonlyArray<Occurrence> }>(
       "GET",
       `/v1/calendars/${cal()}/events${query({ from: new Date(around - 40 * 86_400_000).toISOString(), to: new Date(around + 40 * 86_400_000).toISOString(), tz: zone() })}`,
       undefined,
       signal,
     ).catch(degrade({ occurrences: [] }));
+
     existing =
       window.occurrences.find((o) => o.eventId === eventId && (!key || o.key === key)) ??
       window.occurrences.find((o) => o.eventId === eventId);
   }
+
   const date = params.get("date") ?? ymd(toLocalDate(new Date()));
   const allDay = h("input", { type: "checkbox", checked: existing?.allDay ?? false });
+
   const title = h("input", {
     required: true,
     value: existing?.data.summary ?? params.get("title") ?? "",
     autocomplete: "off",
   });
+
   const start = h("input", {
     value: existing ? localInput(existing.startMs, existing.allDay) : `${date}T09:00`,
   });
+
   const end = h("input", {
     value: existing ? localInput(existing.endMs, existing.allDay) : `${date}T10:00`,
   });
+
   const tz = h("input", { value: zone(), "aria-describedby": "tz-help" });
+
   const calendarSelect = h(
     "select",
     {},
@@ -501,6 +538,7 @@ export const renderEventEditor = async (
       ),
     ),
   );
+
   const frequency = h(
     "select",
     {},
@@ -508,8 +546,10 @@ export const renderEventEditor = async (
       h("option", { value: f }, f === "none" ? "Doesn't repeat" : f.toLowerCase()),
     ),
   );
+
   const interval = h("input", { type: "number", min: "1", value: "1" });
   const byDay = DAY_CODES.map((d) => h("input", { type: "checkbox", value: d, "aria-label": d }));
+
   const endsKind = h(
     "select",
     {},
@@ -517,20 +557,25 @@ export const renderEventEditor = async (
     h("option", { value: "count" }, "After N times"),
     h("option", { value: "until" }, "Until date"),
   );
+
   const endsValue = h("input", { placeholder: "count or YYYY-MM-DD" });
+
   const place = h("input", {
     value: existing?.data.location ?? "",
     list: "location-suggestions",
     autocomplete: "off",
   });
+
   const suggestions = h("datalist", { id: "location-suggestions" });
   place.addEventListener("input", async () => {
     if (place.value.length < 3) return;
+
     // Typing-time suggestions: a failed lookup just offers none.
     const found =
       (await list<{ label: string; address?: string }>(
         `/v1/locations${query({ q: place.value })}`,
       ).catch(bestEffort)) ?? [];
+
     suggestions.replaceChildren(
       ...found.map((f) => h("option", { value: f.address ? `${f.label}, ${f.address}` : f.label })),
     );
@@ -538,6 +583,7 @@ export const renderEventEditor = async (
   const description = h("textarea", { rows: "4" }, existing?.data.description ?? "");
   const attendees = h("input", { placeholder: "a@example.com, b@example.com" });
   const reminders = h("input", { value: "10", placeholder: "minutes before, comma-separated" });
+
   const scope = h(
     "select",
     {},
@@ -545,10 +591,22 @@ export const renderEventEditor = async (
     h("option", { value: "future" }, "This and future events"),
     h("option", { value: "series" }, "All events in the series"),
   );
+
   const errors = h("ul", { class: "errors", role: "alert" });
 
   const form = (): EventForm => {
     const kind = endsKind.value as "never" | "count" | "until";
+
+    const ends = (): EventForm["ends"] => {
+      if (kind === "count") return { kind, count: Number(endsValue.value) };
+
+      if (kind === "until") {
+        return { kind, until: parseLocalDate(endsValue.value) ?? toLocalDate(new Date()) };
+      }
+
+      return { kind: "never" };
+    };
+
     return {
       calendarId: calendarSelect.value,
       title: title.value,
@@ -559,12 +617,7 @@ export const renderEventEditor = async (
       frequency: frequency.value as EventForm["frequency"],
       interval: Number(interval.value) || 1,
       byDay: byDay.filter((b) => b.checked).map((b) => b.value),
-      ends:
-        kind === "count"
-          ? { kind, count: Number(endsValue.value) }
-          : kind === "until"
-            ? { kind, until: parseLocalDate(endsValue.value) ?? toLocalDate(new Date()) }
-            : { kind: "never" },
+      ends: ends(),
       location: place.value,
       description: description.value,
       attendees: attendees.value,
@@ -574,6 +627,7 @@ export const renderEventEditor = async (
 
   const save = async (event: Event) => {
     event.preventDefault();
+
     const built = existing
       ? updatePayload(
           existing.eventId,
@@ -583,12 +637,16 @@ export const renderEventEditor = async (
           form(),
         )
       : eventPayload(form());
+
     if (!built.ok) {
       errors.replaceChildren(...built.errors.map((e) => h("li", {}, `${e.field}: ${e.message}`)));
+
       return;
     }
+
     try {
       const result = await calendarCommand<{ revision?: number; eventId?: string }>(built.command);
+
       if (result?.eventId && result.revision) revisions.set(result.eventId, result.revision);
       announce(existing ? "Event updated" : "Event created");
       location.hash = `#/calendar/day/${form().start.slice(0, 10)}`;
@@ -613,7 +671,7 @@ export const renderEventEditor = async (
         type: "RespondInvitation",
         eventId: existing!.eventId,
         partstat,
-        ...(existing!.recurring ? { occurrenceKey: existing!.key } : {}),
+        occurrenceKey: existing!.recurring ? existing!.key : undefined,
       }),
     );
 
@@ -682,7 +740,7 @@ export const renderEventEditor = async (
                       type: "DeleteEvent",
                       eventId: existing!.eventId,
                       scope: existing!.recurring ? (scope.value as "this") : "series",
-                      ...(existing!.recurring ? { occurrenceKey: existing!.key } : {}),
+                      occurrenceKey: existing!.recurring ? existing!.key : undefined,
                     }),
                   () => (location.hash = "#/calendar"),
                 ),
@@ -701,6 +759,7 @@ export const renderPlanning = async (signal: AbortSignal): Promise<void> => {
   const prefs = await loadPreferences(signal);
   const firstWeekday = prefs.firstWeekday ?? 1;
   const monday = weekStart(today, firstWeekday);
+
   const [tasks, habits, timer, entries] = await Promise.all([
     list<{
       id?: string;
@@ -716,26 +775,31 @@ export const renderPlanning = async (signal: AbortSignal): Promise<void> => {
       `/v1/calendars/${cal()}/habits${query({ from: ymd(addDays(today, -6)), to: ymd(today) })}`,
       signal,
     ).catch(degrade([])),
-    api<{
-      active?: { id?: string; entryId?: string; label: string; startedAt: number } | null;
-    } | null>("GET", `/v1/calendars/${cal()}/timer`, undefined, signal).catch(degrade(null)),
+    api<
+      | { active?: { id?: string; entryId?: string; label: string; startedAt: number } | null }
+      | { label: string; startedAt: number }
+      | null
+    >("GET", `/v1/calendars/${cal()}/timer`, undefined, signal).catch(degrade(null)),
     list<{ label: string; startedAt: number; stoppedAt: number | null }>(
       `/v1/calendars/${cal()}/time-entries${query({ from: new Date(toMs(today)).toISOString(), to: new Date(toMs(addDays(today, 1))).toISOString() })}`,
       signal,
     ).catch(degrade([])),
   ]);
+
   const reload = () => void renderPlanning(signal);
+
   const taskTitle = h("input", {
     "aria-label": "New task this week",
     placeholder: "Something for this week",
   });
+
   const habitName = h("input", { "aria-label": "New habit" });
   const timerLabel = h("input", { "aria-label": "What are you working on?" });
+
   const active =
-    timer?.active ??
-    (timer && "label" in (timer as object)
-      ? (timer as unknown as { label: string; startedAt: number })
-      : null);
+    (timer && "active" in timer ? timer.active : undefined) ??
+    (timer && "label" in timer ? timer : null);
+
   const tid = (t: { id?: string; taskId?: string }) => t.taskId ?? t.id ?? "";
   const hid = (x: { id?: string; habitId?: string }) => x.habitId ?? x.id ?? "";
   show(
@@ -836,12 +900,14 @@ export const renderPlanning = async (signal: AbortSignal): Promise<void> => {
           ["Habit", (x) => text(x.name)],
           ...Array.from({ length: 7 }, (_, i) => {
             const d = addDays(today, i - 6);
+
             return [
               new Date(toMs(d)).toLocaleDateString(undefined, { weekday: "narrow" }),
-              (x: Record<string, unknown>) => {
+              (x: JsonObject) => {
                 const done = ((x.completed as ReadonlyArray<string> | undefined) ?? []).includes(
                   ymd(d),
                 );
+
                 return h("input", {
                   type: "checkbox",
                   checked: done,
@@ -945,26 +1011,28 @@ export const renderPlanning = async (signal: AbortSignal): Promise<void> => {
 /** Day context (C08): label, background photo, private journal. */
 export const renderDayContext = async (dateText: string, signal: AbortSignal): Promise<void> => {
   const date = parseLocalDate(dateText) ?? toLocalDate(new Date());
-  const context = await api<{
-    label?: string | null;
-    photoUrl?: string | null;
-    journal?: { body: string; revision: number } | null;
-  }>("GET", `/v1/calendars/${cal()}/days/${ymd(date)}/context`, undefined, signal).catch(
-    degrade(
-      {} as { label?: string; photoUrl?: string; journal?: { body: string; revision: number } },
-    ),
-  );
+
+  const context = await api<DayContext>(
+    "GET",
+    `/v1/calendars/${cal()}/days/${ymd(date)}/context`,
+    undefined,
+    signal,
+  ).catch(degrade<DayContext>({}));
+
   const label = h("input", { value: context.label ?? "", "aria-label": "Name this day" });
+
   const journal = h(
     "textarea",
     { rows: "8", "aria-label": "Journal (private)" },
     context.journal?.body ?? "",
   );
+
   const photo = h("input", {
     type: "file",
     accept: "image/jpeg,image/png,image/webp,image/gif",
     "aria-label": "Background photo",
   });
+
   const reload = () => void renderDayContext(ymd(date), signal);
   show(
     section(
@@ -1002,6 +1070,7 @@ export const renderDayContext = async (dateText: string, signal: AbortSignal): P
               "Photo uploaded",
               async () => {
                 const file = photo.files?.[0];
+
                 if (!file) throw new Error("Choose a photo first");
                 await apiRaw(
                   "POST",
@@ -1050,31 +1119,38 @@ export const renderCalendarManage = async (signal: AbortSignal): Promise<void> =
       signal,
     ).catch(degrade([])),
   ]);
+
   const reload = () => void renderCalendarManage(signal);
   const newName = h("input", { "aria-label": "Calendar name" });
   const newColor = h("input", { type: "color", value: "#1f3a5f", "aria-label": "Color" });
   const subName = h("input", { "aria-label": "Subscription name" });
+
   const subUrl = h("input", {
     type: "url",
     placeholder: "https://…/calendar.ics",
     "aria-label": "Feed URL",
   });
+
   const feedLabel = h("input", { "aria-label": "Feed label", placeholder: "e.g. Work phone" });
   const feedResult = h("div", { role: "status", "aria-live": "polite" });
+
   const importFile = h("input", {
     type: "file",
     accept: ".ics,text/calendar",
     "aria-label": "ICS file",
   });
+
   const importTarget = h("select", { "aria-label": "Import into" }, calendarOptions(calendars));
   const grantee = h("input", { type: "email", "aria-label": "Share with (address or user)" });
   const grantCal = h("select", { "aria-label": "Calendar to share" }, calendarOptions(calendars));
+
   const grantRole = h(
     "select",
     { "aria-label": "Permission" },
     h("option", { value: "read" }, "Can view"),
     h("option", { value: "write" }, "Can edit"),
   );
+
   show(
     section(
       "calmanage-title",
@@ -1217,6 +1293,7 @@ export const renderCalendarManage = async (signal: AbortSignal): Promise<void> =
                 label: feedLabel.value || "Feed",
               },
             );
+
             feedResult.replaceChildren(
               h("p", {}, "Copy this link now — it won't be shown again:"),
               h("code", { class: "token" }, r.url),
@@ -1250,6 +1327,7 @@ export const renderCalendarManage = async (signal: AbortSignal): Promise<void> =
               "Imported",
               async () => {
                 const file = importFile.files?.[0];
+
                 if (!file) throw new Error("Choose an .ics file");
                 await api("POST", `/v1/calendars/${cal()}/import`, {
                   commandId: newCommandId(),

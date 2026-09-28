@@ -20,50 +20,65 @@ interface FakeClamd {
 const fakeClamd = async (behaviour: "normal" | "hang" | "error" = "normal"): Promise<FakeClamd> => {
   const socketPath = join(mkdtempSync(join(tmpdir(), "clamd-")), "clamd.sock");
   const received: Array<Buffer> = [];
+
   const server = createServer((socket: Socket) => {
     let buffer = Buffer.alloc(0);
     let commandSeen = false;
     const body: Array<Buffer> = [];
     socket.on("data", (data: Buffer) => {
       buffer = Buffer.concat([buffer, data]);
+
       if (!commandSeen) {
         const nul = buffer.indexOf(0);
+
         if (nul < 0) return;
         const command = buffer.subarray(0, nul).toString("latin1");
         buffer = buffer.subarray(nul + 1);
         commandSeen = true;
+
         if (command === "zPING") return void socket.end("PONG\0");
+
         if (command !== "zINSTREAM") return void socket.end("UNKNOWN COMMAND\0");
       }
+
       while (buffer.length >= 4) {
         const length = buffer.readUInt32BE(0);
+
         if (buffer.length < 4 + length) return;
         const chunk = buffer.subarray(4, 4 + length);
         buffer = buffer.subarray(4 + length);
+
         if (length === 0) {
           const all = Buffer.concat(body);
           received.push(all);
+
           if (behaviour === "hang") return;
+
           if (behaviour === "error")
             return void socket.end("INSTREAM size limit exceeded. ERROR\0");
+
           return void socket.end(
             all.includes(EICAR) ? "stream: Eicar-Test-Signature FOUND\0" : "stream: OK\0",
           );
         }
+
         body.push(Buffer.from(chunk));
       }
     });
   });
+
   server.listen(socketPath);
   await once(server, "listening");
+
   return { server, socketPath, received };
 };
 
 async function* chunks(...parts: Array<string | Uint8Array>): AsyncGenerator<Uint8Array> {
-  for (const p of parts) yield typeof p === "string" ? new TextEncoder().encode(p) : p;
+  for (const p of parts) yield p instanceof Uint8Array ? p : new TextEncoder().encode(p);
 }
 
 const servers: Array<{ close: () => void }> = [];
+
 afterEach(() => {
   for (const s of servers.splice(0)) s.close();
 });
@@ -93,29 +108,35 @@ describe("clamd INSTREAM client", () => {
   it("[E20] streams multi-chunk bodies intact and detects EICAR split across chunks", async () => {
     const clamd = await fakeClamd();
     servers.push(clamd.server);
+
     const clean = await scanStream(chunks("hello ", "world"), {
       socket: clamd.socketPath,
       timeoutMs: 2000,
       maxBytes: 1024,
     });
+
     expect(clean).toEqual({ verdict: "clean" });
     expect(clamd.received[0]!.toString()).toBe("hello world");
+
     const infected = await scanStream(chunks(EICAR.slice(0, 20), EICAR.slice(20)), {
       socket: clamd.socketPath,
       timeoutMs: 2000,
       maxBytes: 1024,
     });
+
     expect(infected).toEqual({ verdict: "infected", signature: "Eicar-Test-Signature" });
   });
 
   it("[E20] enforces the size limit and timeout without ever reporting clean", async () => {
     const clamd = await fakeClamd();
     servers.push(clamd.server);
+
     const tooBig = await scanStream(chunks(new Uint8Array(600), new Uint8Array(600)), {
       socket: clamd.socketPath,
       timeoutMs: 2000,
       maxBytes: 1000,
     });
+
     expect(tooBig.verdict).toBe("error");
     const hung = await fakeClamd("hang");
     servers.push(hung.server);
@@ -151,15 +172,18 @@ describe("clamd INSTREAM client", () => {
   it("[E20] HTTP /scan returns verdicts and refuses oversized declared bodies", async () => {
     const clamd = await fakeClamd();
     servers.push(clamd.server);
+
     const server = startServer({
       port: 0,
       socket: clamd.socketPath,
       timeoutMs: 2000,
       maxBytes: 128,
     });
+
     servers.push(server);
     await once(server, "listening");
     const port = (server.address() as { port: number }).port;
+
     const post = (body: string) =>
       new Promise<{ status: number; json: unknown }>((resolve, reject) => {
         const req = request(
@@ -175,9 +199,11 @@ describe("clamd INSTREAM client", () => {
             res.on("end", () => resolve({ status: res.statusCode ?? 0, json: JSON.parse(text) }));
           },
         );
+
         req.on("error", reject);
         req.end(body);
       });
+
     expect(await post(EICAR)).toEqual({
       status: 200,
       json: { verdict: "infected", signature: "Eicar-Test-Signature" },

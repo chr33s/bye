@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { hmacSha256 } from "@bye/domain";
 import { ControlAuth, ControlDirectory, type WorldStore } from "@bye/platform-cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +8,13 @@ import { approveNewsletter, ledgerOf, runNewsletter } from "../src/newsletter.ts
 import { FanoutWorkflow } from "../src/workflows/fanout.ts";
 import { newsletterSealKeys, sealField } from "../src/newsletter-config.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, makeHarness } from "./harness.ts";
+import {
+  type Harness,
+  makeHarness,
+  executionContext,
+  type StepResult,
+  type JsonRecord,
+} from "./harness.ts";
 
 // spec.md §13 mail acceptance over in-memory bindings with a fake Resend API: routing/capabilities,
 // consent consistency, broadcast recovery, event authentication and provider recovery.
@@ -18,12 +25,10 @@ import { type Harness, makeHarness } from "./harness.ts";
   }
 };
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 const SECRET_BYTES = new TextEncoder().encode("webhook-secret-bytes");
+
 const WEBHOOK_SECRET = `whsec_${btoa(String.fromCharCode(...SECRET_BYTES))}`;
 
 interface FakeBroadcast {
@@ -35,7 +40,7 @@ interface FakeBroadcast {
   subject: string;
   html: string;
   status: string;
-  body: Record<string, unknown>;
+  body: JsonRecord;
 }
 
 /** A minimal Resend: segments, topics, contacts (global) and broadcasts. */
@@ -44,31 +49,40 @@ const fakeResend = () => {
     string,
     { segments: Set<string>; topics: Map<string, string>; unsubscribed: boolean }
   >();
+
   const broadcasts = new Map<string, FakeBroadcast>();
   const calls: Array<string> = [];
   let seq = 0;
   /** Return a Response to short-circuit a call (fault injection). */
   let fault: ((method: string, path: string) => Response | undefined) | undefined;
-  const json = (status: number, body: unknown) =>
+
+  const json = <BodyValue>(status: number, body: BodyValue) =>
     new Response(JSON.stringify(body), {
       status,
       headers: { "content-type": "application/json" },
     });
+
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : input);
     const method = init?.method ?? "GET";
     const path = url.pathname;
     calls.push(`${method} ${path}`);
+
     if (!new Headers(init?.headers).get("user-agent")) return json(403, { name: "missing_ua" });
     const injected = fault?.(method, path);
+
     if (injected) return injected;
-    const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    const body = Predicate.isString(init?.body) ? JSON.parse(init.body) : undefined;
     let m: RegExpExecArray | null;
+
     if (method === "POST" && path === "/segments") return json(201, { id: `seg_${++seq}` });
+
     if (method === "POST" && path === "/topics") {
       expect(body.default_subscription).toBe("opt_out");
+
       return json(201, { id: `top_${++seq}` });
     }
+
     if (method === "POST" && path === "/contacts") {
       contacts.set(body.email, {
         segments: new Set(body.segments.map((s: { id: string }) => s.id)),
@@ -78,42 +92,61 @@ const fakeResend = () => {
         unsubscribed: false,
       });
       expect(body).not.toHaveProperty("unsubscribed");
+
       return json(201, { id: `ct_${++seq}` });
     }
+
     if ((m = /^\/contacts\/([^/]+)\/topics$/.exec(path)) && method === "PATCH") {
       const c = contacts.get(decodeURIComponent(m[1]!));
+
       if (!c) return json(404, { name: "not_found" });
+
       for (const t of body as Array<{ id: string; subscription: string }>)
         c.topics.set(t.id, t.subscription);
+
       return json(200, { id: "x" });
     }
+
     if ((m = /^\/contacts\/([^/]+)\/segments\/([^/]+)$/.exec(path)) && method === "POST") {
       contacts.get(decodeURIComponent(m[1]!))!.segments.add(decodeURIComponent(m[2]!));
+
       return json(200, { id: m[2] });
     }
+
     if (method === "POST" && path === "/broadcasts") {
       const id = `bc_${++seq}`;
       broadcasts.set(id, { id, ...body, status: "draft", body });
+
       return json(201, { id });
     }
+
     if (method === "GET" && path === "/broadcasts")
       return json(200, { data: [...broadcasts.values()] });
+
     if ((m = /^\/broadcasts\/([^/]+)$/.exec(path)) && method === "GET") {
       const b = broadcasts.get(m[1]!);
+
       return b ? json(200, b) : json(404, { name: "not_found" });
     }
+
     if ((m = /^\/broadcasts\/([^/]+)\/send$/.exec(path)) && method === "POST") {
       broadcasts.get(m[1]!)!.status = "queued";
+
       return json(200, { id: m[1] });
     }
+
     if ((m = /^\/broadcasts\/([^/]+)\/cancel$/.exec(path)) && method === "POST") {
       const b = broadcasts.get(m[1]!)!;
+
       if (b.status !== "queued" && b.status !== "scheduled") return json(422, { name: "invalid" });
       b.status = "canceled";
+
       return json(200, { id: m[1] });
     }
+
     return json(404, { name: "not_found" });
   }) as typeof fetch;
+
   return {
     fetchFn,
     contacts,
@@ -125,9 +158,11 @@ const fakeResend = () => {
 
 const signWebhook = async (id: string, body: string, at = Date.now()) => {
   const ts = String(Math.floor(at / 1000));
+
   const sig = btoa(
     String.fromCharCode(...(await hmacSha256(SECRET_BYTES as never, `${id}.${ts}.${body}`))),
   );
+
   return { "svix-id": id, "svix-timestamp": ts, "svix-signature": `v1,${sig}` };
 };
 
@@ -141,7 +176,8 @@ const postWebhook = async (h: Harness, headers: Record<string, string>, body: st
     h.env,
     ctx,
   );
-  return { status: r.status, body: (await r.json().catch(() => null)) as Record<string, unknown> };
+
+  return { status: r.status, body: await r.json<JsonRecord | null>().catch(() => null) };
 };
 
 const configure = (h: Harness, qualified = "evidence://staging/resend-2026-09") => {
@@ -186,6 +222,7 @@ describe("[P02] newsletters (§5.5)", () => {
     const { confirmToken } = await store.subscribe(a);
     await store.confirm(confirmToken!);
   };
+
   const pass = () => runNewsletter(h.env, "ana", resend.fetchFn);
 
   beforeEach(async () => {
@@ -193,15 +230,18 @@ describe("[P02] newsletters (§5.5)", () => {
     vi.setSystemTime(Date.UTC(2026, 8, 26, 12));
     h = makeHarness();
     resend = fakeResend();
+
     const account = await new ControlDirectory(
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address: "ana@bye.test", displayName: "ana" });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "test", true);
+
     const created = await handleFetch(
       new Request(`${h.env.APP_ORIGIN}/v1/world/posts`, {
         method: "POST",
@@ -215,10 +255,11 @@ describe("[P02] newsletters (§5.5)", () => {
       h.env,
       ctx,
     );
+
     expect(created.status).toBe(201);
     postId = ((await created.json()) as { postId: string }).postId;
     store = (
-      h.namespaces.SHARED_SPACES.instance("world:ana") as unknown as { worldStore(): WorldStore }
+      h.namespaces.SHARED_SPACES.instance("world:ana") as { worldStore(): WorldStore }
     ).worldStore();
     await subscribe("a@example.net");
     await subscribe("b@example.net");
@@ -243,22 +284,26 @@ describe("[P02] newsletters (§5.5)", () => {
       const instance = h.workflows.FANOUT?.find((w) => w.id.startsWith(`fan-ana-${postId}-r`));
       expect(instance).toBeDefined();
       const executed: Array<string> = [];
+
       const step = {
         do: async (name: string, ...args: ReadonlyArray<unknown>) => (
           executed.push(name),
-          (args.at(-1) as () => Promise<unknown>)()
+          (args.at(-1) as () => Promise<StepResult>)()
         ),
         sleep: async () => undefined,
       };
+
       const result = await new FanoutWorkflow({} as never, h.env).run(
         { payload: instance!.params, instanceId: instance!.id, timestamp: new Date() } as never,
         step as never,
       );
+
       return { result, executed };
     };
 
     it("sends nothing until a qualified provider approves it, and never through individual mail", async () => {
       vi.stubGlobal("fetch", resend.fetchFn);
+
       try {
         let r = await runFanout();
         expect(r.result).toEqual({ blocked: "no newsletter provider configured" });
@@ -275,6 +320,7 @@ describe("[P02] newsletters (§5.5)", () => {
 
     it("when qualified, approves one publication and submits it through the provider only", async () => {
       vi.stubGlobal("fetch", resend.fetchFn);
+
       try {
         configure(h);
         const r = await runFanout();
@@ -299,10 +345,12 @@ describe("[P02] newsletters (§5.5)", () => {
     expect(r.publication?.state).toBe("drafted");
     const [segment] = [...resend.contacts.values()][0]!.segments;
     expect([...resend.contacts.keys()].sort()).toEqual(["a@example.net", "b@example.net"]);
+
     for (const c of resend.contacts.values()) {
       expect([...c.topics.values()]).toEqual(["opt_in"]);
       expect(c.unsubscribed).toBe(false);
     }
+
     const [b] = [...resend.broadcasts.values()];
     expect(b).toMatchObject({ segment_id: segment, name: `pub_${postId}_r1`, status: "draft" });
     expect(b!.topic_id).toMatch(/^top_/);
@@ -349,8 +397,10 @@ describe("[P02] newsletters (§5.5)", () => {
     resend.setFault((method, path) => {
       if (method === "POST" && path.endsWith("/send")) {
         for (const b of resend.broadcasts.values()) b.status = "queued";
+
         return new Response("", { status: 504 });
       }
+
       return undefined;
     });
     await pass();
@@ -378,11 +428,13 @@ describe("[P02] newsletters (§5.5)", () => {
     await pass();
     await pass();
     const [b] = [...resend.broadcasts.values()];
+
     const complaint = JSON.stringify({
       type: "email.complained",
       created_at: new Date().toISOString(),
       data: { broadcast_id: b!.id, email_id: "em_1", to: ["a@example.net"] },
     });
+
     expect((await postWebhook(h, { "svix-id": "msg_1" }, complaint)).status).toBe(401);
     const forged = await signWebhook("msg_1", complaint);
     expect(
@@ -394,9 +446,11 @@ describe("[P02] newsletters (§5.5)", () => {
     const headers = await signWebhook("msg_1", complaint);
     expect((await postWebhook(h, headers, complaint)).status).toBe(200);
     expect((await postWebhook(h, headers, complaint)).status).toBe(200);
+
     const rows = await h.d1
       .prepare("SELECT state, kind FROM newsletter_events WHERE event_id = 'msg_1'")
       .all<{ state: string; kind: string }>();
+
     expect(rows.results).toEqual([{ state: "applied", kind: "complaint" }]);
     expect(store.subscriberStatus("a@example.net")).toBe("suppressed");
     // The creator-scoped complaint never entered the platform-wide suppression list.
@@ -410,6 +464,7 @@ describe("[P02] newsletters (§5.5)", () => {
       created_at: new Date().toISOString(),
       data: { email: "b@example.net", unsubscribed: true },
     });
+
     await postWebhook(h, await signWebhook("msg_2", unsub), unsub);
     expect(store.newsletter.restrictions("b@example.net")).toEqual([
       { kind: "provider-unsubscribe", scope: "provider", reason: "provider contact.updated" },
@@ -421,6 +476,7 @@ describe("[P02] newsletters (§5.5)", () => {
       created_at: new Date().toISOString(),
       data: { broadcast_id: "bc_someone_else", to: ["x@example.net"] },
     });
+
     await postWebhook(h, await signWebhook("msg_3", foreign), foreign);
     expect(
       await h.d1
@@ -465,12 +521,14 @@ describe("[P02] newsletters (§5.5)", () => {
     resend.setFault(undefined);
     expect((await pass()).publication).toMatchObject({ state: "held" });
     expect(resend.calls.filter((c) => c.endsWith("/send"))).toHaveLength(1);
+
     // Events verify with the runtime secret and bind to the runtime account.
     const ev = JSON.stringify({
       type: "email.delivered",
       created_at: new Date().toISOString(),
       data: {},
     });
+
     expect((await postWebhook(h, await signWebhook("rt_1", ev), ev)).status).toBe(200);
     expect(
       await h.d1

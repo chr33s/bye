@@ -20,15 +20,19 @@ export const parseUrl = (url: string): ParsedUrl | null => {
   const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/?#]*)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/.exec(
     url.trim(),
   );
+
   if (!m) return null;
   const query = new Map<string, string>();
+
   for (const pair of (m[4] ?? "").split("&")) {
     if (!pair) continue;
     const eq = pair.indexOf("=");
     const key = decode(eq < 0 ? pair : pair.slice(0, eq));
+
     // Duplicate parameters are ambiguous; the first wins and later duplicates are ignored.
     if (!query.has(key)) query.set(key, decode(eq < 0 ? "" : pair.slice(eq + 1)));
   }
+
   return {
     base: `${m[1]!.toLowerCase()}://${m[2]!.toLowerCase()}${m[3] ?? ""}`,
     query,
@@ -39,11 +43,14 @@ export const parseUrl = (url: string): ParsedUrl | null => {
 /** Normalize an origin (scheme://host[:port]) and require https except for local development. */
 export const normalizeOrigin = (origin: string): string => {
   const m = /^(https?):\/\/([^/?#]+)\/?$/i.exec(origin.trim());
+
   if (!m) throw new Error("invalid origin");
   const scheme = m[1]!.toLowerCase();
   const host = m[2]!.toLowerCase();
+
   if (scheme !== "https" && !/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host))
     throw new Error("origin must be https");
+
   return `${scheme}://${host}`;
 };
 

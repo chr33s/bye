@@ -6,12 +6,13 @@ import { addDays, type LocalDate, weekStart } from "@bye/native-shared/calendar-
 
 export type CalView = "day" | "week" | "agenda" | "month" | "year";
 
+export interface CalRange {
+  readonly from: LocalDate;
+  readonly days: number;
+}
+
 /** The dates a calendar view loads around its anchor date. */
-export const range = (
-  view: CalView,
-  anchor: LocalDate,
-  firstWeekday: number,
-): { from: LocalDate; days: number } => {
+export const range = (view: CalView, anchor: LocalDate, firstWeekday: number): CalRange => {
   switch (view) {
     case "day":
       return { from: anchor, days: 1 };
@@ -33,11 +34,16 @@ export const range = (
 /** The anchor date one page before or after `anchor` in a view (month and year pages start on day 1). */
 export const step = (view: CalView, anchor: LocalDate, dir: 1 | -1): LocalDate => {
   if (view === "day") return addDays(anchor, dir);
+
   if (view === "week") return addDays(anchor, 7 * dir);
+
   if (view === "agenda") return addDays(anchor, 14 * dir);
+
   if (view === "month") {
     const m = anchor.month + dir;
+
     return { year: anchor.year + Math.floor((m - 1) / 12), month: ((m - 1 + 12) % 12) + 1, day: 1 };
   }
+
   return { year: anchor.year + dir, month: 1, day: 1 };
 };

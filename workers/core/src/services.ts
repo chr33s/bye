@@ -64,6 +64,7 @@ const deriveHkdf = async (secret: string, info: string): Promise<Uint8Array<Arra
     false,
     ["deriveBits"],
   );
+
   const bits = await crypto.subtle.deriveBits(
     {
       name: "HKDF",
@@ -74,6 +75,7 @@ const deriveHkdf = async (secret: string, info: string): Promise<Uint8Array<Arra
     base,
     256,
   );
+
   return new Uint8Array(bits);
 };
 
@@ -81,14 +83,17 @@ const deriveHkdf = async (secret: string, info: string): Promise<Uint8Array<Arra
 // derivations are memoized per isolate. Keyed by the secret and info: a rotated secret (new
 // deployment/env) derives afresh.
 const hkdfCache = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
+
 const hkdfKey = (secret: string, info: string): Promise<Uint8Array<ArrayBuffer>> => {
   const key = `${info}\u0000${secret}`;
   let derived = hkdfCache.get(key);
+
   if (!derived) {
     derived = deriveHkdf(secret, info);
     derived.catch(() => hkdfCache.delete(key));
     hkdfCache.set(key, derived);
   }
+
   return derived;
 };
 
@@ -101,13 +106,16 @@ const hkdfKey = (secret: string, info: string): Promise<Uint8Array<ArrayBuffer>>
 const totpKeys = async (sessionKey: string): Promise<VersionedKeys> => {
   const ring = parseSecretRing(sessionKey);
   const keys: Record<number, Uint8Array<ArrayBuffer>> = {};
+
   for (const [version, secret] of Object.entries(ring.secrets))
     keys[Number(version)] = await hkdfKey(secret, `totp-seal-v${version}`);
+
   return { current: ring.current, keys };
 };
 
 export const authConfig = async (env: CoreEnv): Promise<AuthConfig> => {
   const origin = new URL(env.APP_ORIGIN);
+
   return {
     rp: { rpId: origin.hostname, origins: [env.APP_ORIGIN], requireUserVerification: true },
     totpKeys: await totpKeys(env.SESSION_KEY),
@@ -119,6 +127,7 @@ export const authConfig = async (env: CoreEnv): Promise<AuthConfig> => {
 /** One request's control-plane adapter instances (built once; every control service shares them). */
 export const controlAdapters = async (env: CoreEnv): Promise<ControlAdapters> => {
   const db = env.DIRECTORY;
+
   return {
     db,
     auth: new ControlAuth(db, kernelClock, await authConfig(env)),
@@ -133,11 +142,14 @@ export const controlAdapters = async (env: CoreEnv): Promise<ControlAdapters> =>
 /** Control-plane adapters that need no auth configuration (billing, sending policy, support, registry). */
 export const controlServices = (env: CoreEnv) => {
   const db = env.DIRECTORY;
+
   const provider =
     env.BILLING_CHECKOUT_URL && env.BILLING_API_KEY
       ? httpBillingProvider(env.BILLING_CHECKOUT_URL, env.BILLING_API_KEY, (u, i) => fetch(u, i))
       : null;
+
   const commerce = new ControlCommerce(db, kernelClock, provider, env.SESSION_KEY);
+
   return {
     commerce,
     billing: new ControlBilling(db, kernelClock, commerce),
@@ -203,8 +215,10 @@ export const mailboxFactsLayer = (env: CoreEnv) =>
         try: async () => {
           const stub = env.MAILBOXES.getByName(mailboxId);
           const source = await stub.delivery(deliveryId);
+
           if (!source) return null;
           const scan = await stub.attachmentAccess(deliveryId);
+
           return {
             quarantined: source.routing.decidedBy === "safety",
             scan: { allowed: scan.allowed, status: scan.status },

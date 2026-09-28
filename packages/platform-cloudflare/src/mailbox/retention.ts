@@ -18,6 +18,15 @@ export interface ManifestEntry {
 /** Threads purged per retention/empty batch; the rest continue from a scheduled job. */
 export const RETENTION_BATCH = 200;
 
+type ExportManifestPageResult = {
+  readonly deliveries: ReadonlyArray<ManifestEntry>;
+  readonly nextCursor: string | null;
+};
+
+type PurgeResult = { readonly deleted: number; readonly more: boolean };
+
+type EmptyDispositionResult = { readonly deleted: number; readonly more: boolean };
+
 export class MailboxRetention {
   constructor(private readonly ctx: MailboxContext) {}
 
@@ -33,13 +42,15 @@ export class MailboxRetention {
   emptyDisposition(
     disposition: "trash" | "spam" | "screened-out",
     before: number = this.ctx.now(),
-  ): { readonly deleted: number; readonly more: boolean } {
+  ): EmptyDispositionResult {
     const { deleted, more } = this.purge(
       "disposition = ? AND (disposition_at IS NULL OR disposition_at <= ?)",
       [disposition, before],
     );
+
     if (more)
       this.ctx.kernel.schedule("empty-disposition", disposition, this.ctx.now(), { before });
+
     return { deleted, more };
   }
 
@@ -53,11 +64,13 @@ export class MailboxRetention {
       const recycleDays = this.ctx.setting<{ days: number | null }>("pref:recycling", {
         days: null,
       }).days;
+
       const passes: Array<[string, ReadonlyArray<SqlValue>]> = [
         ["disposition = 'trash' AND disposition_at < ?", [now - RETENTION.trashMs]],
         ["disposition = 'spam' AND disposition_at < ?", [now - RETENTION.spamMs]],
         ["disposition = 'screened-out' AND disposition_at < ?", [now - RETENTION.screenedOutMs]],
       ];
+
       if (recycleDays)
         passes.push([
           `disposition = 'active' AND reply_later = 0 AND set_aside = 0 AND bubble_tag = 'None' AND last_activity_at < ?
@@ -67,17 +80,23 @@ export class MailboxRetention {
         ]);
       let deleted = 0;
       let more = false;
+
       for (const [where, args] of passes) {
         const budget = RETENTION_BATCH - deleted;
+
         if (budget <= 0) {
           more = true;
           break;
         }
+
         const r = this.purge(where, args, budget);
         deleted += r.deleted;
+
         if (r.more) more = true;
       }
+
       if (more) this.ctx.kernel.schedule("retention-sweep", "sweep", this.ctx.now(), {});
+
       return { deleted, more };
     });
   }
@@ -86,13 +105,15 @@ export class MailboxRetention {
     where: string,
     args: ReadonlyArray<SqlValue>,
     limit: number = RETENTION_BATCH,
-  ): { readonly deleted: number; readonly more: boolean } {
+  ): PurgeResult {
     const found = this.sql.all<{ thread_id: string }>(
       `SELECT thread_id FROM threads WHERE merged_into IS NULL AND ${where} ORDER BY thread_id LIMIT ?`,
       ...args,
       limit + 1,
     );
+
     const threads = found.slice(0, limit);
+
     for (const { thread_id } of threads) {
       for (const d of this.sql.all<{ delivery_id: string; message_key: string }>(
         "SELECT delivery_id, message_key FROM deliveries WHERE thread_id = ?",
@@ -104,6 +125,7 @@ export class MailboxRetention {
           reason: "retention",
         });
       }
+
       this.sql.run("DELETE FROM attachments WHERE thread_id = ?", thread_id);
       this.sql.run("DELETE FROM deliveries WHERE thread_id = ?", thread_id);
       this.sql.run("DELETE FROM thread_labels WHERE thread_id = ?", thread_id);
@@ -114,16 +136,15 @@ export class MailboxRetention {
       );
       this.ctx.change("thread", "deleted", { threadId: thread_id });
     }
+
     return { deleted: threads.length, more: found.length > limit };
   }
 
   /** Page through every delivery (all dispositions) in stable order; never silently capped. */
-  exportManifestPage(
-    cursor: string | null,
-    limit = 500,
-  ): { readonly deliveries: ReadonlyArray<ManifestEntry>; readonly nextCursor: string | null } {
+  exportManifestPage(cursor: string | null, limit = 500): ExportManifestPageResult {
     const size = Math.min(Math.max(limit, 1), 1000);
     const c = cursor ? decodeCursor<{ r: number; id: string }>(cursor) : undefined;
+
     const rows = this.sql.all<{
       delivery_id: string;
       thread_id: string;
@@ -138,8 +159,10 @@ export class MailboxRetention {
       ...(c ? [c.r, c.r, c.id] : []),
       size + 1,
     );
+
     const page = rows.slice(0, size);
     const last = page.at(-1);
+
     return {
       deliveries: page.map((r) => ({
         deliveryId: r.delivery_id,

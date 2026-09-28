@@ -22,6 +22,7 @@ export type ReceiptState =
 
 /** Republish budget per receipt (by `publish_attempts`); past it the receipt is quarantined. */
 export const REPLAY_ATTEMPT_CAP = 20;
+
 /** Back-off between quarantine attempts for `quarantine-failed` receipts. */
 export const QUARANTINE_RETRY_MS = 6 * 60 * 60_000;
 
@@ -102,6 +103,7 @@ export class IngressJournal {
         now,
         now,
       );
+
       return this.get(intent.ingestionId)!;
     });
   }
@@ -119,6 +121,7 @@ export class IngressJournal {
       updated_at: number;
       publish_attempts: number;
     }>("SELECT * FROM receipts WHERE ingestion_id = ?", ingestionId);
+
     return r
       ? {
           ingestionId: r.ingestion_id,
@@ -139,7 +142,9 @@ export class IngressJournal {
   private advance(ingestionId: string, to: ReceiptState): boolean {
     return this.sql.tx(() => {
       const r = this.get(ingestionId);
+
       if (!r) return false;
+
       if (ORDER[to] <= ORDER[r.state]) return r.state === to;
       this.sql.run(
         "UPDATE receipts SET state = ?, updated_at = ?, publish_attempts = publish_attempts + ? WHERE ingestion_id = ?",
@@ -148,6 +153,7 @@ export class IngressJournal {
         to === "enqueued" ? 1 : 0,
         ingestionId,
       );
+
       return true;
     });
   }
@@ -205,6 +211,7 @@ export class IngressJournal {
    */
   pendingReplay(olderThanMs: number, limit: number): ReadonlyArray<ReceiptRow> {
     const now = this.clock.now();
+
     return this.sql
       .all<{ ingestion_id: string }>(
         `SELECT ingestion_id FROM receipts

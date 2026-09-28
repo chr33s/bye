@@ -31,5 +31,6 @@ export const storageLevel = (
   budgetBytes: number,
 ): "ok" | "alert" | "rollover" => {
   const ratio = budgetBytes > 0 ? usedBytes / budgetBytes : 0;
+
   return ratio >= 0.7 ? "rollover" : ratio >= 0.5 ? "alert" : "ok";
 };

@@ -1,3 +1,4 @@
+import type { Types } from "effect";
 import type { KernelClock } from "../durable/kernel.ts";
 import { randomToken } from "./crypto.ts";
 import { audit, type D1Like, primary, q } from "./d1.ts";
@@ -34,6 +35,7 @@ export const nextDomainState = (
   state: DomainOnboardingState,
 ): DomainOnboardingState | undefined => {
   const i = DOMAIN_SEQUENCE.indexOf(state);
+
   return i >= 0 && i < DOMAIN_SEQUENCE.length - 1 ? DOMAIN_SEQUENCE[i + 1] : undefined;
 };
 
@@ -83,8 +85,11 @@ export const DEFAULT_MAIL_DNS: Omit<MailDnsProfile, "dkimPublicKey"> = {
 };
 
 const isSpf = (r: DnsRecord) => r.type === "TXT" && /^"?v=spf1\b/i.test(r.content);
+
 const isDmarc = (r: DnsRecord) => r.type === "TXT" && /^"?v=DMARC1\b/i.test(r.content);
+
 const unquote = (s: string) => s.replace(/^"|"$/g, "");
+
 const sameName = (a: string, b: string) =>
   a.toLowerCase().replace(/\.$/, "") === b.toLowerCase().replace(/\.$/, "");
 
@@ -108,9 +113,11 @@ export const planMailDns = (
     name: `_bye-verification.${domain}`,
     content: `bye-verification=${verificationToken}`,
   };
+
   const existingVerification = at(verification.name).find(
     (r) => r.type === "TXT" && unquote(r.content) === verification.content,
   );
+
   ops.push(
     existingVerification
       ? { op: "keep", record: existingVerification, purpose: "ownership" }
@@ -118,9 +125,11 @@ export const planMailDns = (
   );
 
   const existingMx = at(domain).filter((r) => r.type === "MX");
+
   const foreignMx = existingMx.find(
     (r) => !profile.mxHosts.some((h) => sameName(h.host, r.content)),
   );
+
   for (const mx of profile.mxHosts) {
     const desired: DnsRecord = {
       type: "MX",
@@ -128,7 +137,9 @@ export const planMailDns = (
       content: mx.host,
       priority: mx.priority,
     };
+
     const match = existingMx.find((r) => sameName(r.content, mx.host));
+
     if (match) ops.push({ op: "keep", record: match, purpose: "inbound" });
     else if (foreignMx)
       ops.push({ op: "conflict", existing: foreignMx, desired, purpose: "inbound" });
@@ -136,11 +147,13 @@ export const planMailDns = (
   }
 
   const spf = at(domain).filter(isSpf);
+
   const desiredSpf: DnsRecord = {
     type: "TXT",
     name: domain,
     content: `v=spf1 include:${profile.spfInclude} ~all`,
   };
+
   if (spf.length > 1) {
     ops.push({
       op: "conflict",
@@ -150,6 +163,7 @@ export const planMailDns = (
     });
   } else if (spf.length === 1) {
     const current = unquote(spf[0]!.content);
+
     if (current.includes(`include:${profile.spfInclude}`))
       ops.push({ op: "keep", record: spf[0]!, purpose: "spf" });
     else {
@@ -166,12 +180,15 @@ export const planMailDns = (
   }
 
   const dkimName = `${profile.dkimSelector}._domainkey.${domain}`;
+
   const dkimDesired: DnsRecord = {
     type: "TXT",
     name: dkimName,
     content: `v=DKIM1; k=rsa; p=${profile.dkimPublicKey}`,
   };
+
   const dkim = at(dkimName).find((r) => r.type === "TXT");
+
   if (!dkim) ops.push({ op: "create", record: dkimDesired, purpose: "dkim" });
   else if (unquote(dkim.content) === dkimDesired.content)
     ops.push({ op: "keep", record: dkim, purpose: "dkim" });
@@ -198,6 +215,7 @@ export const planMailDns = (
           purpose: "dmarc",
         },
   );
+
   return ops;
 };
 
@@ -237,7 +255,9 @@ const MAIL_PROVIDERS: ReadonlyArray<readonly [RegExp, string]> = [
 export const detectMailProvider = (mx: ReadonlyArray<DnsRecord>): string | null => {
   if (mx.length === 0) return null;
   const hosts = mx.map((r) => r.content.toLowerCase().replace(/\.$/, ""));
+
   for (const [pattern, name] of MAIL_PROVIDERS) if (hosts.some((h) => pattern.test(h))) return name;
+
   return `another mail provider (${hosts[0]})`;
 };
 
@@ -293,10 +313,13 @@ export const classifyMailSetup = (
   workerName: string | null = null,
 ): MailSetupClassification => {
   const currentMx = existing.filter((r) => r.type === "MX" && sameName(r.name, domain));
+
   const foreign = currentMx.filter(
     (r) => !profile.mxHosts.some((h) => sameName(h.host, r.content)),
   );
+
   const routedByCloudflare = currentMx.length > 0 && foreign.length === 0;
+
   const forwarding =
     routedByCloudflare &&
     (routing === null
@@ -304,8 +327,10 @@ export const classifyMailSetup = (
       : // Rules count even while Email Routing is off: enabling it would put them back in force.
         deliversElsewhere(routing.catchAll, workerName) ||
         routing.rules.some((r) => deliversElsewhere(r, workerName)));
+
   const conflicts = plan.filter((op) => op.op === "conflict" && op.purpose !== "inbound");
   const existingProvider = foreign.length > 0 || forwarding;
+
   return {
     kind: conflicts.length > 0 ? "conflicted" : existingProvider ? "existing-provider" : "new",
     provider:
@@ -342,13 +367,20 @@ export const snapshotMailDns = (
   routing: MailSnapshot["routing"],
   capturedAt: number,
 ): MailSnapshot => {
-  const strip = (r: DnsRecord): DnsRecord => ({
-    type: r.type,
-    name: r.name,
-    content: unquote(r.content),
-    ...(r.priority !== undefined ? { priority: r.priority } : {}),
-  });
-  const at = (name: string) => records.filter((r) => sameName(r.name, name)).map(strip);
+  const strip = (r: DnsRecord): DnsRecord => {
+    const out: Types.Mutable<DnsRecord> = {
+      type: r.type,
+      name: r.name,
+      content: unquote(r.content),
+    };
+
+    if (r.priority !== undefined) out.priority = r.priority;
+
+    return out;
+  };
+
+  const at = (name: string) => records.flatMap((r) => (sameName(r.name, name) ? [strip(r)] : []));
+
   return {
     capturedAt,
     mx: at(domain).filter((r) => r.type === "MX"),
@@ -409,9 +441,11 @@ export const diagnoseMailDns = (
 ): ReadonlyArray<DomainDiagnostic> => {
   const at = (name: string) => answers.filter((r) => sameName(r.name, name));
   const out: Array<DomainDiagnostic> = [];
+
   const own = at(`_bye-verification.${domain}`).some(
     (r) => unquote(r.content) === `bye-verification=${verificationToken}`,
   );
+
   out.push({
     check: "ownership",
     status: own ? "pass" : "fail",
@@ -448,9 +482,11 @@ export const diagnoseMailDns = (
           ? "no SPF record"
           : "SPF include check",
   });
+
   const dkim = at(`${profile.dkimSelector}._domainkey.${domain}`).some((r) =>
     unquote(r.content).includes(`p=${profile.dkimPublicKey}`),
   );
+
   out.push({
     check: "dkim",
     status: dkim ? "pass" : "fail",
@@ -463,6 +499,7 @@ export const diagnoseMailDns = (
     status: !dmarc ? "fail" : policy === "none" ? "warn" : "pass",
     detail: dmarc ? `policy ${policy}` : "no DMARC record",
   });
+
   return out;
 };
 
@@ -495,15 +532,18 @@ export class ControlDomains {
         domainId,
       ).first<DomainRow>(),
     );
+
     return d ?? reject("not_found", "domain");
   }
 
   async request(orgId: string, actorId: string, name: string): Promise<DomainRow> {
     const normalized = name.trim().toLowerCase().replace(/\.$/, "");
+
     if (!DOMAIN_NAME.test(normalized)) reject("bad_request", "invalid domain name");
     const id = this.clock.id("dom");
     const token = randomToken(18);
     const now = this.clock.now();
+
     // An unproven claim is not exclusive forever: after the proof window, another organization may
     // claim the name, so a squatter cannot block the real owner (O01).
     const prior = await guardD1("domain", () =>
@@ -513,11 +553,14 @@ export class ControlDomains {
         normalized,
       ).first<{ id: string; org_id: string; state: string; created_at: number }>(),
     );
+
     if (prior?.org_id === orgId && prior.state === "requested") return this.get(prior.id);
+
     const expiredClaim =
       prior &&
       prior.state === "requested" &&
       now - Number(prior.created_at) > UNPROVEN_CLAIM_TTL_MS;
+
     try {
       // Releasing an expired claim, claiming the name and auditing commit together.
       await this.db.batch([
@@ -557,6 +600,7 @@ export class ControlDomains {
     } catch {
       reject("conflict", "domain already claimed");
     }
+
     return this.get(id);
   }
 
@@ -573,8 +617,11 @@ export class ControlDomains {
     link: { readonly name: string; readonly accountId: string; readonly zoneId: string },
   ): Promise<DomainRow> {
     const name = link.name.trim().toLowerCase().replace(/\.$/, "");
+
     if (!DOMAIN_NAME.test(name)) reject("bad_request", "invalid domain name");
+
     if (!link.accountId || !link.zoneId) reject("conflict", "installation zone is not recorded");
+
     const prior = await guardD1("domain", () =>
       q(
         primary(this.db),
@@ -588,7 +635,9 @@ export class ControlDomains {
         install_zone_id: string | null;
       }>(),
     );
+
     const mine = prior !== null && prior.org_id === orgId && prior.state !== "removed";
+
     if (
       mine &&
       ((prior.install_zone_id !== null && prior.install_zone_id !== link.zoneId) ||
@@ -613,6 +662,7 @@ export class ControlDomains {
         detail: { accountId: link.accountId, zoneId: link.zoneId },
       }),
     ]);
+
     return row.state === "requested"
       ? this.advance(row, "requested", actorId, {
           method: "installation-zone",
@@ -641,7 +691,9 @@ export class ControlDomains {
         inbound_probe_at: number | null;
       }>(),
     );
+
     if (!r) return reject("not_found", "domain");
+
     return {
       installAccountId: r.install_account_id,
       installZoneId: r.install_zone_id,
@@ -687,6 +739,7 @@ export class ControlDomains {
         detail: { method },
       }),
     ]);
+
     return this.mailLink(d.id);
   }
 
@@ -706,15 +759,20 @@ export class ControlDomains {
    */
   async recordInboundProbe(address: string): Promise<boolean> {
     const at = address.trim().toLowerCase().lastIndexOf("@");
+
     if (at <= 0) return false;
     const local = address.trim().toLowerCase().slice(0, at);
+
     const domain = address
       .trim()
       .toLowerCase()
       .slice(at + 1);
+
     if (!local.startsWith(INBOUND_PROBE_PREFIX)) return false;
     const token = local.slice(INBOUND_PROBE_PREFIX.length);
+
     if (!/^[a-f0-9]{24}$/.test(token)) return false;
+
     const r = await q(
       this.db,
       "UPDATE domains SET inbound_probe_at = COALESCE(inbound_probe_at, ?) WHERE name = ? AND inbound_probe_token = ? AND state != 'removed'",
@@ -722,6 +780,7 @@ export class ControlDomains {
       domain,
       token,
     ).run();
+
     return r.meta.changes > 0;
   }
 
@@ -742,6 +801,7 @@ export class ControlDomains {
         target: d.id,
       }),
     ]);
+
     return this.mailLink(d.id);
   }
 
@@ -774,6 +834,7 @@ export class ControlDomains {
         target: d.id,
       }),
     ]);
+
     return this.mailLink(d.id);
   }
 
@@ -785,18 +846,20 @@ export class ControlDomains {
    * `restore_pending` until the customer confirms they restored it. Fails when the state moved
    * since `expected` was read, so a restore is never reported against a state it did not see.
    */
-  async rewindAfterRollback(
+  async rewindAfterRollback<D extends object>(
     domainId: string,
     actorId: string,
-    detail: unknown,
+    detail: D,
     options: {
       readonly expected: DomainOnboardingState;
       readonly restorePending: MailSnapshot | null;
     },
   ): Promise<DomainRow> {
     const d = await this.get(domainId);
+
     if (!rollbackStates.includes(d.state))
       reject("conflict", `domain is ${d.state}; nothing to restore`);
+
     const r = await q(
       this.db,
       "UPDATE domains SET state = 'ownership-proven', cutover_confirmed_at = NULL, cutover_snapshot = NULL, restore_pending = ?, zone_auth_method = NULL, mail_write_mode = NULL, inbound_probe_token = NULL, inbound_probe_at = NULL, workflow_instance = NULL, updated_at = ? WHERE id = ? AND state = ?",
@@ -805,6 +868,7 @@ export class ControlDomains {
       d.id,
       options.expected,
     ).run();
+
     if (r.meta.changes !== 1)
       reject("conflict", "the domain changed while its mail setup was being restored; try again");
     await audit(this.db, this.clock, {
@@ -814,21 +878,24 @@ export class ControlDomains {
       target: d.id,
       detail,
     }).run();
+
     return this.get(d.id);
   }
 
-  private async advance(
+  private async advance<D extends object>(
     domain: DomainRow,
     from: DomainOnboardingState,
     actorId: string,
-    diagnostics?: unknown,
+    diagnostics?: D,
   ): Promise<DomainRow> {
     const to = nextDomainState(from)!;
+
     if (domain.state !== from) {
       // Re-entrant: a repeated step on an already-advanced domain is a no-op.
       if (DOMAIN_SEQUENCE.indexOf(domain.state) > DOMAIN_SEQUENCE.indexOf(from)) return domain;
       reject("conflict", `domain is ${domain.state}, expected ${from}`);
     }
+
     await this.db.batch([
       q(
         this.db,
@@ -846,6 +913,7 @@ export class ControlDomains {
         target: domain.id,
       }),
     ]);
+
     return this.get(domain.id);
   }
 
@@ -855,14 +923,18 @@ export class ControlDomains {
     txtAnswers: ReadonlyArray<DnsRecord>,
   ): Promise<DomainRow> {
     const d = await this.get(domainId);
+
     if (d.state !== "requested") return this.advance(d, "requested", actorId);
+
     const ok = txtAnswers.some(
       (r) =>
         r.type === "TXT" &&
         sameName(r.name, `_bye-verification.${d.name}`) &&
         unquote(r.content) === `bye-verification=${d.verification_token}`,
     );
+
     if (!ok) reject("conflict", "ownership TXT record not found");
+
     return this.advance(d, "requested", actorId);
   }
 
@@ -883,6 +955,7 @@ export class ControlDomains {
   ): Promise<{ domain: DomainRow; diagnostics: ReadonlyArray<DomainDiagnostic> }> {
     const d = await this.get(domainId);
     const diagnostics = diagnoseMailDns(d.name, answers, profile, d.verification_token);
+
     if (d.state === "zone-authorized" && diagnostics.some((x) => x.status === "fail")) {
       await q(
         this.db,
@@ -891,14 +964,18 @@ export class ControlDomains {
         this.clock.now(),
         d.id,
       ).run();
+
       return { domain: d, diagnostics };
     }
+
     return { domain: await this.advance(d, "zone-authorized", actorId, diagnostics), diagnostics };
   }
 
   async recordInboundTest(domainId: string, actorId: string, passed: boolean): Promise<DomainRow> {
     const d = await this.get(domainId);
+
     if (!passed) reject("conflict", "inbound test failed");
+
     return this.advance(d, "dns-configured", actorId);
   }
 
@@ -908,8 +985,10 @@ export class ControlDomains {
     result: { dkimAligned: boolean; spfPass: boolean; dmarcPass: boolean },
   ): Promise<DomainRow> {
     const d = await this.get(domainId);
+
     if (!result.dkimAligned || !result.dmarcPass)
       reject("conflict", "outbound authentication not aligned");
+
     return this.advance(d, "inbound-tested", actorId, result);
   }
 
@@ -923,15 +1002,18 @@ export class ControlDomains {
     settings: { plusAddressing?: boolean; catchAllMailboxId?: string | null },
   ): Promise<DomainRow> {
     const d = await this.get(domainId);
+
     if (settings.catchAllMailboxId) {
       const m = await q(
         primary(this.db),
         "SELECT org_id FROM mailboxes WHERE id = ?",
         settings.catchAllMailboxId,
       ).first<{ org_id: string }>();
+
       if (!m || m.org_id !== d.org_id)
         reject("forbidden", "catch-all mailbox must belong to the domain organization");
     }
+
     await this.db.batch([
       q(
         this.db,
@@ -950,6 +1032,7 @@ export class ControlDomains {
         detail: settings,
       }),
     ]);
+
     return this.get(d.id);
   }
 
@@ -965,11 +1048,13 @@ export class ControlDomains {
     }>
   > {
     const d = await this.get(domainId);
+
     const rows = await q(
       primary(this.db),
       "SELECT address, mailbox_id, kind, disabled_at FROM address_routes WHERE domain = ? ORDER BY address",
       d.name,
     ).all<{ address: string; mailbox_id: string; kind: string; disabled_at: number | null }>();
+
     return rows.results.map((r) => ({
       address: r.address,
       mailboxId: r.mailbox_id,
@@ -988,24 +1073,31 @@ export class ControlDomains {
     },
   ): Promise<{ readonly address: string }> {
     const d = await this.get(domainId);
+
     if (d.state !== "active") reject("conflict", "domain not active");
     const local = input.localPart.trim().toLowerCase();
+
     if (!validLocalPart(local)) reject("bad_request", "invalid local part");
+
     const m = await q(
       primary(this.db),
       "SELECT org_id, status FROM mailboxes WHERE id = ?",
       input.mailboxId,
     ).first<{ org_id: string; status: string | null }>();
+
     if (!m || m.org_id !== d.org_id)
       reject("forbidden", "mailbox must belong to the domain organization");
     const address = `${local}@${d.name}`;
+
     const reserved = await q(
       primary(this.db),
       "SELECT 1 AS r FROM address_reservations WHERE address = ?",
       address,
     ).first();
+
     if (reserved) reject("conflict", "address reserved");
     const now = this.clock.now();
+
     try {
       await this.db.batch([
         // A previously removed alias may be reassigned by the same organization.
@@ -1035,19 +1127,23 @@ export class ControlDomains {
     } catch {
       reject("conflict", "address unavailable");
     }
+
     return { address };
   }
 
   async removeAlias(domainId: string, actorId: string, address: string): Promise<boolean> {
     const d = await this.get(domainId);
     const a = address.trim().toLowerCase();
+
     const row = await q(
       primary(this.db),
       "SELECT kind FROM address_routes WHERE address = ? AND domain = ? AND disabled_at IS NULL",
       a,
       d.name,
     ).first<{ kind: string }>();
+
     if (!row) return false;
+
     if (row.kind === "primary")
       reject("conflict", "a member's primary address is removed with the member");
     await this.db.batch([
@@ -1064,6 +1160,7 @@ export class ControlDomains {
         target: a,
       }),
     ]);
+
     return true;
   }
 
@@ -1074,11 +1171,13 @@ export class ControlDomains {
   async remove(domainId: string, actorId: string): Promise<{ disabledRoutes: number }> {
     const d = await this.get(domainId);
     const now = this.clock.now();
+
     const count = await q(
       this.db,
       "SELECT COUNT(*) AS n FROM address_routes WHERE domain = ? AND disabled_at IS NULL",
       d.name,
     ).first<{ n: number }>();
+
     await this.db.batch([
       q(this.db, "UPDATE domains SET state = 'removing', updated_at = ? WHERE id = ?", now, d.id),
       q(
@@ -1101,6 +1200,7 @@ export class ControlDomains {
         detail: { routes: count?.n ?? 0 },
       }),
     ]);
+
     return { disabledRoutes: count?.n ?? 0 };
   }
 }

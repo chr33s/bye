@@ -5,7 +5,7 @@ import {
   DEFAULT_AGENT_SCOPES,
   Forbidden,
   Principal,
-  type PrincipalShape,
+  type PrincipalContext,
   type Scope,
   Unavailable,
 } from "../services.ts";
@@ -34,7 +34,7 @@ export type SensitiveAction =
 export const STEP_UP_WINDOW_MS = 10 * 60 * 1000;
 
 export interface AuthenticatedRequest {
-  readonly principal: PrincipalShape;
+  readonly principal: PrincipalContext;
   /** Session ID for cookie/session credentials; token ID for agent/CLI credentials. */
   readonly credentialId: string;
   readonly steppedUpAt: number | null;
@@ -154,7 +154,9 @@ export const checkCsrf = (
 ): boolean => {
   if (SAFE_METHODS.includes(method.toUpperCase())) return true;
   const origin = headers.get("origin");
+
   if (origin !== null && origin !== "null") return origin === appOrigin;
+
   return headers.get("sec-fetch-site") === "same-origin";
 };
 
@@ -165,14 +167,24 @@ export const checkCsrf = (
 export const authenticateRequest = (creds: RequestCredentials, appOrigin: string) =>
   Effect.gen(function* () {
     const credentials = yield* Credentials;
+
     if (creds.bearerToken) return yield* credentials.authenticate(creds.bearerToken);
+
     if (!creds.cookieToken) return yield* new Unauthenticated({ reason: "missing credential" });
+
     const headers = {
-      get: (name: string) =>
-        name === "origin" ? creds.origin : name === "sec-fetch-site" ? creds.secFetchSite : null,
+      get: (name: string) => {
+        if (name === "origin") return creds.origin;
+
+        if (name === "sec-fetch-site") return creds.secFetchSite;
+
+        return null;
+      },
     };
+
     if (!checkCsrf(creds.method, headers, appOrigin))
       return yield* new Forbidden({ reason: "cross-origin request rejected" });
+
     return yield* credentials.authenticate(creds.cookieToken);
   }).pipe(Effect.withSpan("control.authenticate"));
 
@@ -184,10 +196,13 @@ export const requireStepUp = (action: SensitiveAction) =>
   Effect.gen(function* () {
     const auth = yield* CurrentAuthentication;
     const now = yield* Clock.currentTimeMillis;
+
     if (auth.principal.kind !== "user")
       return yield* new Forbidden({ reason: `${action} requires an interactive session` });
+
     if (auth.steppedUpAt === null || now - auth.steppedUpAt > STEP_UP_WINDOW_MS)
       return yield* new StepUpRequired({ action });
+
     return auth;
   });
 
@@ -204,12 +219,16 @@ export const issueApiToken = (input: {
 }) =>
   Effect.gen(function* () {
     const auth = yield* CurrentAuthentication;
+
     if (auth.principal.kind !== "user" || auth.interactive !== true)
       return yield* new Forbidden({ reason: "only interactive sessions create credentials" });
+
     const scopes =
       input.scopes ??
       (input.kind === "agent" ? DEFAULT_AGENT_SCOPES : (["read", "draft"] as const));
+
     if (scopes.some((s) => s !== "read" && s !== "draft")) yield* requireStepUp("credentials");
+
     return yield* (yield* Credentials).createApiToken(auth.principal.userId, { ...input, scopes });
   }).pipe(Effect.withSpan("control.issueApiToken"));
 
@@ -221,6 +240,7 @@ const administer = <A, E, R>(orgId: string, apply: (actor: OrgActor) => Effect.E
   Effect.gen(function* () {
     const access = yield* requireOrgAdminAccess(orgId);
     yield* requireStepUp("admin");
+
     return yield* apply({ userId: access.userId, role: access.orgRole });
   });
 
@@ -253,8 +273,10 @@ export const closeOwnAccount = (input: {
     const auth = yield* requireStepUp("closure");
     const accounts = yield* Accounts;
     const address = yield* accounts.primaryAddress(auth.principal.userId);
+
     if (address !== input.confirmAddress.trim().toLowerCase())
       return yield* new Conflict({ reason: "confirmation address does not match" });
+
     return yield* accounts.close(auth.principal.userId, {
       reserveAddressDays: input.reserveAddressDays,
       forwardingDays: input.forwardingDays,

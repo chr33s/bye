@@ -5,7 +5,7 @@ import {
   TransportFailure,
 } from "@bye/application";
 import { checkSubmission, type TransportCapabilities, type TrafficClass } from "@bye/domain";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Predicate } from "effect";
 
 /** An adapter with declared capabilities (§5.3). */
 export interface TransportAdapter {
@@ -34,13 +34,15 @@ export const guardedSubmit = (
     submission.bytes,
     submission.envelopeRecipients.length,
   );
-  if (check._tag !== "Ok")
+
+  if (!Predicate.isTagged(check, "Ok"))
     return Effect.fail(
       new TransportFailure({
         kind: "Rejected",
         detail: `${adapter.capabilities.name}: ${check._tag}`,
       }),
     );
+
   return adapter.submit(submission);
 };
 
@@ -52,10 +54,12 @@ export const parseTrafficClasses = (raw: string | undefined): ReadonlySet<Traffi
     "external-identity",
     "forwarding",
   ];
+
   const listed = (raw ?? "")
     .split(",")
     .map((c) => c.trim())
     .filter((c): c is TrafficClass => (known as ReadonlyArray<string>).includes(c));
+
   return new Set(listed.length ? listed : ["transactional"]);
 };
 
@@ -78,6 +82,7 @@ export const makeTransportRouter = (
             detail: "newsletter traffic must use NewsletterProvider",
           }),
         );
+
       if (enabled && !enabled.has(submission.trafficClass))
         return Effect.fail(
           new TransportFailure({
@@ -85,9 +90,11 @@ export const makeTransportRouter = (
             detail: `${submission.trafficClass} is not enabled in this stage`,
           }),
         );
+
       const adapter = adapters.find((a) =>
         a.capabilities.trafficClasses.includes(submission.trafficClass),
       );
+
       return adapter
         ? guardedSubmit(adapter, submission)
         : Effect.fail(

@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
+import { Predicate } from "effect";
 import { describe, expect, it } from "vitest";
 import { parseAddressList, parseMessage, summarizeMessage } from "@bye/mail-codec";
 
 const enc = (s: string) => new TextEncoder().encode(s.replace(/\r?\n/g, "\r\n"));
+
 const fixture = (name: string) =>
   new Uint8Array(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+
 const bin = (b: Uint8Array) => Array.from(b, (x) => String.fromCharCode(x)).join("");
 
 describe("parseMessage", () => {
@@ -64,6 +67,7 @@ Content-Type: application/octet-stream
 --e--
 `),
     );
+
     expect(parsed.parts).toHaveLength(2);
     expect(parsed.parts.every((p) => p.opaque)).toBe(true);
     expect(parsed.attachments).toHaveLength(2);
@@ -80,6 +84,7 @@ Content-Type: text/plain
 still readable
 `),
     );
+
     expect(parsed.text?.trim()).toBe("still readable");
     expect(parsed.warnings).toContainEqual({ _tag: "MalformedBoundary", partId: "" });
   });
@@ -87,7 +92,7 @@ still readable
   it("falls back to text when the boundary never appears", () => {
     const parsed = parseMessage(enc(`Content-Type: multipart/mixed; boundary=zzz\n\nplain body`));
     expect(parsed.text).toBe("plain body");
-    expect(parsed.warnings.some((w) => w._tag === "MalformedBoundary")).toBe(true);
+    expect(parsed.warnings.some((w) => Predicate.isTagged(w, "MalformedBoundary"))).toBe(true);
   });
 
   it("does not confuse a boundary that is a prefix of a longer delimiter", () => {
@@ -105,15 +110,18 @@ inner text
 --b--
 `),
     );
+
     expect(parsed.text?.trim()).toBe("inner text");
     expect(parsed.warnings).toEqual([]);
   });
 
   it("keeps long References chains and strips brackets", () => {
     const refs = Array.from({ length: 400 }, (_, i) => `<r${i}@x.example>`).join("\r\n ");
+
     const parsed = parseMessage(
       enc(`Message-ID: <m@x.example>\nIn-Reply-To: <r399@x.example>\nReferences: ${refs}\n\nbody`),
     );
+
     expect(parsed.references).toHaveLength(400);
     expect(parsed.references[399]).toBe("r399@x.example");
     expect(parsed.inReplyTo).toEqual(["r399@x.example"]);
@@ -124,9 +132,10 @@ inner text
     const parsed = parseMessage(
       enc(`Subject: =?x-unknown-9?Q?hi?=\nContent-Type: text/plain; charset=x-bogus\n\nhello`),
     );
+
     expect(parsed.subject).toBe("hi");
     expect(parsed.text).toBe("hello");
-    expect(parsed.warnings.filter((w) => w._tag === "UnknownCharset")).toHaveLength(2);
+    expect(parsed.warnings.filter((w) => Predicate.isTagged(w, "UnknownCharset"))).toHaveLength(2);
   });
 
   it("extracts calendar parts with METHOD", () => {
@@ -146,6 +155,7 @@ END:VCALENDAR
 --c--
 `),
     );
+
     expect(parsed.calendar?.method).toBe("REQUEST");
     expect(parsed.calendar?.ics).toContain("BEGIN:VCALENDAR");
     expect(summarizeMessage(parsed, 1).hasCalendar).toBe(true);
@@ -153,10 +163,12 @@ END:VCALENDAR
 
   it("never throws on random bytes", () => {
     let seed = 7;
+
     for (let round = 0; round < 50; round++) {
       const bytes = new Uint8Array(2000).map(
         () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) >> 16) & 0xff,
       );
+
       expect(() => parseMessage(bytes)).not.toThrow();
     }
   });
@@ -165,15 +177,17 @@ END:VCALENDAR
     const parsed = parseMessage(
       enc(`Subject: Grüße\nnot a header\nFrom: Zoë <zoe@example.com>\n\nx`),
     );
+
     expect(parsed.subject).toBe("Grüße");
     expect(parsed.from[0]?.name).toBe("Zoë");
-    expect(parsed.warnings.some((w) => w._tag === "MalformedHeader")).toBe(true);
+    expect(parsed.warnings.some((w) => Predicate.isTagged(w, "MalformedHeader"))).toBe(true);
   });
 
   it("summarizes snippets and detects automated mail", () => {
     const parsed = parseMessage(
       enc(`From: noreply@shop.example\nSubject: Your receipt\n\n${"word ".repeat(100)}`),
     );
+
     const summary = summarizeMessage(parsed, 42);
     expect(summary.automated).toBe(true);
     expect(Array.from(summary.snippet).length).toBeLessThanOrEqual(200);
@@ -186,6 +200,7 @@ END:VCALENDAR
         `From: alice@example.com\nSubject: Undeliverable\nContent-Type: multipart/report; report-type=delivery-status; boundary=b\n\n--b\nContent-Type: text/plain\n\nfailed\n--b--\n`,
       ),
     );
+
     expect(summarizeMessage(report, 1).automated).toBe(true);
     const plain = parseMessage(enc(`From: alice@example.com\nSubject: Re: Hi\n\nthanks`));
     expect(summarizeMessage(plain, 1).automated).toBe(false);

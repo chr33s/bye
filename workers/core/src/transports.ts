@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import {
   DEFAULT_MAIL_DNS,
   type DkimKey,
@@ -35,16 +36,21 @@ import type { CoreEnv } from "./env.ts";
  * (retryable) rather than silently sending unsigned mail.
  */
 const dkimKeys = new Map<string, Promise<DkimKey>>();
+
 export const dkimKeyFor = (env: Pick<CoreEnv, "MAIL_DKIM_PRIVATE_KEY">) => {
   const pem = env.MAIL_DKIM_PRIVATE_KEY ?? "";
+
   if (pem.trim() === "") return null;
+
   return async (): Promise<DkimKey> => {
     let key = dkimKeys.get(pem);
+
     if (!key) {
       key = importDkimKey(pem, DEFAULT_MAIL_DNS.dkimSelector);
       key.catch(() => dkimKeys.delete(pem));
       dkimKeys.set(pem, key);
     }
+
     return key;
   };
 };
@@ -52,12 +58,15 @@ export const dkimKeyFor = (env: Pick<CoreEnv, "MAIL_DKIM_PRIVATE_KEY">) => {
 /** Workers `send_email` accepts one envelope recipient per raw message. */
 export const sendEmailBinding = (binding: SendEmail): SendEmailBindingLike => ({
   send: async ({ from, to, raw }) => {
-    const recipients = typeof to === "string" ? [to] : to;
+    const recipients = Predicate.isString(to) ? [to] : to;
+
     if (recipients.length !== 1)
       throw new Error("multiple recipients not allowed on the transactional binding");
+
     const result = await binding.send(
       new EmailMessage(from, recipients[0]!, raw as ReadableStream | string),
     );
+
     return { messageId: result.messageId };
   },
 });
@@ -68,10 +77,12 @@ export const contentSource = (env: CoreEnv): RawContentSource => ({
 
 const sealKeys = (env: CoreEnv): VersionedKeys | null => {
   if (!env.EXTERNAL_IDENTITY_SEAL_KEY) return null;
+
   const raw = Uint8Array.from(
     atob(env.EXTERNAL_IDENTITY_SEAL_KEY.replace(/-/g, "+").replace(/_/g, "/")),
     (c) => c.charCodeAt(0),
   );
+
   return raw.byteLength === 32 ? { current: 1, keys: { 1: raw } } : null;
 };
 
@@ -82,7 +93,9 @@ export const externalCredentialStore = (
 ): ExternalCredentialStore => ({
   resolve: async (from) => {
     const keys = sealKeys(env);
+
     if (!keys) return null;
+
     const row = await env.DIRECTORY.prepare(
       "SELECT provider, endpoint, key_version, iv, ciphertext FROM external_identity_credentials WHERE mailbox_id = ? AND address = ? AND revoked_at IS NULL",
     )
@@ -94,7 +107,9 @@ export const externalCredentialStore = (
         iv: string;
         ciphertext: string;
       }>();
+
     if (!row) return null;
+
     const secret = JSON.parse(
       new TextDecoder().decode(
         await openWithKey(keys, {
@@ -104,11 +119,10 @@ export const externalCredentialStore = (
         }),
       ),
     ) as Omit<ExternalCredential, "provider">;
-    return {
-      ...secret,
-      provider: row.provider,
-      ...(row.endpoint ? { endpoint: row.endpoint } : {}),
-    };
+
+    return row.endpoint
+      ? { ...secret, provider: row.provider, endpoint: row.endpoint }
+      : { ...secret, provider: row.provider };
   },
   persist: (from, credential) => storeExternalCredential(env, mailboxId, from, credential),
 });
@@ -120,12 +134,15 @@ export const storeExternalCredential = async (
   credential: ExternalCredential,
 ): Promise<void> => {
   const keys = sealKeys(env);
+
   if (!keys) throw new Error("external identity sealing key not configured");
   const { provider, endpoint, ...secret } = credential;
+
   const sealed = await sealWithKey(
     keys,
     new TextEncoder().encode(JSON.stringify(secret)) as Uint8Array<ArrayBuffer>,
   );
+
   const now = Date.now();
   await env.DIRECTORY.prepare(
     `INSERT INTO external_identity_credentials (mailbox_id, address, provider, endpoint, key_version, iv, ciphertext, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -153,9 +170,11 @@ export const buildTransportAdapters = async (
 ): Promise<ReadonlyArray<TransportAdapter>> => {
   const content = contentSource(env);
   const f = fetchFn as never;
+
   const adapters: Array<TransportAdapter> = [
     makeCloudflareTransactionalTransport(sendEmailBinding(env.TRANSACTIONAL_EMAIL), content),
   ];
+
   // Personal correspondence goes through the same Cloudflare Email Sending binding, only where
   // the stage enables the class (the router rejects it everywhere else).
   if (parseTrafficClasses(env.MAIL_TRAFFIC_CLASSES).has("personal"))
@@ -166,6 +185,7 @@ export const buildTransportAdapters = async (
         dkimKeyFor(env),
       ),
     );
+
   if (
     env.FORWARDING_API_KEY &&
     env.FORWARDING_ENDPOINT &&
@@ -175,6 +195,7 @@ export const buildTransportAdapters = async (
     const signer = env.ARC_SIGNING_KEY
       ? await importArcSigner(env.ARC_SIGNING_KEY, env.FORWARDING_DOMAIN, env.ARC_SELECTOR || "arc")
       : null;
+
     adapters.push(
       makeSealedForwardingTransport(
         {
@@ -189,6 +210,7 @@ export const buildTransportAdapters = async (
       ),
     );
   }
+
   // External identities POST to user-chosen relay/token endpoints: resolve-then-check every
   // request and never follow redirects (registration only checks the URL string).
   if (sealKeys(env))
@@ -201,6 +223,7 @@ export const buildTransportAdapters = async (
     );
   // Preview mail sandbox (§15.8): every adapter may only mail the stage's disposable domains.
   const sandbox = parseSandboxDomains(env.MAIL_SANDBOX_DOMAINS);
+
   return env.MAIL_SANDBOX_DOMAINS?.trim()
     ? adapters.map((a) => sandboxTransport(a, sandbox))
     : adapters;

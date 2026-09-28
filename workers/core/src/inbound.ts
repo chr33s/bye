@@ -1,6 +1,6 @@
 import { blobKey } from "@bye/application";
 import { encodeId, INBOUND_MAX_BYTES } from "@bye/domain";
-import { Effect } from "effect";
+import { Effect, Match, Predicate } from "effect";
 import { Directory } from "@bye/application";
 import { ControlDomains, INBOUND_PROBE_PREFIX } from "@bye/platform-cloudflare";
 import { kernelClock } from "./durable-host.ts";
@@ -19,10 +19,11 @@ export interface InboundMessage {
   /** Message headers (Email Workers expose them on ForwardableEmailMessage). */
   readonly headers?: Headers;
   setReject(reason: string): void;
-  forward(rcptTo: string, headers?: Headers): Promise<unknown>;
+  forward(rcptTo: string, headers?: Headers): Promise<EmailSendResult>;
 }
 
 export const FORWARD_HOP_HEADER = "X-Bye-Loop";
+
 export const FORWARD_MAX_HOPS = 5;
 
 /**
@@ -39,6 +40,7 @@ export const forwardHops = (headers: Headers | undefined): number =>
     .reduce((max, v) => Math.max(max, Number(v)), 0);
 
 export type IngressFault = "throw" | "r2" | "timeout";
+
 export const FAULT_TIMEOUT_MS = 60_000;
 
 /** Fault mode for this recipient, if fault injection is configured and the address opts in. */
@@ -47,7 +49,9 @@ export const ingressFault = (
   recipient: string,
 ): IngressFault | null => {
   const mode = (env.BYE_FAULT_INGRESS ?? "").trim();
+
   if (mode !== "throw" && mode !== "r2" && mode !== "timeout") return null;
+
   return /\+fault@/i.test(recipient) ? mode : null;
 };
 
@@ -64,6 +68,7 @@ export const handleInbound = async (
 ): Promise<InboundOutcome> => {
   if (message.rawSize > INBOUND_MAX_BYTES) {
     message.setReject("552 message exceeds maximum size");
+
     return { _tag: "Rejected", reason: "too-large" };
   }
 
@@ -82,32 +87,45 @@ export const handleInbound = async (
       return yield* (yield* Directory).resolveRecipient(message.to);
     }).pipe(Effect.provide(await policyLayers(env))),
   );
-  switch (route._tag) {
-    case "Rejected":
-      message.setReject("550 5.1.1 recipient rejected");
-      return { _tag: "Rejected", reason: route.reason };
-    case "TransientFailure":
-      // Throwing makes the SMTP session temp-fail so the sender retries.
-      throw new Error("directory unavailable");
-    case "Forward": {
-      // Post-closure forwarding entitlement (A04) to a verified destination. A hop counter stops
-      // loops between forwarding services (e.g. the destination forwarding back to us).
-      const hops = forwardHops(message.headers);
-      if (hops >= FORWARD_MAX_HOPS) {
-        message.setReject("554 5.4.6 forwarding loop detected");
-        return { _tag: "Rejected", reason: "forward-loop" };
-      }
-      await message.forward(route.to, new Headers({ [FORWARD_HOP_HEADER]: String(hops + 1) }));
-      return { _tag: "Forwarded" };
-    }
-    case "Deliver":
-      break;
-  }
+
+  if (!Predicate.isTagged(route, "Deliver"))
+    return await Match.value(route).pipe(
+      Match.tagsExhaustive({
+        Rejected: async (rejected): Promise<InboundOutcome> => {
+          message.setReject("550 5.1.1 recipient rejected");
+
+          return { _tag: "Rejected", reason: rejected.reason };
+        },
+        // Throwing makes the SMTP session temp-fail so the sender retries.
+        TransientFailure: async (): Promise<InboundOutcome> => {
+          throw new Error("directory unavailable");
+        },
+        Forward: async (forward): Promise<InboundOutcome> => {
+          // Post-closure forwarding entitlement (A04) to a verified destination. A hop counter stops
+          // loops between forwarding services (e.g. the destination forwarding back to us).
+          const hops = forwardHops(message.headers);
+
+          if (hops >= FORWARD_MAX_HOPS) {
+            message.setReject("554 5.4.6 forwarding loop detected");
+
+            return { _tag: "Rejected", reason: "forward-loop" };
+          }
+
+          await message.forward(
+            forward.to,
+            new Headers({ [FORWARD_HOP_HEADER]: String(hops + 1) }),
+          );
+
+          return { _tag: "Forwarded" };
+        },
+      }),
+    );
 
   // §14.2 evidence: observe the provider's SMTP retry behaviour under handler, storage and timeout
   // failures. Only for recipients tagged `+fault` and only when explicitly configured (never on
   // prod/staging — enforced by infra/policies/check-config.ts).
   const fault = ingressFault(env, message.to);
+
   if (fault === "throw") throw new Error("fault injection: handler error");
 
   // 2. Register receipt intent before expensive work; identifiers only, no subjects/bodies.
@@ -124,14 +142,17 @@ export const handleInbound = async (
   });
 
   if (fault === "r2") throw new Error("fault injection: original storage unavailable");
+
   if (fault === "timeout") await new Promise((resolve) => setTimeout(resolve, FAULT_TIMEOUT_MS));
 
   // 3. Stream the original to R2 without buffering copies in the isolate.
   const { readable, writable } = new FixedLengthStream(message.rawSize);
+
   const [put] = await Promise.all([
     env.ORIGINALS.put(objectKey, readable, { httpMetadata: { contentType: "message/rfc822" } }),
     message.raw.pipeTo(writable),
   ]);
+
   if (!put) throw new Error("original not stored");
   await journal.markBlobReady(ingestionId);
 
@@ -154,9 +175,11 @@ export const handleInbound = async (
       { contentType: "json" },
     );
     await journal.markEnqueued(ingestionId);
+
     return { _tag: "Accepted", ingestionId, enqueued: true };
   } catch {
     console.warn(JSON.stringify({ level: "warn", op: "ingest.enqueue", ingestionId }));
+
     return { _tag: "Accepted", ingestionId, enqueued: false };
   }
 };

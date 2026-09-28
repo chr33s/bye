@@ -42,6 +42,7 @@ export interface LocalDraft {
 }
 
 const DB_NAME = "bye-drafts";
+
 const STORE = "drafts";
 
 const open = (): Promise<IDBDatabase> =>
@@ -57,6 +58,7 @@ const tx = async <T>(
   fn: (store: IDBObjectStore) => IDBRequest<T>,
 ): Promise<T> => {
   const db = await open();
+
   return new Promise((resolve, reject) => {
     const request = fn(db.transaction(STORE, mode).objectStore(STORE));
     request.onsuccess = () => resolve(request.result);
@@ -69,6 +71,7 @@ export const saveLocalDraft = (draft: LocalDraft): Promise<IDBValidKey> =>
   draft.ownerId && draft.mailboxId
     ? tx("readwrite", (s) => s.put(draft))
     : Promise.resolve(draft.localId);
+
 export interface DraftOwner {
   readonly userId: string;
   readonly mailboxId: string;
@@ -87,6 +90,7 @@ export const loadLocalDrafts = async (owner: DraftOwner): Promise<Array<LocalDra
 /** Remove records written before drafts carried an owner: they can't be attributed to anyone. */
 export const pruneUnownedDrafts = async (): Promise<void> => {
   const all = await tx("readonly", (s) => s.getAll() as IDBRequest<Array<LocalDraft>>);
+
   for (const d of all) if (!d.ownerId) await tx("readwrite", (s) => s.delete(d.localId));
 };
 
@@ -101,6 +105,7 @@ export const localOwnerAction = (
   stored: string | null,
   userId: string,
 ): "keep" | "claim" | "wipe" => (stored === null ? "claim" : stored === userId ? "keep" : "wipe");
+
 export const deleteLocalDraft = (localId: string): Promise<undefined> =>
   tx("readwrite", (s) => s.delete(localId));
 

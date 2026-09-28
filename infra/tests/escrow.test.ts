@@ -16,6 +16,7 @@ describe("§15.6 foundation state escrow", () => {
   it("packs, encrypts, uploads under a fresh key, and restores byte-identically", async () => {
     const src = mkdtempSync(join(tmpdir(), "esc-src-"));
     const out = mkdtempSync(join(tmpdir(), "esc-out-"));
+
     try {
       mkdirSync(join(src, "ByeFoundation", "foundation"), { recursive: true });
       writeFileSync(
@@ -26,6 +27,7 @@ describe("§15.6 foundation state escrow", () => {
       const sealed = seal(packDirectory(src), KEY);
       expect(new TextDecoder().decode(sealed)).not.toContain("StateBackups");
       const calls: Array<{ url: string; method: string }> = [];
+
       const key1 = await uploadEscrow(
         sealed,
         { accountId: "acct", token: "t", bucket: "StateBackups" },
@@ -34,6 +36,7 @@ describe("§15.6 foundation state escrow", () => {
           { status: 200, text: async () => "" }
         ),
       );
+
       expect(key1).toMatch(/^foundation-state\/.+\.bin$/);
       expect(calls[0]).toMatchObject({ method: "PUT" });
       expect(calls[0]!.url).toContain(
@@ -55,11 +58,13 @@ describe("§15.6 foundation state escrow", () => {
     const tampered = Buffer.from(sealed);
     tampered[tampered.length - 1]! ^= 1;
     expect(() => open(tampered, KEY)).toThrow();
+
     const evil = Buffer.from(
       require("node:zlib").gzipSync(
         JSON.stringify({ version: 1, files: [{ path: "../etc/passwd", data: "" }] }),
       ),
     );
+
     expect(() => unpackTo(evil, mkdtempSync(join(tmpdir(), "esc-evil-")))).toThrow(/unsafe path/);
   });
 });

@@ -1,4 +1,4 @@
-import { Config, ConfigProvider, Effect } from "effect";
+import { Config, ConfigProvider, Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import { missingConfig } from "../policies/check-config.ts";
 import { childEnv } from "../onboarding/executor.ts";
@@ -11,9 +11,11 @@ import {
 } from "../resources/domain.ts";
 
 const FAILED = Symbol("config error");
+
 const parse = <A>(config: Config.Config<A>, env: Record<string, string>) => {
   const exit = Effect.runSyncExit(config.parse(ConfigProvider.fromUnknown(env)));
-  return exit._tag === "Success" ? exit.value : FAILED;
+
+  return Exit.isSuccess(exit) ? exit.value : FAILED;
 };
 
 const DOMAIN = "bye.software";
@@ -61,6 +63,7 @@ describe("DOMAIN defaults", () => {
 
   it("refuses anything but a bare hostname", () => {
     expect(parseDomain("Bye.Software")).toBe("bye.software");
+
     for (const bad of ["https://bye.software", "bye.software/x", "bye.software:443", "localhost"])
       expect(() => parseDomain(bad), bad).toThrow(/bare hostname/);
   });
@@ -90,8 +93,10 @@ describe("DOMAIN defaults", () => {
   it("the stack refuses DOMAIN defaults computed for another stage", () => {
     const check = (env: Record<string, string>, stage: string) => {
       const exit = Effect.runSyncExit(domainStageMismatch.parse(ConfigProvider.fromUnknown(env)));
-      return exit._tag === "Success" ? exit.value(stage) : "config error";
+
+      return Exit.isSuccess(exit) ? exit.value(stage) : "config error";
     };
+
     expect(check({ DOMAIN, STAGE: "prod" }, "prod")).toBeUndefined();
     expect(check({ DOMAIN, STAGE: "prod" }, "staging")).toMatch(/set STAGE=staging/);
     expect(check({ STAGE: "prod" }, "staging")).toBeUndefined();
@@ -102,6 +107,7 @@ describe("DOMAIN defaults", () => {
       { name: "APP_ORIGIN", secret: false, optional: false },
       { name: "MAIL_RENDER_ORIGIN", secret: false, optional: false },
     ];
+
     expect(missingConfig({}, names)).toEqual(["APP_ORIGIN", "MAIL_RENDER_ORIGIN"]);
     expect(missingConfig({ DOMAIN, STAGE: "prod" }, names)).toEqual([]);
     expect(missingConfig({ DOMAIN, STAGE: "dev-abc123def456" }, names)).toEqual([
@@ -118,9 +124,10 @@ describe("DOMAIN defaults", () => {
         accountId: "a",
         apiToken: "t",
         config: { DOMAIN },
-      } as unknown as Parameters<typeof childEnv>[0],
+      } as never,
       { DOMAIN },
     );
+
     expect(env.DOMAIN).toBe("");
     expect(env.PUBLIC_DOMAIN).toBe("");
   });

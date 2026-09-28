@@ -31,6 +31,7 @@ export const mint = async (
 ): Promise<string> => {
   const payload = [purpose, ...fields.map(textToBase64Url), String(now + ttlMs)].join(".");
   const ring = parseSecretRing(key);
+
   return `${payload}.${await hmacBase64Url(ring.secrets[ring.current]!, `cap:${payload}`)}`;
 };
 
@@ -43,19 +44,25 @@ export const verify = async (
   now: number,
 ): Promise<ReadonlyArray<string> | null> => {
   const parts = token.split(".");
+
   if (parts.length !== arity + 3 || parts[0] !== purpose) return null;
+
   if (!(Number(parts[parts.length - 2]) > now)) return null;
   const payload = parts.slice(0, -1).join(".");
   const ring = parseSecretRing(key);
   let valid = false;
+
   for (const version of ringVersions(ring)) {
     const mac = await hmacBase64Url(ring.secrets[version]!, `cap:${payload}`);
+
     if (timingSafeEqual(parts[parts.length - 1]!, mac)) {
       valid = true;
       break;
     }
   }
+
   if (!valid) return null;
+
   try {
     return parts.slice(1, -2).map(textFromBase64Url);
   } catch {

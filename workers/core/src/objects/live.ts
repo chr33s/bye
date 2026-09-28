@@ -16,6 +16,7 @@ export const acceptLiveSocket = (ctx: SocketState, request: Request, seq: number
   const tag = request.headers.get("x-bye-credential");
   ctx.acceptWebSocket(pair[1], tag ? [`cred:${tag.slice(0, 128)}`] : []);
   pair[1].send(JSON.stringify({ seq }));
+
   return new Response(null, { status: 101, webSocket: pair[0] });
 };
 
@@ -33,6 +34,7 @@ export const broadcastSeq = (ctx: SocketState, seq: number): void => {
 /** Close sockets for a revoked credential (or all, when none is given). */
 export const closeLiveSockets = (ctx: SocketState, credentialId?: string): number => {
   const sockets = credentialId ? ctx.getWebSockets(`cred:${credentialId}`) : ctx.getWebSockets();
+
   for (const ws of sockets) {
     try {
       ws.close(4401, "session revoked");
@@ -40,5 +42,6 @@ export const closeLiveSockets = (ctx: SocketState, credentialId?: string): numbe
       // already closed
     }
   }
+
   return sockets.length;
 };

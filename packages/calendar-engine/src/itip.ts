@@ -90,10 +90,14 @@ export const calInterpretItip = (input: CalItipInput): CalItipDecision => {
     ) {
       return { _tag: "IgnoreStale", recurrenceKey };
     }
+
     if (!current) return undefined;
     const cmp = calCompareRevision(incoming, current);
+
     if (cmp < 0) return { _tag: "IgnoreStale", recurrenceKey };
+
     if (cmp === 0) return { _tag: "Duplicate", recurrenceKey };
+
     return undefined;
   };
 
@@ -102,42 +106,58 @@ export const calInterpretItip = (input: CalItipInput): CalItipDecision => {
     case "ADD":
     case "CANCEL": {
       if (!organizer) return { _tag: "Unauthorized", reason: "missing organizer" };
+
       if (sender !== organizer)
         return { _tag: "Unauthorized", reason: "sender is not the organizer" };
+
       if (self.includes(organizer))
         return { _tag: "Unauthorized", reason: "message claims our own organizer identity" };
+
       if (known?.weAreOrganizer)
         return { _tag: "Unauthorized", reason: "event is organized by this account" };
+
       if (known?.localEvent)
         return { _tag: "Unauthorized", reason: "event was not received as an invitation" };
+
       if (known?.organizer && calNormAddress(known.organizer) !== organizer)
         return { _tag: "Unauthorized", reason: "organizer change rejected" };
       const stale = ordering(known?.revision);
+
       if (stale) return stale;
+
       if (method === "CANCEL") return { _tag: "Apply", action: "cancel", recurrenceKey };
+
       return {
         _tag: "Apply",
         action: known?.revision || known?.seriesRevision ? "update" : "create",
         recurrenceKey,
       };
     }
+
     case "REPLY": {
       if (!known?.weAreOrganizer)
         return { _tag: "Unauthorized", reason: "reply for an event we do not organize" };
       const attendee = e.attendees[0];
+
       if (!attendee || e.attendees.length !== 1)
         return { _tag: "Unauthorized", reason: "reply must carry exactly one attendee" };
       const attendeeAddress = calNormAddress(attendee.address);
+
       if (attendeeAddress !== sender)
         return { _tag: "Unauthorized", reason: "reply sender is not the attendee" };
       const prior = known.attendeeRevisions[attendeeAddress];
+
       if (prior) {
         const cmp = calCompareRevision(incoming, prior);
+
         if (cmp < 0) return { _tag: "IgnoreStale", recurrenceKey };
+
         if (cmp === 0) return { _tag: "Duplicate", recurrenceKey };
       }
+
       return { _tag: "Apply", action: "reply", recurrenceKey };
     }
+
     default:
       return { _tag: "Unsupported", method: method || "(none)" };
   }
@@ -167,6 +187,7 @@ export const calBuildCancel = (event: CalIcsEvent, now: number): CalItipMessage 
     ...event,
     series: { ...event.series, data: { ...event.series.data, status: "cancelled" } },
   };
+
   return {
     method: "CANCEL",
     ics: calSerializeCalendar([cancelled], { method: "CANCEL", now }),
@@ -184,13 +205,16 @@ export const calBuildReply = (
   const me = event.attendees.find(
     (a) => calNormAddress(a.address) === calNormAddress(attendeeAddress),
   );
+
   const attendee: CalAttendee = {
     address: calNormAddress(attendeeAddress),
     name: me?.name,
     partstat,
     role: me?.role,
   };
+
   const reply: CalIcsEvent = { ...event, dtstamp: now, attendees: [attendee], alarms: [] };
+
   return {
     method: "REPLY",
     ics: calSerializeCalendar([reply], { method: "REPLY", now, includeDescription: false }),

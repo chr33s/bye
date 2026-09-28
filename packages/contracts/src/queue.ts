@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Predicate, Schema } from "effect";
 
 // Queue payloads carry references only, never MIME or attachments (§5.1 step 4, §6: ≤128 KB).
 // Every message has an event ID for (eventId, targetId) deduplication and a schema version.
@@ -15,6 +15,7 @@ export const IngestMessage = Schema.Struct({
   rawSize: Schema.Number,
   receivedAt: Schema.Number,
 });
+
 export type IngestMessage = typeof IngestMessage.Type;
 
 export const DispatchMessage = Schema.Struct({
@@ -24,6 +25,7 @@ export const DispatchMessage = Schema.Struct({
   mailboxId: Schema.String,
   sendJobId: Schema.String,
 });
+
 export type DispatchMessage = typeof DispatchMessage.Type;
 
 export const IndexMessage = Schema.Struct({
@@ -36,6 +38,7 @@ export const IndexMessage = Schema.Struct({
   /** Reference to authoritative content; the indexer hydrates and never receives bodies here. */
   source: Schema.Struct({ mailboxId: Schema.String, kind: Schema.String, id: Schema.String }),
 });
+
 export type IndexMessage = typeof IndexMessage.Type;
 
 export const NotifyMessage = Schema.Struct({
@@ -46,6 +49,7 @@ export const NotifyMessage = Schema.Struct({
   kind: Schema.String,
   resource: Schema.String,
 });
+
 export type NotifyMessage = typeof NotifyMessage.Type;
 
 /** Cross-authority propagation: source outbox → queue → idempotent target transaction (§3.2). */
@@ -58,6 +62,7 @@ export const PropagateMessage = Schema.Struct({
   target: Schema.String,
   payload: Schema.Unknown,
 });
+
 export type PropagateMessage = typeof PropagateMessage.Type;
 
 // ---- propagate payloads (one tagged union; `topic` is the tag) ----
@@ -68,11 +73,14 @@ export type PropagateMessage = typeof PropagateMessage.Type;
 // handlers' defaults through optional fields. Excess fields are ignored.
 
 const Str = Schema.String;
+
 const OptStr = Schema.optional(Schema.String);
+
 const topic = <const T extends string, F extends Schema.Struct.Fields>(name: T, fields: F) =>
   Schema.Struct({ topic: Schema.Literal(name), ...fields });
 
 export const GcBucketSchema = Schema.Literals(["ORIGINALS", "PARTS", "EXPORTS"]);
+
 export const WorldPublishMedia = Schema.Struct({ contentKey: Str, name: Str, contentType: Str });
 
 export const PropagatePayload = Schema.Union([
@@ -144,7 +152,9 @@ export const PropagatePayload = Schema.Union([
   }),
   topic("probe.echo", { probeId: Str }),
 ]);
+
 export type PropagatePayload = typeof PropagatePayload.Type;
+
 export type PropagateTopic = PropagatePayload["topic"];
 
 const decodePayloadSync = Schema.decodeUnknownSync(PropagatePayload);
@@ -158,11 +168,10 @@ export const decodePropagatePayload = (
 ):
   | { readonly ok: true; readonly payload: PropagatePayload }
   | { readonly ok: false; readonly topic: string; readonly reason: string } => {
-  const raw =
-    message.payload !== null && typeof message.payload === "object"
-      ? (message.payload as Record<string, unknown>)
-      : {};
-  const topicName = typeof raw.topic === "string" ? raw.topic : message.topic;
+  const raw = Predicate.isObject(message.payload) ? message.payload : {};
+
+  const topicName = Predicate.isString(raw.topic) ? raw.topic : message.topic;
+
   try {
     return { ok: true, payload: decodePayloadSync({ ...raw, topic: topicName }) };
   } catch (error) {
@@ -181,6 +190,7 @@ export const QueueMessage = Schema.Union([
   NotifyMessage,
   PropagateMessage,
 ]);
+
 export type QueueMessage = typeof QueueMessage.Type;
 
 export const decodeQueueMessage = Schema.decodeUnknownEffect(QueueMessage);

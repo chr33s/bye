@@ -11,8 +11,10 @@ import { state } from "../core/state.ts";
  */
 export const continueAuthorization = (): boolean => {
   const next = new URLSearchParams(location.search).get("next");
+
   if (!next || !next.startsWith("/oauth/authorize?")) return false;
   location.assign(new URL(next, location.origin).toString());
+
   return true;
 };
 
@@ -32,54 +34,70 @@ export const parseBootstrapFragment = (hash: string): BootstrapLink | null => {
   if (!hash.startsWith("#bootstrap=")) return null;
   const params = new URLSearchParams(hash.slice(1));
   const token = params.get("bootstrap") ?? "";
+
   if (!/^[A-Za-z0-9_-]{32,128}$/.test(token)) return null;
   const domain = (params.get("domain") ?? "").toLowerCase();
+
   return { token, domain: DOMAIN.test(domain) ? domain : null };
 };
 
 let bootstrapLink: BootstrapLink | null = null;
+
 const takeBootstrapLink = (): BootstrapLink | null => {
   const parsed = parseBootstrapFragment(location.hash);
+
   if (parsed) {
     bootstrapLink = parsed;
     history.replaceState(null, "", `${location.pathname}${location.search}`);
   }
+
   return bootstrapLink;
 };
 
 export const signInScreen = (onSignedIn: () => void): HTMLElement => {
   const status = h("p", { role: "status", "aria-live": "polite" });
-  const attempt = (label: string, fn: () => Promise<unknown>) => async (event?: Event) => {
-    event?.preventDefault();
-    status.textContent = `${label}…`;
-    try {
-      await fn();
-      if (continueAuthorization()) return;
-      state.me = null;
-      location.hash = "#/mail/imbox";
-      onSignedIn();
-    } catch (error) {
-      status.textContent = errorMessage(error);
-    }
-  };
+
+  const attempt =
+    <R>(label: string, fn: () => Promise<R>) =>
+    async (event?: Event) => {
+      event?.preventDefault();
+      status.textContent = `${label}…`;
+
+      try {
+        await fn();
+
+        if (continueAuthorization()) return;
+        state.me = null;
+        location.hash = "#/mail/imbox";
+        onSignedIn();
+      } catch (error) {
+        status.textContent = errorMessage(error);
+      }
+    };
+
   const address = h("input", {
     type: "email",
     name: "address",
     autocomplete: "username webauthn",
     required: true,
   });
+
   const name = h("input", { name: "displayName", autocomplete: "name" });
+
   const turnstile = h("div", {
     class: "cf-turnstile",
     "data-sitekey":
       document.querySelector<HTMLMetaElement>('meta[name="turnstile-sitekey"]')?.content ?? "",
   });
+
   const link = takeBootstrapLink();
   const bootstrap = link?.token ?? null;
   const domain = link?.domain ?? location.hostname.replace(/^app\./, "");
+
   if (bootstrap) address.placeholder = `you@${domain}`;
   const recoveryAddress = h("input", { type: "email", name: "recoveryAddress", required: true });
   const recoveryCode = h("input", { name: "code", autocomplete: "one-time-code", required: true });
+
   return h(
     "section",
     { class: "auth", "aria-labelledby": "auth-title" },

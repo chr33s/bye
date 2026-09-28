@@ -51,10 +51,12 @@ export const propagateDelivery = async (
   deliveryId: string,
 ): Promise<void> => {
   const registry = new ControlSharedRegistry(env.DIRECTORY, kernelClock);
+
   const [extension, links] = await Promise.all([
     registry.extensionFor(mailboxId),
     registry.sharedThreadsFor(mailboxId, threadId),
   ]);
+
   const targets: Array<PropagationTarget> = [
     ...(extension
       ? [
@@ -75,6 +77,7 @@ export const propagateDelivery = async (
         sharedThreadId: l.sharedThreadId,
       })),
   ];
+
   // Pending rows for this delivery whose target no longer applies (extension moved to another
   // space, share no longer includes future mail) can never be applied: drop them, so they neither
   // show "syncing" forever nor crowd the replay window.
@@ -86,6 +89,7 @@ export const propagateDelivery = async (
   )
     .bind(Date.now(), mailboxId, deliveryId, JSON.stringify(current))
     .run();
+
   if (targets.length === 0) return;
   const now = Date.now();
   await env.DIRECTORY.batch(
@@ -97,19 +101,25 @@ export const propagateDelivery = async (
     ),
   );
   const selected = await sharedMessageOf(env, mailboxId, threadId, [deliveryId]);
+
   const d = selected?.messages[0]
     ? { subject: selected.subject, message: selected.messages[0] }
     : null;
+
   if (!d) {
     // The source is gone (deleted or erased): nothing will ever be applied.
     for (const t of targets) await setPropagation(env, t.key, "dropped");
+
     return;
   }
-  let failure: unknown = null;
+
+  let failure: unknown;
+
   for (const t of targets) {
     try {
       const stub = space(env, t.spaceId);
       let enroll: { readonly board: string } | undefined;
+
       if (t.kind === "extension") {
         ({ enroll } = await settle(
           stub.receiveExtensionMail(`ext:${deliveryId}`, {
@@ -123,6 +133,7 @@ export const propagateDelivery = async (
       } else {
         await settle(stub.appendReply(`reply:${deliveryId}`, mailboxId, threadId, d.message));
       }
+
       if (enroll) {
         // Workflow enrollment in the extension mailbox; the command ID makes replays no-ops.
         await mailbox(env, mailboxId).execute({
@@ -132,6 +143,7 @@ export const propagateDelivery = async (
           threadId,
         });
       }
+
       await setPropagation(env, t.key, "applied");
     } catch (error) {
       // Business refusals (revoked share, removed extension) are final; anything else retries.
@@ -139,6 +151,7 @@ export const propagateDelivery = async (
         await setPropagation(env, t.key, "dropped");
         continue;
       }
+
       failure ??= error;
       await env.DIRECTORY.prepare(
         "UPDATE shared_propagation SET attempts = attempts + 1, updated_at = ? WHERE event_key = ? AND state = 'pending'",
@@ -148,6 +161,7 @@ export const propagateDelivery = async (
         .catch(() => undefined);
     }
   }
+
   if (failure) throw failure;
 };
 
@@ -163,8 +177,10 @@ export const replayPendingPropagation = async (
   )
     .bind(now - olderThanMs, limit)
     .all<{ mailbox_id: string; thread_id: string; delivery_id: string }>();
+
   let replayed = 0;
   let failed = 0;
+
   for (const r of rows.results) {
     try {
       await propagateDelivery(env, r.mailbox_id, r.thread_id, r.delivery_id);
@@ -173,6 +189,7 @@ export const replayPendingPropagation = async (
       failed++;
     }
   }
+
   return { replayed, failed };
 };
 
@@ -191,22 +208,27 @@ export const pendingPropagation = async (
           "SELECT COUNT(*) AS n FROM shared_propagation WHERE space_id = ? AND state = 'pending'",
         ).bind(spaceId)
   ).first<{ n: number }>();
+
   return Number(row?.n ?? 0);
 };
 
 export const sharedTopics: TopicHandlers<"shared.delivery" | "world.publish"> = {
   "shared.delivery": async ({ env, payload, mailboxId }) => {
     const { deliveryId, threadId } = payload;
+
     if (!deliveryId || !threadId) return;
     await propagateDelivery(env, mailboxId, threadId, deliveryId);
   },
   "world.publish": async ({ env, message, payload, mailboxId }) => {
     const owner = await ownerOfMailbox(env, mailboxId);
+
     if (!owner) return;
+
     // Malformed or non-image media entries are skipped, not fatal (lenient v1).
     const media = (payload.media ?? [])
       .filter(isWorldMedia)
       .filter((m) => m.contentType.startsWith("image/"));
+
     try {
       await publishForAuthor(
         env,

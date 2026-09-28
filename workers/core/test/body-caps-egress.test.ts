@@ -5,7 +5,7 @@ import { kernelClock } from "../src/durable-host.ts";
 import { guardedFetch } from "../src/dns.ts";
 import { WEBHOOK_MAX_BYTES } from "../src/routes/webhooks.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, makeHarness } from "./harness.ts";
+import { type Harness, makeHarness, executionContext } from "./harness.ts";
 
 // Streaming body caps on the unauthenticated webhooks and the vCard import, and the guarded fetch
 // used for user-chosen external-identity endpoints.
@@ -16,15 +16,13 @@ import { type Harness, makeHarness } from "./harness.ts";
   }
 };
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 /** A chunked body with no Content-Length that records how much of it was pulled. */
 const chunked = (chunks: number, size = 64 * 1024) => {
   const state = { pulled: 0, cancelled: false };
   const chunk = new Uint8Array(size).fill(0x61);
+
   const body = new ReadableStream<Uint8Array>({
     pull(c) {
       if (state.pulled >= chunks) return c.close();
@@ -35,6 +33,7 @@ const chunked = (chunks: number, size = 64 * 1024) => {
       state.cancelled = true;
     },
   });
+
   return { body, state };
 };
 
@@ -87,10 +86,12 @@ describe("vCard import body cap", () => {
     vi.setSystemTime(Date.UTC(2026, 8, 25, 12));
     h = makeHarness();
     const directory = new ControlDirectory(h.env.DIRECTORY, kernelClock);
+
     const account = await directory.provisionPersonalAccount({
       address: "ana@bye.test",
       displayName: "ana",
     });
+
     const auth = new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env));
     const session = await auth.issueSession(account.userId, "test", true);
     cookie = `__Host-session=${session.token}`;
@@ -100,12 +101,14 @@ describe("vCard import body cap", () => {
 
   it("an oversized chunked upload is cancelled, not buffered, and refused with 413", async () => {
     const { body, state } = chunked(64); // 4 MiB > 1 MiB cap
+
     const r = await post(h, `/v1/mailboxes/${mailboxId}/contacts/import`, body, {
       cookie,
       origin: h.env.APP_ORIGIN,
       "content-type": "text/vcard",
       "idempotency-key": "import-1",
     });
+
     expect(r.status).toBe(413);
     expect(state.cancelled).toBe(true);
     expect(state.pulled).toBeLessThan(64);
@@ -119,9 +122,11 @@ describe("guardedFetch (external-identity endpoints)", () => {
       const u = new URL(url);
       const name = u.searchParams.get("name")!;
       const type = u.searchParams.get("type") === "A" ? 1 : 28;
+
       const answers = (records[name] ?? [])
         .filter((ip) => (type === 1 ? !ip.includes(":") : ip.includes(":")))
         .map((data) => ({ type, data }));
+
       return Response.json({ Status: 0, Answer: answers });
     };
 
@@ -149,14 +154,16 @@ describe("guardedFetch (external-identity endpoints)", () => {
 
   it("public destinations go through with redirect: manual and a deadline", async () => {
     const inner = vi.fn(
-      async (_u: unknown, _i?: RequestInit) =>
+      async (_u: string | URL | Request, _i?: RequestInit) =>
         new Response(null, { status: 302, headers: { location: "http://127.0.0.1/" } }),
     );
+
     const f = guardedFetch(
       inner as never,
       1000,
       dohFor({ "relay.example.com": ["93.184.216.34"] }),
     );
+
     const r = await f("https://relay.example.com/send", { method: "POST" });
     // The redirect is surfaced to the transport (a non-2xx failure), never followed.
     expect(r.status).toBe(302);

@@ -147,16 +147,21 @@ export const coverageGaps = (
   matrix: ReadonlyArray<ScopeGrant> = ONBOARDING_SCOPES,
 ): ReadonlyArray<string> => {
   const gaps: Array<string> = [];
+
   for (const type of new Set(types)) {
     const uncovered = UNCOVERED_TYPES.find((u) => u.type === type);
+
     if (uncovered) {
       gaps.push(`${type}: ${uncovered.note}`);
       continue;
     }
+
     const grant = matrix.find((g) => g.resourceTypes.includes(type));
+
     if (!grant) gaps.push(`${type}: not in the scope matrix`);
     else if (!granted.includes(grant.scope)) gaps.push(`${type}: scope ${grant.scope} not granted`);
     else if (!grant.verified) gaps.push(`${type}: scope ${grant.scope} is unverified`);
   }
+
   return gaps.sort();
 };

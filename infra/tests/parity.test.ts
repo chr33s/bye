@@ -9,6 +9,7 @@ import { LEDGER_PATH, renderLedger, tagsIn } from "../policies/parity-ledger.ts"
 
 describe("§2 product parity ledger", () => {
   const covered = new Set<string>();
+
   for (const file of sourceFiles(["packages", "workers", "apps", "infra"], { ext: /\.test\.ts$/ }))
     for (const tag of tagsIn(readFileSync(file, "utf8"))) covered.add(tag);
 
@@ -17,11 +18,13 @@ describe("§2 product parity ledger", () => {
     expect(ids.length).toBeGreaterThan(0);
     expect(new Set(ids).size).toBe(ids.length);
     const byArea = new Map<string, Array<number>>();
+
     for (const id of ids) {
       // The same shape tagsIn() recognizes, so every row is taggable.
       expect(id).toMatch(/^[ECOPAX]\d\d$/);
       byArea.set(id[0]!, [...(byArea.get(id[0]!) ?? []), Number(id.slice(1))]);
     }
+
     for (const [area, numbers] of byArea)
       expect(numbers, area).toEqual(numbers.map((_, i) => i + 1));
   });
@@ -30,6 +33,7 @@ describe("§2 product parity ledger", () => {
     const missing = PARITY_LEDGER.filter((r) => !covered.has(r.id)).map(
       (r) => `${r.id} ${r.capability}`,
     );
+
     expect(missing).toEqual([]);
   });
 
@@ -54,6 +58,7 @@ describe("§2 product parity ledger", () => {
         )
         .filter(Boolean)
         .join("\n");
+
     expect(normalize(readFileSync(LEDGER_PATH, "utf8"))).toBe(normalize(renderLedger()));
   });
 
@@ -61,6 +66,7 @@ describe("§2 product parity ledger", () => {
     const accepted = renderLedger()
       .split("\n")
       .filter((l) => /\| production-accepted \|/.test(l) && !l.includes("evidence/"));
+
     expect(accepted).toEqual([]);
   });
 });

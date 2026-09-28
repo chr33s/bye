@@ -16,6 +16,7 @@ describe("stage classes", () => {
       persistent: false,
     });
     expect(requireStage("dev-a1b2c3").class).toBe("dev");
+
     for (const bad of [
       "production",
       "preview-0",
@@ -71,14 +72,17 @@ describe("stage classes", () => {
 
   it("every STAGE the CI workflow deploys is a valid stage (incl. the steady two-deploy job)", () => {
     const ci = readFileSync(join(import.meta.dirname, "../../.github/workflows/ci.yml"), "utf8");
+
     // Substitute GitHub expressions with representative values, then validate every STAGE line.
     const sample = (expr: string) =>
       expr
         .replace(/\$\{\{\s*github\.run_id\s*\}\}/g, "18094567123")
         .replace(/\$\{\{\s*github\.event\.pull_request\.number\s*\}\}/g, "42")
         .replace(/\$\{\{\s*inputs\.stage\s*\}\}/g, "staging");
+
     const stages = [...ci.matchAll(/^\s+STAGE:\s*(.+)$/gm)].map((m) => sample(m[1]!.trim()));
     expect(stages.length).toBeGreaterThanOrEqual(3);
+
     for (const stage of stages) expect(classifyStage(stage)._tag, stage).toBe("Valid");
     const steady = /\n  steady:[\s\S]*?\n  [a-z-]+:\n/.exec(ci)?.[0] ?? "";
     const steadyStage = sample(/STAGE:\s*(.+)/.exec(steady)?.[1]?.trim() ?? "");
@@ -93,10 +97,12 @@ describe("stage classes", () => {
 
   it("[§15.6] the steady teardown: a rejected destroy plan blocks the destroy; an unavailable one falls back to the guarded destroy", () => {
     const ci = readFileSync(join(import.meta.dirname, "../../.github/workflows/ci.yml"), "utf8");
+
     const gate = ci.slice(
       ci.indexOf("id: destroy-gate"),
       ci.indexOf("- name: Tear down ephemeral stage"),
     );
+
     expect(gate).toContain("if: always()");
     // Only a failed check writes `rejected`; a failed export writes `unavailable` and exits 0.
     expect(gate.indexOf("gate=unavailable")).toBeLessThan(gate.indexOf("exit 0"));

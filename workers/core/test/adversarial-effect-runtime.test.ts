@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect";
 import { describe, expect, it, vi } from "vitest";
+import { type StepResult } from "./harness.ts";
 import { readJson, runHttp } from "../src/http.ts";
 import { decodeParams, effectStep, WorkflowParamsError } from "../src/workflows/common.ts";
 
@@ -11,15 +12,18 @@ describe("[A03] request cancellation and finalizers (§7.4)", () => {
   it("aborting the request interrupts the fiber and runs scope finalizers", async () => {
     const released: Array<string> = [];
     const controller = new AbortController();
+
     const program = Effect.scoped(
       Effect.gen(function* () {
         yield* Effect.acquireRelease(Effect.succeed("stream"), () =>
           Effect.sync(() => void released.push("closed")),
         );
         yield* Effect.never;
+
         return new Response("unreachable");
       }),
     );
+
     const pending = runHttp(program, "req-1", controller.signal);
     await new Promise((r) => setTimeout(r, 10));
     controller.abort();
@@ -39,15 +43,19 @@ describe("[A03] request cancellation and finalizers (§7.4)", () => {
 
   it("production defect logs carry a redacted tag, message and top stack frames", async () => {
     const lines: Array<string> = [];
+
     const spy = vi
       .spyOn(console, "error")
       .mockImplementation((...a) => void lines.push(a.join(" ")));
+
     const debug = (globalThis as { __BYE_DEBUG__?: boolean }).__BYE_DEBUG__;
     (globalThis as { __BYE_DEBUG__?: boolean }).__BYE_DEBUG__ = false;
+
     try {
       class StoreDefect extends Error {
         override name = "StoreDefect";
       }
+
       await runHttp(
         Effect.die(
           new StoreDefect(
@@ -56,15 +64,18 @@ describe("[A03] request cancellation and finalizers (§7.4)", () => {
         ),
         "req-9",
       );
+
       const entry = JSON.parse(lines[0]!) as {
         requestId: string;
         error: { tag: string; message: string; stack: Array<string> };
       };
+
       expect(entry.requestId).toBe("req-9");
       expect(entry.error.tag).toBe("StoreDefect");
       expect(entry.error.message).toContain("lookup failed");
       expect(entry.error.stack.length).toBeGreaterThan(0);
       expect(entry.error.stack.length).toBeLessThanOrEqual(5);
+
       for (const leaked of [
         "ana@example.net",
         "QSCANARY",
@@ -81,18 +92,22 @@ describe("[A03] request cancellation and finalizers (§7.4)", () => {
   it("readJson enforces its byte cap on the stream even without content-length", async () => {
     const chunk = new Uint8Array(64 * 1024).fill(0x20);
     let pulled = 0;
+
     const stream = new ReadableStream<Uint8Array>({
       pull(controller) {
         pulled++;
+
         if (pulled > 100) controller.close();
         else controller.enqueue(chunk);
       },
     });
+
     const request = new Request("https://x.test/", {
       method: "POST",
       body: stream,
       duplex: "half",
     } as RequestInit);
+
     expect(request.headers.get("content-length")).toBeNull();
     await expect(readJson(request, 256 * 1024)).rejects.toMatchObject({ _tag: "PayloadTooLarge" });
     expect(pulled).toBeLessThan(10);
@@ -104,11 +119,13 @@ describe("[A03] request cancellation and finalizers (§7.4)", () => {
 
 describe("[A04] versioned Workflow params and Schema-encoded steps (§15.9, §7.4)", () => {
   const ParamsV1 = Schema.Struct({ v: Schema.Literal(1), exportId: Schema.String });
+
   const ParamsV2 = Schema.Struct({
     v: Schema.Literal(2),
     exportId: Schema.String,
     format: Schema.Literals(["mbox", "eml"]),
   });
+
   const Params = Schema.Union([ParamsV1, ParamsV2]);
 
   it("decodes current and previous versions and rejects unknown ones as non-retryable", () => {
@@ -125,26 +142,33 @@ describe("[A04] versioned Workflow params and Schema-encoded steps (§15.9, §7.
     // The checkpoint store only accepts JSON; a Date and a bigint survive only if effectStep
     // encodes before persisting and decodes after reading back.
     const checkpoints = new Map<string, string>();
+
     const step = {
       do: async (name: string, ...args: ReadonlyArray<unknown>) => {
         if (!checkpoints.has(name)) {
-          const fn = args.at(-1) as () => Promise<unknown>;
+          const fn = args.at(-1) as () => Promise<StepResult>;
           checkpoints.set(name, JSON.stringify(await fn()));
         }
+
         return JSON.parse(checkpoints.get(name)!);
       },
     };
+
     const Result = Schema.Struct({
       files: Schema.Array(Schema.String),
       at: Schema.DateFromString,
       bytes: Schema.BigIntFromString,
     });
+
     let runs = 0;
     const at = new Date(Date.UTC(2026, 8, 25, 12));
+
     const program = Effect.sync(() => {
       runs++;
+
       return { files: ["a.mbox"], at, bytes: 2n ** 64n };
     });
+
     const first = await effectStep(step, "v1:files", program, { schema: Result });
     expect(JSON.parse(checkpoints.get("v1:files")!)).toEqual({
       files: ["a.mbox"],
@@ -161,14 +185,17 @@ describe("[A04] versioned Workflow params and Schema-encoded steps (§15.9, §7.
   it("a failing step surfaces the failure for the Workflow's retry policy (no silent success)", async () => {
     const attempted: Array<string> = [];
     const checkpoints = new Map<string, unknown>();
+
     const step = {
       do: async (name: string, ...args: ReadonlyArray<unknown>) => {
         attempted.push(name);
-        const value = await (args.at(-1) as () => Promise<unknown>)();
+        const value = await (args.at(-1) as () => Promise<StepResult>)();
         checkpoints.set(name, value);
+
         return value;
       },
     };
+
     await expect(
       effectStep(step, "v1:boom", Effect.fail(new Error("transient upstream")), {
         schema: Schema.String,

@@ -15,20 +15,24 @@ import { MemoryD1, TestClock } from "@bye/testing";
 // idle/absolute session expiry, and revocation (RFC 6749, 7636, 8252, 7009, 9700).
 
 const VERIFIER = "v".repeat(43) + "-._~0123456789";
+
 const OTHER_VERIFIER = "w".repeat(64);
 
 const setup = async () => {
   const d1 = MemoryD1.migrated();
   const clock = new TestClock();
   const directory = new ControlDirectory(d1, clock);
+
   const ana = await directory.provisionPersonalAccount({
     address: "ana@bye.test",
     displayName: "Ana",
   });
+
   const bob = await directory.provisionPersonalAccount({
     address: "bob@bye.test",
     displayName: "Bob",
   });
+
   const params: AuthorizeParams = {
     responseType: "code",
     clientId: "bye-desktop",
@@ -38,19 +42,32 @@ const setup = async () => {
     state: "s".repeat(32),
     deviceName: "Ana's laptop",
   };
+
   return { d1, clock, ana, bob, params, devices: new ControlDeviceAuth(d1, clock) };
 };
 
 const errorCode = async (p: Promise<unknown>) => {
   try {
     await p;
+
     return "ok";
   } catch (e) {
     return e instanceof DeviceAuthError ? e.code : String(e);
   }
 };
 
-const syncCode = (f: () => unknown) => errorCode(Promise.resolve().then(f));
+/** The oauth_codes columns this test reads back. */
+interface OauthCodeRow {
+  readonly code_hash: string;
+  readonly user_id: string;
+  readonly client_id: string;
+  readonly redirect_uri: string;
+  readonly code_challenge: string;
+  readonly device_name: string;
+  readonly expires_at: number;
+}
+
+const syncCode = (f: () => void) => errorCode(Promise.resolve().then(f));
 
 describe("device sign-in: authorization code + PKCE", () => {
   it("validateAuthorize rejects bad clients, redirects, response types, PKCE and state", async () => {
@@ -59,6 +76,7 @@ describe("device sign-in: authorization code + PKCE", () => {
     expect(
       devices.validateAuthorize({ ...params, redirectUri: "bye://oauth/callback" }).client.clientId,
     ).toBe("bye-desktop");
+
     const cases: ReadonlyArray<readonly [Partial<AuthorizeParams>, string]> = [
       [{ clientId: "evil" }, "invalid_client"],
       [{ redirectUri: "http://localhost:49152/oauth/callback" }, "invalid_request"],
@@ -72,6 +90,7 @@ describe("device sign-in: authorization code + PKCE", () => {
       [{ state: "tooshort" }, "invalid_request"],
       [{ state: "s".repeat(257) }, "invalid_request"],
     ];
+
     for (const [patch, code] of cases)
       expect(await syncCode(() => devices.validateAuthorize({ ...params, ...patch }))).toBe(code);
   });
@@ -84,11 +103,13 @@ describe("device sign-in: authorization code + PKCE", () => {
     expect(await d1.prepare("SELECT COUNT(*) AS n FROM oauth_codes").first()).toEqual({ n: 0 });
 
     const code = await devices.issueCode(ana.userId, { ...params, deviceName: "x".repeat(300) });
+
     const row = await d1
       .prepare(
         "SELECT code_hash, user_id, client_id, redirect_uri, code_challenge, device_name, expires_at FROM oauth_codes",
       )
-      .first<Record<string, unknown>>();
+      .first<OauthCodeRow>();
+
     expect(row).toMatchObject({
       user_id: ana.userId,
       client_id: "bye-desktop",
@@ -103,12 +124,14 @@ describe("device sign-in: authorization code + PKCE", () => {
   it("exchanges a code once for a working device session", async () => {
     const { devices, params, ana } = await setup();
     const code = await devices.issueCode(ana.userId, params);
+
     const exchange = {
       code,
       codeVerifier: VERIFIER,
       redirectUri: params.redirectUri,
       clientId: "bye-desktop",
     };
+
     const tokens = await devices.exchangeCode(exchange);
     expect(tokens).toMatchObject({ token_type: "Bearer", expires_in: 900, scope: "mail calendar" });
     const who = await devices.authenticateAccess(tokens.access_token);
@@ -146,6 +169,7 @@ describe("device sign-in: authorization code + PKCE", () => {
 
   it("binds the code to its client and redirect, and expires it", async () => {
     const { devices, params, ana, clock } = await setup();
+
     const exchange = async (patch: { redirectUri?: string; clientId?: string }) =>
       errorCode(
         devices.exchangeCode({
@@ -156,6 +180,7 @@ describe("device sign-in: authorization code + PKCE", () => {
           ...patch,
         }),
       );
+
     expect(await exchange({ redirectUri: "http://127.0.0.1:1/oauth/callback" })).toBe(
       "invalid_grant",
     );
@@ -192,22 +217,26 @@ describe("device sign-in: refresh, expiry and revocation", () => {
   const signIn = async () => {
     const env = await setup();
     const code = await env.devices.issueCode(env.ana.userId, env.params);
+
     const tokens = await env.devices.exchangeCode({
       code,
       codeVerifier: VERIFIER,
       redirectUri: env.params.redirectUri,
       clientId: "bye-desktop",
     });
+
     return { ...env, tokens };
   };
 
   it("rotates refresh credentials; replaying the old one revokes the session", async () => {
     const { devices, tokens, ana, clock } = await signIn();
     clock.advance(60_000);
+
     const next = await devices.refresh({
       refreshToken: tokens.refresh_token,
       clientId: "bye-desktop",
     });
+
     expect(next.refresh_token).not.toBe(tokens.refresh_token);
     expect(next.access_token).not.toBe(tokens.access_token);
     expect((await devices.authenticateAccess(next.access_token))?.userId).toBe(ana.userId);
@@ -251,12 +280,14 @@ describe("device sign-in: refresh, expiry and revocation", () => {
     let refreshToken = tokens.refresh_token;
     const step = DEVICE_IDLE_TTL_MS - 1;
     let elapsed = 0;
+
     while (elapsed + step <= DEVICE_ABSOLUTE_TTL_MS) {
       clock.advance(step);
       elapsed += step;
       refreshToken = (await devices.refresh({ refreshToken, clientId: "bye-desktop" }))
         .refresh_token;
     }
+
     clock.advance(DEVICE_ABSOLUTE_TTL_MS - elapsed + 1);
     expect(await errorCode(devices.refresh({ refreshToken, clientId: "bye-desktop" }))).toBe(
       "invalid_grant",
@@ -299,6 +330,7 @@ describe("device sign-in: refresh, expiry and revocation", () => {
       redirectUri: params.redirectUri,
       clientId: "bye-desktop",
     });
+
     await devices.revokeToken(second.access_token);
     expect(await devices.authenticateAccess(second.access_token)).toBeNull();
     expect(

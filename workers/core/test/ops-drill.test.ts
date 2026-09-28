@@ -13,6 +13,7 @@ describe("data restore drills", () => {
       "shared",
       "tombstones",
     ]);
+
     for (const c of checks) expect(c.ok, `${c.drill}: ${c.detail}`).toBe(true);
   }, 180_000);
 });

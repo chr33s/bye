@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ControlAuth,
@@ -22,6 +23,9 @@ import {
   makeHarness,
   rfc822,
   enablePersonalMail,
+  executionContext,
+  type StepResult,
+  mockAs,
 } from "./harness.ts";
 import { signProxyUrl } from "@bye/mail-codec";
 import { forbiddenResolution, readCapped } from "../src/dns.ts";
@@ -43,10 +47,8 @@ import {
 };
 
 (globalThis as { __BYE_DEBUG__?: boolean }).__BYE_DEBUG__ = true;
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+
+const ctx = executionContext;
 
 interface Account {
   readonly userId: string;
@@ -58,10 +60,12 @@ interface Account {
 
 const signup = async (h: Harness, address: string): Promise<Account> => {
   const directory = new ControlDirectory(h.env.DIRECTORY, kernelClock);
+
   const account = await directory.provisionPersonalAccount({
     address,
     displayName: address.split("@")[0]!,
   });
+
   await h.env.CALENDARS.getByName(account.calendarId).provision({
     ownerId: account.userId,
     selfAddresses: [account.address],
@@ -69,34 +73,42 @@ const signup = async (h: Harness, address: string): Promise<Account> => {
   });
   const auth = new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env));
   const session = await auth.issueSession(account.userId, "test", true);
+
   return { ...account, cookie: `__Host-session=${session.token}` };
 };
 
-const api = async (
+const api = async <BodyValue>(
   h: Harness,
   account: Account | null,
   method: string,
   path: string,
-  body?: unknown,
+  body?: BodyValue,
   headers: Record<string, string> = {},
 ) => {
+  const requestHeaders = new Headers();
+
+  if (account) requestHeaders.set("cookie", account.cookie);
+
+  if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+  if (method !== "GET") requestHeaders.set("content-type", "application/json");
+
+  for (const [k, v] of Object.entries(headers ?? {})) requestHeaders.set(k, v);
+
   const response = await handleFetch(
-    new Request(`${h.env.APP_ORIGIN}${path}`, {
-      method,
-      headers: {
-        ...(account ? { cookie: account.cookie } : {}),
-        ...(method === "GET"
-          ? {}
-          : { origin: h.env.APP_ORIGIN, "content-type": "application/json" }),
-        ...headers,
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }),
+    new Request(
+      `${h.env.APP_ORIGIN}${path}`,
+      body !== undefined
+        ? { method, headers: requestHeaders, body: JSON.stringify(body) }
+        : { method, headers: requestHeaders },
+    ),
     h.env,
     ctx,
   );
+
   const text = await response.text();
   const isJson = (response.headers.get("content-type") ?? "").includes("json");
+
   return {
     status: response.status,
     body: text ? (isJson ? JSON.parse(text) : text) : null,
@@ -105,6 +117,7 @@ const api = async (
 };
 
 let n = 0;
+
 const cmdId = () => `cmd_${(++n).toString(36).padStart(20, "0")}`;
 
 const deliver = async (
@@ -124,12 +137,14 @@ const deliver = async (
       subject,
       body,
       messageId: extra.messageId ?? `${subject.replace(/\W/g, "")}-${n++}@example.net`,
-      ...(extra.inReplyTo ? { inReplyTo: extra.inReplyTo } : {}),
-      ...(extra.headers ? { extraHeaders: extra.headers } : {}),
+      inReplyTo: extra.inReplyTo,
+      extraHeaders: extra.headers,
     }),
   );
+
   const outcome = await handleInbound(message, h.env);
   await h.drain();
+
   return { outcome, message };
 };
 
@@ -144,6 +159,7 @@ describe("MailCore wiring", () => {
 
   it("[E01] inbound mail from an unknown sender waits in the Screener; approval moves it to the Imbox", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const { outcome } = await deliver(
       h,
       "stranger@example.net",
@@ -151,6 +167,7 @@ describe("MailCore wiring", () => {
       "Hello there",
       "Can we talk?",
     );
+
     expect(outcome._tag).toBe("Accepted");
     expect(h.buckets.ORIGINALS.objects.size).toBe(1);
 
@@ -166,6 +183,7 @@ describe("MailCore wiring", () => {
       commandId: cmdId(),
       decisions: [{ sender: "stranger@example.net", decision: "allow", destination: "imbox" }],
     });
+
     expect(approve.status).toBe(200);
     const imbox = await api(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`);
     expect(imbox.body.items.map((t: { subject: string }) => t.subject)).toEqual(["Hello there"]);
@@ -173,6 +191,7 @@ describe("MailCore wiring", () => {
 
   it("[O01] unknown recipients are rejected permanently; directory outages temp-fail instead", async () => {
     await signup(h, "ana@bye.test");
+
     const unknown = inboundMessage(
       "x@example.net",
       "nobody@bye.test",
@@ -184,10 +203,12 @@ describe("MailCore wiring", () => {
         messageId: "u1@x",
       }),
     );
+
     expect((await handleInbound(unknown, h.env))._tag).toBe("Rejected");
     expect(unknown.rejected).toMatch(/^550/);
 
     h.d1.failing = true;
+
     const outage = inboundMessage(
       "x@example.net",
       "ana@bye.test",
@@ -199,6 +220,7 @@ describe("MailCore wiring", () => {
         messageId: "u2@x",
       }),
     );
+
     await expect(handleInbound(outage, h.env)).rejects.toThrow("directory unavailable");
     expect(outage.rejected).toBeNull();
   });
@@ -248,13 +270,16 @@ describe("MailCore wiring", () => {
 
   it("[E18] drafts send through the undo window, the transactional transport, and record acceptance", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const identity = await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "AddIdentity",
       commandId: cmdId(),
       address: "ana@bye.test",
       kind: "hosted",
     });
+
     expect(identity.status).toBe(200);
+
     const draft = await api(h, ana, "POST", "/v1/drafts", {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
@@ -267,12 +292,15 @@ describe("MailCore wiring", () => {
         attachments: [],
       },
     });
+
     expect(draft.status).toBe(201);
+
     const send = await api(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
       revision: draft.body.revision,
     });
+
     expect(send.status).toBe(202);
     expect(send.body._tag).toBe("Queued");
 
@@ -300,10 +328,12 @@ describe("MailCore wiring", () => {
       init: { body: string; headers: Record<string, string> },
     ) => {
       submitted.push({ url, body: init.body, headers: init.headers });
+
       return new Response(JSON.stringify({ id: "prov-1", messageId: "wire-1@provider" }), {
         status: 202,
       });
     }) as typeof fetch;
+
     try {
       const ana = await signup(h, "ana@bye.test");
       await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
@@ -312,6 +342,7 @@ describe("MailCore wiring", () => {
         address: "ana@bye.test",
         kind: "hosted",
       });
+
       const draft = await api(h, ana, "POST", "/v1/drafts", {
         mailboxId: ana.mailboxId,
         commandId: cmdId(),
@@ -324,17 +355,20 @@ describe("MailCore wiring", () => {
           attachments: [],
         },
       });
+
       const send = await api(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
         mailboxId: ana.mailboxId,
         commandId: cmdId(),
         revision: draft.body.revision,
       });
+
       // A second click with a different command key does not create a second intent.
       const again = await api(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
         mailboxId: ana.mailboxId,
         commandId: cmdId(),
         revision: draft.body.revision,
       });
+
       expect(again.body).toMatchObject({
         _tag: "Queued",
         deduplicated: true,
@@ -343,13 +377,16 @@ describe("MailCore wiring", () => {
       vi.setSystemTime(Date.now() + 60_000);
       await h.namespaces.MAILBOXES.instance(ana.mailboxId).alarm();
       await h.drain();
+
       const job = await h.namespaces.MAILBOXES.instance(ana.mailboxId).sendJob(
         send.body.sendJobIds[0],
       );
+
       expect(job?.state).toBe("accepted");
       // One Cloudflare send per envelope recipient; the Bcc address is envelope-only.
       const personal = h.sent.filter((m) => m.from === "ana@bye.test");
       expect(personal.map((m) => m.to).sort()).toEqual(["bob@example.net", "secret@example.net"]);
+
       for (const m of personal) expect(m.raw).not.toMatch(/secret@example.net/);
       expect(submitted).toEqual([]);
       const mime = h.buckets.ORIGINALS.objects.get(job!.contentKey)!;
@@ -369,9 +406,11 @@ describe("MailCore wiring", () => {
     (h.env as { TRANSACTIONAL_EMAIL: unknown }).TRANSACTIONAL_EMAIL = {
       send: async (m: never) => {
         if (status !== 202) throw new Error("rate limit exceeded");
+
         return binding.send(m);
       },
     };
+
     const counted = async () =>
       Number(
         (
@@ -380,6 +419,7 @@ describe("MailCore wiring", () => {
           ).first<{ n: number }>()
         )?.n ?? 0,
       );
+
     try {
       const ana = await signup(h, "ana@bye.test");
       await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
@@ -388,6 +428,7 @@ describe("MailCore wiring", () => {
         address: "ana@bye.test",
         kind: "hosted",
       });
+
       const draft = await api(h, ana, "POST", "/v1/drafts", {
         mailboxId: ana.mailboxId,
         commandId: cmdId(),
@@ -400,11 +441,13 @@ describe("MailCore wiring", () => {
           attachments: [],
         },
       });
+
       const send = await api(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
         mailboxId: ana.mailboxId,
         commandId: cmdId(),
         revision: draft.body.revision,
       });
+
       vi.setSystemTime(Date.now() + 60_000);
       const mailbox = h.namespaces.MAILBOXES.instance(ana.mailboxId);
       await mailbox.alarm();
@@ -426,6 +469,7 @@ describe("MailCore wiring", () => {
 
   it("[E18] a dispatch that loses the claim race hands its budget reservation back", async () => {
     enablePersonalMail(h);
+
     const counted = async () =>
       Number(
         (
@@ -434,6 +478,7 @@ describe("MailCore wiring", () => {
           ).first<{ n: number }>()
         )?.n ?? 0,
       );
+
     const ana = await signup(h, "ana@bye.test");
     await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "AddIdentity",
@@ -441,6 +486,7 @@ describe("MailCore wiring", () => {
       address: "ana@bye.test",
       kind: "hosted",
     });
+
     const draft = await api(h, ana, "POST", "/v1/drafts", {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
@@ -453,21 +499,26 @@ describe("MailCore wiring", () => {
         attachments: [],
       },
     });
+
     await api(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
       revision: draft.body.revision,
     });
-    const mailbox = h.namespaces.MAILBOXES.instance(ana.mailboxId) as unknown as {
-      claim: (id: string) => unknown;
+
+    const mailbox = mockAs<{
+      claim: (id: string) => Promise<null>;
       alarm: () => Promise<void>;
-    };
+    }>(h.namespaces.MAILBOXES.instance(ana.mailboxId));
+
     let reservedAtClaim = -1;
     mailbox.claim = async () => {
       // Policy already said Proceed and reserved; another consumer wins the claim.
       reservedAtClaim = await counted();
+
       return null;
     };
+
     vi.setSystemTime(Date.now() + 60_000);
     await mailbox.alarm();
     await h.drain();
@@ -479,12 +530,14 @@ describe("MailCore wiring", () => {
   it("[E19] hosted identities require directory send-as authority", async () => {
     const ana = await signup(h, "ana@bye.test");
     await signup(h, "bob@bye.test");
+
     const spoof = await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "AddIdentity",
       commandId: cmdId(),
       address: "bob@bye.test",
       kind: "hosted",
     });
+
     expect(spoof.status).toBe(403);
   });
 
@@ -496,6 +549,7 @@ describe("MailCore wiring", () => {
       address: "ana@bye.test",
       kind: "hosted",
     });
+
     const draft = await api(h, ana, "POST", "/v1/drafts", {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
@@ -508,15 +562,18 @@ describe("MailCore wiring", () => {
         attachments: [],
       },
     });
+
     const send = await api(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
       revision: draft.body.revision,
     });
+
     const cancel = await api(h, ana, "POST", `/v1/send-jobs/${send.body.sendJobIds[0]}/cancel`, {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
     });
+
     expect(cancel.body._tag).toBe("Cancelled");
     vi.setSystemTime(Date.now() + 60_000);
     await h.namespaces.MAILBOXES.instance(ana.mailboxId).alarm();
@@ -539,8 +596,10 @@ describe("MailCore wiring", () => {
         notify: false,
       },
     });
+
     const html =
       '<p>Hi <script>alert(1)</script><img src="https://tracker.example.net/p.gif" width=1 height=1></p>';
+
     const raw = rfc822({
       from: "news@example.net",
       to: "ana@bye.test",
@@ -548,15 +607,18 @@ describe("MailCore wiring", () => {
       body: html,
       messageId: "html1@example.net",
     }).replace("Content-Type: text/plain", "Content-Type: text/html");
+
     await handleInbound(inboundMessage("news@example.net", "ana@bye.test", raw), h.env);
     await h.drain();
     const imbox = await api(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`);
+
     const thread = await api(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${imbox.body.items[0].threadId}`,
     );
+
     const renderUrl: string = thread.body.deliveries[0].renderUrl;
     expect(renderUrl.startsWith(h.env.MAIL_ORIGIN)).toBe(true);
 
@@ -599,6 +661,7 @@ describe("MailCore wiring", () => {
 
   it("[X02] Worker-served JSON carries HSTS, nosniff, no-referrer and a no-content, unframeable CSP", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     for (const r of [
       await handleFetch(
         new Request(`${h.env.APP_ORIGIN}/v1/me`, { headers: { cookie: ana.cookie } }),
@@ -621,6 +684,7 @@ describe("MailCore wiring", () => {
 
   it("[E17] domain rejections map to stable public error codes, not internal errors", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const missing = await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "SaveDraft",
       commandId: cmdId(),
@@ -628,17 +692,22 @@ describe("MailCore wiring", () => {
       expectedRevision: 1,
       content: { to: [], cc: [], bcc: [], subject: "", text: "", attachments: [] },
     });
+
     expect(missing.status).toBe(404);
     expect(missing.body.error.code).toBe("not_found");
+
     const invalid = await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "NoSuchCommand",
       commandId: cmdId(),
     });
+
     expect(invalid.status).toBe(400);
+
     const badCalendar = await api(h, ana, "POST", `/v1/calendars/${ana.calendarId}/commands`, {
       schemaVersion: 1,
       command: { type: "Nope" },
     });
+
     expect(badCalendar.status).toBe(400);
   });
 
@@ -647,6 +716,7 @@ describe("MailCore wiring", () => {
     expect((await api(h, null, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`)).status).toBe(
       401,
     );
+
     const csrf = await api(
       h,
       ana,
@@ -655,6 +725,7 @@ describe("MailCore wiring", () => {
       { _tag: "RotateSpeakeasy", commandId: cmdId() },
       { origin: "https://evil.example" },
     );
+
     expect(csrf.status).toBe(403);
   });
 
@@ -674,6 +745,7 @@ describe("MailCore wiring", () => {
       (await api(h, agent, "GET", `/v1/mailboxes/${bob.mailboxId}/views/imbox`, undefined, bearer))
         .status,
     ).toBe(403);
+
     const send = await api(
       h,
       agent,
@@ -682,6 +754,7 @@ describe("MailCore wiring", () => {
       { mailboxId: ana.mailboxId, commandId: cmdId(), revision: 1 },
       bearer,
     );
+
     expect(send.status).toBe(403);
   });
 
@@ -700,6 +773,7 @@ describe("MailCore wiring", () => {
         notify: false,
       },
     });
+
     const ics = [
       "BEGIN:VCALENDAR",
       "VERSION:2.0",
@@ -717,6 +791,7 @@ describe("MailCore wiring", () => {
       "END:VEVENT",
       "END:VCALENDAR",
     ].join("\r\n");
+
     const raw = rfc822({
       from: "org@example.net",
       to: "ana@bye.test",
@@ -727,25 +802,30 @@ describe("MailCore wiring", () => {
       "Content-Type: text/plain; charset=utf-8",
       "Content-Type: text/calendar; charset=utf-8; method=REQUEST",
     );
+
     await handleInbound(inboundMessage("org@example.net", "ana@bye.test", raw), h.env);
     await h.drain();
+
     const events = await api(
       h,
       ana,
       "GET",
       `/v1/calendars/${ana.calendarId}/events?from=2026-09-28T00:00:00Z&to=2026-10-05T00:00:00Z`,
     );
+
     expect(events.status).toBe(200);
     expect(JSON.stringify(events.body)).toContain("Planning");
 
     // The thread can find the invitation its message carried, with the current answer.
     const imbox = await api(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`);
+
     const thread = await api(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${imbox.body.items[0].threadId}`,
     );
+
     const invitationsPath = `/v1/calendars/${ana.calendarId}/invitations?mailboxId=${ana.mailboxId}&deliveryId=${thread.body.deliveries[0].deliveryId}`;
     const found = await api(h, ana, "GET", invitationsPath);
     expect(found.status).toBe(200);
@@ -772,14 +852,18 @@ describe("MailCore wiring", () => {
     const realFetch = globalThis.fetch;
     globalThis.fetch = (async (_url: string, init: { body: string }) => {
       submitted.push(init.body);
+
       return new Response(JSON.stringify({ id: "prov-2" }), { status: 202 });
     }) as typeof fetch;
+
     try {
       const eventId = (events.body.occurrences as ReadonlyArray<{ eventId: string }>)[0]!.eventId;
+
       const reply = await api(h, ana, "POST", `/v1/calendars/${ana.calendarId}/commands`, {
         schemaVersion: 1,
         command: { type: "RespondInvitation", commandId: cmdId(), eventId, partstat: "ACCEPTED" },
       });
+
       expect(reply.status).toBe(200);
       await h.drain();
       expect((await api(h, ana, "GET", invitationsPath)).body.invitations[0].partstat).toBe(
@@ -808,6 +892,7 @@ describe("MailCore wiring", () => {
     (h.env.INGEST as { send: unknown }).send = async () => {
       throw new Error("queue down");
     };
+
     const { outcome } = await deliver(h, "late@example.net", "ana@bye.test", "Stranded", "body");
     expect(outcome).toMatchObject({ _tag: "Accepted", enqueued: false });
     (h.env.INGEST as { send: unknown }).send = failingSend;
@@ -824,10 +909,12 @@ describe("MailCore wiring", () => {
 
     // Every catalog shard is visited over a full rotation, including never-hinted mailboxes.
     const visited = new Set<number>();
+
     for (let run = 0; run < 16; run++)
       for (const s of shardsForRun(run * 5 * 60_000)) visited.add(s);
     expect(visited.size).toBe(64);
     let reconciled = 0;
+
     for (let run = 0; run < 16; run++)
       reconciled += (await reconcileCatalog(h.env, run * 5 * 60_000)).mailboxes;
     expect(reconciled).toBe(1);
@@ -846,17 +933,21 @@ describe("MailCore wiring", () => {
     });
     // Run the real workflow; each step's output round-trips through JSON like a checkpoint.
     const steps: Array<string> = [];
+
     const step = {
       do: async (name: string, ...args: ReadonlyArray<unknown>) => {
         steps.push(name);
-        const out = await (args.at(-1) as () => Promise<unknown>)();
+        const out = await (args.at(-1) as () => Promise<StepResult>)();
+
         return out === undefined ? undefined : JSON.parse(JSON.stringify(out));
       },
     };
+
     const result = (await new ExportWorkflow({} as never, h.env).run(
       { payload: instance!.params, instanceId: instance!.id, timestamp: new Date() } as never,
       step as never,
     )) as { files: Array<string> };
+
     const prefix = `t/${ana.userId}/export/${started.body.exportId}`;
     expect(result.files.sort()).toEqual(
       [
@@ -888,21 +979,26 @@ describe("MailCore wiring", () => {
     const started = await api(h, ana, "POST", "/v1/exports", {});
     expect(started.status).toBe(202);
     const instance = h.workflows.EXPORT_ACCOUNT![0]!;
+
     const step = {
       do: async (_name: string, ...args: ReadonlyArray<unknown>) => {
-        const out = await (args.at(-1) as () => Promise<unknown>)();
+        const out = await (args.at(-1) as () => Promise<StepResult>)();
+
         return out === undefined ? undefined : JSON.parse(JSON.stringify(out));
       },
     };
+
     // The grant is removed after the request but before the workflow reads the mailbox.
     await h.d1
       .prepare("DELETE FROM mailbox_access WHERE user_id = ? AND mailbox_id = ?")
       .bind(ana.userId, ana.mailboxId)
       .run();
+
     const result = (await new ExportWorkflow({} as never, h.env).run(
       { payload: instance.params, instanceId: instance.id, timestamp: new Date() } as never,
       step as never,
     )) as { files: Array<string> };
+
     const prefix = `t/${ana.userId}/export/${started.body.exportId}`;
     expect(result.files).toEqual([`${prefix}/${ana.calendarId}.ics`]);
     expect([...h.buckets.EXPORTS.objects.keys()].filter((k) => k.includes(ana.mailboxId))).toEqual(
@@ -920,19 +1016,24 @@ describe("MailCore wiring", () => {
     const ana = await signup(h, "ana@bye.test");
     const first = await api(h, ana, "POST", "/v1/exports", {});
     expect(first.status).toBe(202);
+
     const again = await Promise.all([
       api(h, ana, "POST", "/v1/exports", {}),
       api(h, ana, "POST", "/v1/exports", {}),
     ]);
+
     expect(again.map((r) => r.status)).toEqual([429, 429]);
     expect(h.workflows.EXPORT_ACCOUNT).toHaveLength(1);
+
     // Completion releases the in-flight claim, but the cooldown still applies.
     const step = {
       do: async (_name: string, ...args: ReadonlyArray<unknown>) => {
-        const out = await (args.at(-1) as () => Promise<unknown>)();
+        const out = await (args.at(-1) as () => Promise<StepResult>)();
+
         return out === undefined ? undefined : JSON.parse(JSON.stringify(out));
       },
     };
+
     const instance = h.workflows.EXPORT_ACCOUNT![0]!;
     await new ExportWorkflow({} as never, h.env).run(
       { payload: instance.params, instanceId: instance.id, timestamp: new Date() } as never,
@@ -975,14 +1076,17 @@ describe("MailCore sharing and publishing", () => {
     await deliver(h, "bob@example.net", "ana@bye.test", "Launch plan", "Public details only", {
       headers: "Bcc: hidden@example.net",
     });
+
     const thread = (await api(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`)).body
       .items[0];
+
     const detail = await api(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${thread.threadId}`,
     );
+
     await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "PutNote",
       commandId: cmdId(),
@@ -994,6 +1098,7 @@ describe("MailCore sharing and publishing", () => {
     const org = (await api(h, ana, "GET", "/v1/me")).body.organizationIds[0];
     const space = await api(h, ana, "POST", "/v1/spaces", { organizationId: org });
     expect(space.status).toBe(201);
+
     const shared = await api(h, ana, "POST", "/v1/shared-threads", {
       spaceId: space.body.spaceId,
       mailboxId: ana.mailboxId,
@@ -1002,12 +1107,15 @@ describe("MailCore sharing and publishing", () => {
       grantees: [],
       includeFuture: false,
     });
+
     expect(shared.status).toBe(201);
+
     const link = await api(h, ana, "POST", "/v1/public-links", {
       spaceId: space.body.spaceId,
       threadId: shared.body,
       includeFuture: false,
     });
+
     expect(link.status).toBe(201);
     const [spaceId, token] = new URL(link.body.url).pathname.split("/").slice(2);
 
@@ -1034,16 +1142,20 @@ describe("MailCore sharing and publishing", () => {
 
   it("[P01] published posts route remote images through the signed image proxy", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const post = await api(h, ana, "POST", "/v1/world/posts", {
       from: "ana@bye.test",
       title: "Pics",
       html: '<p>x</p><img src="https://cdn.example/a.png"><img src="http://plain.example/b.png">',
       text: "x",
     });
+
     expect(post.status).toBe(201);
+
     const page = [...h.buckets.PUBLISHED.objects.entries()].find(([k]) =>
       k.startsWith("site/ana/posts/"),
     );
+
     const html = new TextDecoder().decode(page![1].bytes);
     expect(html).toContain(`src="${h.env.MAIL_ORIGIN}/img?u=`);
     expect(html).not.toContain('src="https://cdn.example');
@@ -1062,16 +1174,20 @@ describe("MailCore sharing and publishing", () => {
 
   it("[P01] publishing writes sanitized public copies; another author cannot take over the handle", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const post = await api(h, ana, "POST", "/v1/world/posts", {
       from: "ana@bye.test",
       title: "Hello world",
       html: "<p>First post</p><script>steal()</script>",
       text: "First post",
     });
+
     expect(post.status).toBe(201);
+
     const page = [...h.buckets.PUBLISHED.objects.entries()].find(([k]) =>
       k.startsWith("site/ana/posts/"),
     );
+
     expect(page).toBeDefined();
     const html = new TextDecoder().decode(page![1].bytes);
     expect(html).toContain("First post");
@@ -1085,21 +1201,26 @@ describe("MailCore sharing and publishing", () => {
       html: "<p>x</p>",
       text: "x",
     });
+
     expect(forged.status).toBe(403);
 
     // Same local part on another domain gets a distinct handle rather than the existing one.
     const other = await signup(h, "ana@other.test");
+
     const theirs = await api(h, other, "POST", "/v1/world/posts", {
       from: "ana@other.test",
       title: "Mine",
       html: "<p>mine</p>",
       text: "mine",
     });
+
     expect(theirs.status).toBe(201);
     expect(h.buckets.PUBLISHED.objects.has("site/ana--other-test/feed.xml")).toBe(true);
+
     const anaIndex = new TextDecoder().decode(
       h.buckets.PUBLISHED.objects.get("site/ana/index.html")!.bytes,
     );
+
     expect(anaIndex).not.toContain("Mine");
 
     // A service-domain signup can't squat a custom-domain user's handle: `--` never occurs in one.
@@ -1174,12 +1295,14 @@ describe("MailCore review regressions", () => {
     const real = globalThis.fetch;
     globalThis.fetch = (async (url: string, init?: RequestInit) =>
       impl(String(url), init)) as typeof fetch;
+
     try {
       return await fn();
     } finally {
       globalThis.fetch = real;
     }
   };
+
   const turnstileOk = (url: string) =>
     url.includes("turnstile")
       ? new Response(JSON.stringify({ success: true }))
@@ -1192,23 +1315,30 @@ describe("MailCore review regressions", () => {
         displayName: "x",
         turnstile: "t",
       });
+
       expect(foreign.status).toBe(400);
+
       const ok = await api(h, null, "POST", "/auth/signup", {
         address: "new@bye.test",
         displayName: "New",
         turnstile: "t",
       });
+
       expect(ok.status).toBe(201);
+
       const retry = await api(h, null, "POST", "/auth/signup/challenge", {
         userId: ok.body.userId,
         signupToken: ok.body.signupToken,
       });
+
       expect(retry.status).toBe(200);
       expect(retry.body.challenge).toBeTruthy();
+
       const forged = await api(h, null, "POST", "/auth/signup/challenge", {
         userId: ok.body.userId,
         signupToken: `${Date.now() + 60_000}.00`,
       });
+
       expect(forged.status).toBe(401);
     });
   });
@@ -1233,6 +1363,7 @@ describe("MailCore review regressions", () => {
   it("[E19] redelivery requires authority over the target mailbox", async () => {
     const ana = await signup(h, "ana@bye.test");
     const bob = await signup(h, "bob@bye.test");
+
     const r = await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "Redeliver",
       commandId: cmdId(),
@@ -1240,28 +1371,34 @@ describe("MailCore review regressions", () => {
       targetMailboxId: bob.mailboxId,
       mode: "copy",
     });
+
     expect(r.status).toBe(403);
   });
 
   it("[A03] new identities, forwarding changes and domain claims require a recent step-up", async () => {
     const ana = await signup(h, "ana@bye.test");
     const auth = new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env));
+
     const plain = {
       ...ana,
       cookie: `__Host-session=${(await auth.issueSession(ana.userId, "test", false)).token}`,
     };
+
     const identity = await api(h, plain, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "AddIdentity",
       commandId: cmdId(),
       address: "ana@bye.test",
       kind: "hosted",
     });
+
     expect(identity.status).toBe(403);
+
     const forward = await api(h, plain, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "AddForwardingDestination",
       commandId: cmdId(),
       address: "me@example.net",
     });
+
     expect(forward.status).toBe(403);
     const org = (await api(h, plain, "GET", "/v1/me")).body.organizationIds[0];
     expect(
@@ -1282,6 +1419,7 @@ describe("MailCore review regressions", () => {
       address: "ana@bye.test",
       kind: "hosted",
     });
+
     const draft = await api(h, ana, "POST", "/v1/drafts", {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
@@ -1294,19 +1432,23 @@ describe("MailCore review regressions", () => {
         attachments: [],
       },
     });
+
     const send = await api(h, ana, "POST", `/v1/drafts/${draft.body.draftId}/send`, {
       mailboxId: ana.mailboxId,
       commandId: cmdId(),
       revision: draft.body.revision,
     });
+
     vi.setSystemTime(Date.now() + 60_000);
     await h.namespaces.MAILBOXES.instance(ana.mailboxId).alarm();
     h.d1.failing = true;
     await expect(h.drain()).rejects.toThrow(/dispatch/);
     h.d1.failing = false;
+
     const job = await h.namespaces.MAILBOXES.instance(ana.mailboxId).sendJob(
       send.body.sendJobIds[0],
     );
+
     expect(job?.state).toBe("ready");
   });
 
@@ -1330,6 +1472,7 @@ describe("MailCore review regressions", () => {
 
   it("[E24] erased originals stop ingress replay instead of retrying forever", async () => {
     await signup(h, "ana@bye.test");
+
     const message = inboundMessage(
       "x@example.net",
       "ana@bye.test",
@@ -1341,6 +1484,7 @@ describe("MailCore review regressions", () => {
         messageId: "gone@x",
       }),
     );
+
     await handleInbound(message, h.env);
     h.buckets.ORIGINALS.objects.clear();
     await h.drain();
@@ -1361,6 +1505,7 @@ describe("MailCore review regressions", () => {
       rawSize: 10,
     });
     await journal.markBlobReady(id);
+
     for (let i = 0; i < REPLAY_ATTEMPT_CAP; i++) await journal.touchRepublished(id);
     const mailboxes = h.env.MAILBOXES as { getByName: unknown };
     const realGetByName = mailboxes.getByName;
@@ -1444,6 +1589,7 @@ describe("inbound whole-message scanning", () => {
         notify: false,
       },
     });
+
     return ana;
   };
 
@@ -1463,20 +1609,25 @@ describe("inbound whole-message scanning", () => {
     );
     await h.drain(20, {
       tolerateRetries: options.tolerate === true,
-      ...(options.maxRetries === undefined ? {} : { maxRetries: options.maxRetries }),
+      maxRetries: options.maxRetries,
     });
+
     const views = [
       ...(await api(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/everything`)).body.items,
       ...(await api(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/spam`)).body.items,
     ];
+
     const thread = views.find((t: { subject: string }) => t.subject === subject);
+
     const detail = await api(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${thread.threadId}`,
     );
+
     const delivery = detail.body.deliveries[0];
+
     const download = () =>
       api(
         h,
@@ -1484,6 +1635,7 @@ describe("inbound whole-message scanning", () => {
         "GET",
         `/v1/mailboxes/${ana.mailboxId}/deliveries/${delivery.deliveryId}/attachments/${delivery.attachments[0].partId}`,
       );
+
     return { thread, delivery, download };
   };
 
@@ -1493,6 +1645,7 @@ describe("inbound whole-message scanning", () => {
     expect(h.scanner.scanned).toHaveLength(1);
     expect(h.scanner.scanned[0]).toContain("Subject: Clean report");
     expect(delivery.scan.status).toBe("clean");
+
     const file = await handleFetch(
       new Request(
         `${h.env.APP_ORIGIN}/v1/mailboxes/${ana.mailboxId}/deliveries/${delivery.deliveryId}/attachments/${delivery.attachments[0].partId}`,
@@ -1501,6 +1654,7 @@ describe("inbound whole-message scanning", () => {
       h.env,
       ctx,
     );
+
     expect(file.status).toBe(200);
     expect(file.headers.get("content-disposition")).toContain("attachment;");
     expect(file.headers.get("content-security-policy")).toContain("sandbox");
@@ -1528,6 +1682,7 @@ describe("inbound whole-message scanning", () => {
     const blocked = await download();
     expect(blocked.status).toBe(403);
     expect(blocked.body.error.details.scanStatus).toBe("infected");
+
     // Redelivering it to another mailbox is refused too.
     const redeliver = await api(h, ana, "POST", `/v1/mailboxes/${ana.mailboxId}/commands`, {
       _tag: "Redeliver",
@@ -1536,17 +1691,20 @@ describe("inbound whole-message scanning", () => {
       targetMailboxId: ana.mailboxId,
       mode: "copy",
     });
+
     expect(redeliver.status).toBe(403);
   });
 
   it("[E20] during a scanner outage mail still arrives, attachments wait, and reconciliation re-scans later", async () => {
     const ana = await setup();
     h.scanner.mode = "down";
+
     // The outage outlasts the queue's retries: the scan message is dead-lettered while pending.
     const { delivery, download } = await receive(ana, "Contract", "terms", {
       tolerate: true,
       maxRetries: 0,
     });
+
     expect(JSON.stringify(h.deadLettered)).toContain("scan-message");
     expect(delivery.scan.status).toBe("pending");
     const waiting = await download();
@@ -1563,14 +1721,17 @@ describe("inbound whole-message scanning", () => {
   it("[E20] messages without attachments are not sent to the scanner", async () => {
     const ana = await setup();
     await deliver(h, "bob@example.net", "ana@bye.test", "Just text", "no files here");
+
     const thread = (await api(h, ana, "GET", `/v1/mailboxes/${ana.mailboxId}/views/imbox`)).body
       .items[0];
+
     const detail = await api(
       h,
       ana,
       "GET",
       `/v1/mailboxes/${ana.mailboxId}/threads/${thread.threadId}`,
     );
+
     expect(detail.body.deliveries[0].scan.status).toBe("not-required");
     expect(h.scanner.scanned).toHaveLength(0);
   });
@@ -1618,11 +1779,13 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(fields).toString(),
     });
+
     return { status: r.status, body: (await r.json()) as Record<string, string> };
   };
 
   const codeFrom = (response: Response) => {
     const location = new URL(response.headers.get("location")!);
+
     return {
       location,
       code: location.searchParams.get("code")!,
@@ -1638,8 +1801,10 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
     const probeFetch: ProbeFetch = async (url, init) => {
       expect(init.credentials).toBe("omit");
       const r = await handleFetch(new Request(url, { headers: init.headers }), h.env, ctx);
+
       return { status: r.status, headers: r.headers, text: () => r.text() };
     };
+
     for (const [clientId, redirectUri] of [
       ["bye-desktop", "bye://oauth/callback"],
       ["bye-mobile", "bye://oauth/callback"],
@@ -1652,27 +1817,38 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
         redirectUri,
         privateNetwork: "allow",
       });
+
       expect(r._tag, clientId).toBe("Valid");
-      if (r._tag !== "Valid") continue;
+
+      if (!Predicate.isTagged(r, "Valid")) continue;
       expect(r.instance.issuer).toBe(h.env.APP_ORIGIN);
       expect(r.instance.endpoints.token).toBe(`${h.env.APP_ORIGIN}/oauth/token`);
       expect(r.instance.routes.accountDeletion).toBe(`${h.env.APP_ORIGIN}/v1/account/close`);
     }
+
     const meta = await raw("/.well-known/oauth-authorization-server");
     expect(meta.headers.get("cache-control")).toContain("public");
-    const body = (await meta.json()) as Record<string, unknown>;
+
+    const body = await meta.json<{
+      code_challenge_methods_supported: Array<string>;
+      token_endpoint_auth_methods_supported: Array<string>;
+    }>();
+
     expect(body.code_challenge_methods_supported).toEqual(["S256"]);
     expect(body.token_endpoint_auth_methods_supported).toEqual(["none"]);
   });
 
   it("[X01] a `decision` smuggled into the authorize link can't override the user's Cancel", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const page = await raw(`/oauth/authorize?${authorizeQuery({ decision: "allow" }).toString()}`, {
       headers: { cookie: ana.cookie },
     });
+
     const html = await page.text();
     expect(html).not.toContain('name="decision" value="allow" type="hidden"');
     expect(html).not.toMatch(/type="hidden" name="decision"/);
+
     // Even if a form carried an earlier `decision=allow`, the clicked button (last) wins.
     const cancelled = await raw("/oauth/authorize", {
       method: "POST",
@@ -1684,6 +1860,7 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
       },
       body: `decision=allow&${authorizeQuery().toString()}&decision=deny`,
     });
+
     const location = new URL(cancelled.headers.get("location")!);
     expect(location.searchParams.get("error")).toBe("access_denied");
     expect(location.searchParams.has("code")).toBe(false);
@@ -1695,12 +1872,14 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
     expect(signedOut.headers.get("location")).toBe(
       `/?next=${encodeURIComponent(`/oauth/authorize?${authorizeQuery().toString()}`)}`,
     );
+
     const bads: Array<Record<string, string>> = [
       { redirect_uri: "https://evil.example/cb" },
       { redirect_uri: "http://localhost:5000/oauth/callback" },
       { client_id: "other" },
       { code_challenge_method: "plain" },
     ];
+
     for (const bad of bads) {
       const r = await raw(`/oauth/authorize?${authorizeQuery(bad).toString()}`);
       expect(r.status).toBe(400);
@@ -1710,17 +1889,21 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
 
   it("[X01] the consent page is unframeable, approval returns a code to the registered callback, and cross-origin approval is refused", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const page = await raw(`/oauth/authorize?${authorizeQuery().toString()}`, {
       headers: { cookie: ana.cookie },
     });
+
     expect(page.status).toBe(200);
     expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     // The only inline content (the stylesheet) is allowed by hash, never 'unsafe-inline'.
     const csp = page.headers.get("content-security-policy")!;
     expect(csp).not.toContain("unsafe-inline");
+
     const digest = new Uint8Array(
       await crypto.subtle.digest("SHA-256", new TextEncoder().encode(CONSENT_STYLE)),
     );
+
     expect(csp).toContain(`'sha256-${btoa(String.fromCharCode(...digest))}'`);
     expect(page.headers.get("strict-transport-security")).toBe(
       "max-age=63072000; includeSubDomains",
@@ -1744,6 +1927,7 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
     // The consent page must let its own form post carry a real Origin (not `no-referrer`), and a
     // browser that still sends the opaque `Origin: null` is judged by Fetch Metadata instead.
     expect(page.headers.get("referrer-policy")).toBe("same-origin");
+
     const opaque = await raw("/oauth/authorize", {
       method: "POST",
       redirect: "manual",
@@ -1755,7 +1939,9 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
       },
       body: `${authorizeQuery().toString()}&decision=allow`,
     });
+
     expect(codeFrom(opaque).code).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+
     const opaqueCrossSite = await raw("/oauth/authorize", {
       method: "POST",
       redirect: "manual",
@@ -1767,24 +1953,28 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
       },
       body: `${authorizeQuery().toString()}&decision=allow`,
     });
+
     expect(opaqueCrossSite.status).toBe(401);
 
     // Loopback redirects are accepted on any port (RFC 8252 §7.3).
     const loop = codeFrom(
       await approve(ana, authorizeQuery({ redirect_uri: "http://127.0.0.1:53123/oauth/callback" })),
     );
+
     expect(loop.location.host).toBe("127.0.0.1:53123");
   });
 
   it("[A03] a code is single-use, PKCE- and redirect-bound; replay revokes the session it issued", async () => {
     const ana = await signup(h, "ana@bye.test");
     const { code } = codeFrom(await approve(ana));
+
     const exchange = {
       grant_type: "authorization_code",
       code,
       client_id: "bye-desktop",
       redirect_uri: "bye://oauth/callback",
     };
+
     expect((await token({ ...exchange, code_verifier: "x".repeat(43) })).body.error).toBe(
       "invalid_grant",
     );
@@ -1797,9 +1987,11 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
     const ok = await token({ ...exchange, code: second, code_verifier: VERIFIER });
     expect(ok.status).toBe(200);
     expect(ok.body).toMatchObject({ token_type: "Bearer", expires_in: 900 });
+
     const me = await api(h, { ...ana, cookie: "" }, "GET", "/v1/me", undefined, {
       authorization: `Bearer ${ok.body.access_token}`,
     });
+
     expect(me.status).toBe(200);
     expect(me.body.userId).toBe(ana.userId);
 
@@ -1823,6 +2015,7 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
   it("[A03] refresh rotates; replaying a rotated refresh credential revokes the device session (RFC 9700)", async () => {
     const ana = await signup(h, "ana@bye.test");
     const { code } = codeFrom(await approve(ana));
+
     const first = (
       await token({
         grant_type: "authorization_code",
@@ -1847,11 +2040,13 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
         )
       ).status,
     ).toBe(401);
+
     const second = await token({
       grant_type: "refresh_token",
       refresh_token: first.refresh_token!,
       client_id: "bye-desktop",
     });
+
     expect(second.status).toBe(200);
     expect(second.body.refresh_token).not.toBe(first.refresh_token);
     expect(
@@ -1872,6 +2067,7 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
       refresh_token: first.refresh_token!,
       client_id: "bye-desktop",
     });
+
     expect(reuse.body.error).toBe("invalid_grant");
     expect(
       (
@@ -1899,6 +2095,7 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
   it("[X01] device sessions are listed and revocable from the web; logout revokes; consequential actions still need step-up", async () => {
     const ana = await signup(h, "ana@bye.test");
     const { code } = codeFrom(await approve(ana));
+
     const tokens = (
       await token({
         grant_type: "authorization_code",
@@ -1908,6 +2105,7 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
         code_verifier: VERIFIER,
       })
     ).body;
+
     const device = { ...ana, cookie: "" };
     const bearer = { authorization: `Bearer ${tokens.access_token}` };
 
@@ -1919,6 +2117,7 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
       { _tag: "AddIdentity", commandId: cmdId(), address: "ana@bye.test", kind: "hosted" },
       bearer,
     );
+
     expect(identity.status).toBe(403);
 
     const listed = await api(h, ana, "GET", "/v1/devices");
@@ -1930,6 +2129,7 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
     expect((await api(h, device, "GET", "/v1/me", undefined, bearer)).status).toBe(401);
 
     const again = codeFrom(await approve(ana)).code;
+
     const t2 = (
       await token({
         grant_type: "authorization_code",
@@ -1939,11 +2139,13 @@ describe("desktop sign-in: browser passkey + authorization code with PKCE", () =
         code_verifier: VERIFIER,
       })
     ).body;
+
     const revoked = await raw("/oauth/revoke", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: `token=${t2.refresh_token}`,
     });
+
     expect(revoked.status).toBe(200);
     expect(
       (
@@ -1961,10 +2163,8 @@ describe("[DS10] device-authorization grant routes", () => {
   // Device-authorization grant over HTTP (DS10, RFC 8628): a headless client starts the flow, the
   // user approves the code in a signed-in browser, and the client's poll yields a device session.
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
+
   const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
   let h: Harness;
@@ -1977,6 +2177,7 @@ describe("[DS10] device-authorization grant routes", () => {
 
   const raw = (path: string, init: RequestInit = {}) =>
     handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, init), h.env, ctx);
+
   const form = (fields: Record<string, string>, headers: Record<string, string> = {}) => ({
     method: "POST",
     redirect: "manual" as const,
@@ -1989,18 +2190,22 @@ describe("[DS10] device-authorization grant routes", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address: "ana@bye.test", displayName: "Ana" });
+
     const { token } = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "laptop", true);
+
     const cookie = `__Host-session=${token}`;
 
     const started = await raw(
       "/oauth/device_authorization",
       form({ client_id: "bye-cli", device_name: "build box" }),
     );
+
     expect(started.status).toBe(200);
+
     const auth = (await started.json()) as {
       device_code: string;
       user_code: string;
@@ -2008,6 +2213,7 @@ describe("[DS10] device-authorization grant routes", () => {
       verification_uri_complete: string;
       interval: number;
     };
+
     expect(auth.verification_uri).toBe(`${h.env.APP_ORIGIN}/device`);
     expect(auth.verification_uri_complete).toContain(encodeURIComponent(auth.user_code));
 
@@ -2016,6 +2222,7 @@ describe("[DS10] device-authorization grant routes", () => {
         "/oauth/token",
         form({ grant_type: DEVICE_GRANT, device_code: auth.device_code, client_id: "bye-cli" }),
       );
+
     const pending = await poll();
     expect(pending.status).toBe(400);
     expect(await pending.json()).toMatchObject({ error: "authorization_pending" });
@@ -2024,11 +2231,13 @@ describe("[DS10] device-authorization grant routes", () => {
     const signedOut = await raw(`/device?user_code=${encodeURIComponent(auth.user_code)}`, {
       redirect: "manual",
     });
+
     expect(signedOut.status).toBe(303);
 
     const page = await raw(`/device?user_code=${encodeURIComponent(auth.user_code)}`, {
       headers: { cookie },
     });
+
     expect(page.status).toBe(200);
     expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(await page.text()).toContain("build box");
@@ -2041,12 +2250,14 @@ describe("[DS10] device-authorization grant routes", () => {
         { cookie, origin: "https://evil.example" },
       ),
     );
+
     expect(forged.status).toBe(401);
 
     const approved = await raw(
       "/device",
       form({ user_code: auth.user_code, decision: "allow" }, { cookie, origin: h.env.APP_ORIGIN }),
     );
+
     expect(approved.status).toBe(200);
 
     vi.setSystemTime(Date.now() + auth.interval * 1000 + 1);
@@ -2066,23 +2277,29 @@ describe("[DS10] device-authorization grant routes", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address: "bo@bye.test", displayName: "Bo" });
+
     const { token } = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "laptop", true);
+
     const cookie = `__Host-session=${token}`;
+
     const auth = (await (
       await raw("/oauth/device_authorization", form({ client_id: "bye-cli" }))
     ).json()) as { device_code: string; user_code: string };
+
     await raw(
       "/device",
       form({ user_code: auth.user_code, decision: "deny" }, { cookie, origin: h.env.APP_ORIGIN }),
     );
+
     const denied = await raw(
       "/oauth/token",
       form({ grant_type: DEVICE_GRANT, device_code: auth.device_code, client_id: "bye-cli" }),
     );
+
     expect(await denied.json()).toMatchObject({ error: "access_denied" });
 
     const unknown = await raw("/device?user_code=BCDF-GHJK", { headers: { cookie } });
@@ -2100,25 +2317,30 @@ describe("§10 image proxy hardening", () => {
   const env = {
     PROXY_SIGNING_KEY: "proxy-key-test",
     MAIL_ORIGIN: "https://mail.bye.test",
-  } as unknown as CoreEnv;
+  } as CoreEnv;
+
   const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 
   /** DoH fake: host → addresses (A and AAAA answered from the same list by family). */
   const dohFor = (zones: Record<string, ReadonlyArray<string>>) => {
     const asked: Array<string> = [];
+
     const doh: ImageProxyDeps["doh"] = async (url) => {
       const u = new URL(url);
       const name = u.searchParams.get("name")!;
       const type = u.searchParams.get("type");
       asked.push(`${name}/${type}`);
+
       const ips = (zones[name] ?? []).filter((ip) =>
         type === "AAAA" ? ip.includes(":") : !ip.includes(":"),
       );
+
       return Response.json({
         Status: 0,
         Answer: ips.map((data) => ({ type: type === "AAAA" ? 28 : 1, data })),
       });
     };
+
     return { doh, asked };
   };
 
@@ -2132,6 +2354,7 @@ describe("§10 image proxy hardening", () => {
   it("refuses a hostname that resolves to a private address, before any fetch", async () => {
     const { doh } = dohFor({ "evil.example.net": ["93.184.216.34", "10.0.0.5"] });
     let fetched = 0;
+
     const res = await proxied("https://evil.example.net/p.png", {
       doh,
       fetch: async () => (
@@ -2139,6 +2362,7 @@ describe("§10 image proxy hardening", () => {
         new Response(PNG, { headers: { "content-type": "image/png" } })
       ),
     });
+
     expect(res.status).toBe(403);
     expect(fetched).toBe(0);
   });
@@ -2167,7 +2391,9 @@ describe("§10 image proxy hardening", () => {
       "cdn.example.net": ["93.184.216.34"],
       "rebind.example.net": ["127.0.0.1"],
     });
+
     const fetched: Array<string> = [];
+
     const res = await proxied("https://cdn.example.net/a.png", {
       doh,
       fetch: async (url) => (
@@ -2178,6 +2404,7 @@ describe("§10 image proxy hardening", () => {
         })
       ),
     });
+
     expect(res.status).toBe(403);
     expect(fetched).toEqual(["https://cdn.example.net/a.png"]);
     expect(asked).toContain("rebind.example.net/A");
@@ -2185,10 +2412,12 @@ describe("§10 image proxy hardening", () => {
 
   it("serves a raster image from a host with only public answers", async () => {
     const { doh } = dohFor({ "cdn.example.net": ["93.184.216.34", "2606:2800:220:1::1"] });
+
     const res = await proxied("https://cdn.example.net/ok.png", {
       doh,
       fetch: async () => new Response(PNG, { headers: { "content-type": "image/png" } }),
     });
+
     expect(res.status).toBe(200);
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
@@ -2196,12 +2425,14 @@ describe("§10 image proxy hardening", () => {
 
   it("rejects SVG and non-image types", async () => {
     const { doh } = dohFor({ "cdn.example.net": ["93.184.216.34"] });
+
     for (const type of ["image/svg+xml", "text/html"]) {
       const res = await proxied("https://cdn.example.net/x", {
         doh,
         fetch: async () =>
           new Response("<svg onload=alert(1)>", { headers: { "content-type": type } }),
       });
+
       expect(res.status).toBe(415);
     }
   });
@@ -2209,6 +2440,7 @@ describe("§10 image proxy hardening", () => {
   it("rejects an oversized declared length without reading, and aborts an unannounced oversized stream early", async () => {
     const { doh } = dohFor({ "cdn.example.net": ["93.184.216.34"] });
     let pulledDeclared = 0;
+
     const declared = await proxied("https://cdn.example.net/big.png", {
       doh,
       fetch: async () =>
@@ -2227,12 +2459,14 @@ describe("§10 image proxy hardening", () => {
           },
         ),
     });
+
     expect(declared.status).toBe(413);
     expect(pulledDeclared).toBe(0);
 
     let pulled = 0;
     let cancelled = false;
     const chunk = 1 << 20;
+
     const stream = new ReadableStream<Uint8Array>(
       {
         pull: (c) => {
@@ -2245,10 +2479,12 @@ describe("§10 image proxy hardening", () => {
       },
       { highWaterMark: 0 },
     );
+
     const res = await proxied("https://cdn.example.net/chunked.png", {
       doh,
       fetch: async () => new Response(stream, { headers: { "content-type": "image/png" } }),
     });
+
     expect(res.status).toBe(413);
     expect(cancelled).toBe(true);
     expect(pulled).toBeLessThanOrEqual(MAX_IMAGE_BYTES + chunk);
@@ -2270,34 +2506,41 @@ describe("DS11 device sign-in secrets never reach logs or stored state", () => {
 
   it("authorization code, PKCE verifier, access and refresh tokens are absent from every log line and D1 row", async () => {
     const lines: Array<string> = [];
+
     const capture = (...args: Array<unknown>) =>
-      void lines.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
+      void lines.push(args.map((a) => (Predicate.isString(a) ? a : JSON.stringify(a))).join(" "));
+
     const spies = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
       vi.spyOn(console, level).mockImplementation(capture),
     );
+
     const h = makeHarness();
-    const ctx = {
-      waitUntil: () => undefined,
-      passThroughOnException: () => undefined,
-    } as unknown as ExecutionContext;
+
+    const ctx = executionContext;
+
     const raw = (path: string, init: RequestInit = {}) =>
       handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, init), h.env, ctx);
+
     const form = (fields: Record<string, string>): RequestInit => ({
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(fields).toString(),
     });
+
     try {
       const account = await new ControlDirectory(
         h.env.DIRECTORY,
         kernelClock,
       ).provisionPersonalAccount({ address: "ana@bye.test", displayName: "ana" });
+
       const session = await new ControlAuth(
         h.env.DIRECTORY,
         kernelClock,
         await authConfig(h.env),
       ).issueSession(account.userId, "browser", true);
+
       const verifier = "VERIFIERCANARY-" + "x".repeat(43);
+
       const query = new URLSearchParams({
         response_type: "code",
         client_id: "bye-desktop",
@@ -2307,6 +2550,7 @@ describe("DS11 device sign-in secrets never reach logs or stored state", () => {
         state: "st_0123456789abcdef",
         device_name: "Mac",
       });
+
       const approved = await raw("/oauth/authorize", {
         method: "POST",
         redirect: "manual",
@@ -2317,8 +2561,10 @@ describe("DS11 device sign-in secrets never reach logs or stored state", () => {
         },
         body: `${query.toString()}&decision=allow`,
       });
+
       const code = new URL(approved.headers.get("location")!).searchParams.get("code")!;
       expect(code).toBeTruthy();
+
       const exchanged = (await (
         await raw(
           "/oauth/token",
@@ -2331,7 +2577,9 @@ describe("DS11 device sign-in secrets never reach logs or stored state", () => {
           }),
         )
       ).json()) as Record<string, string>;
+
       expect(exchanged.access_token).toBeTruthy();
+
       const refreshed = (await (
         await raw(
           "/oauth/token",
@@ -2342,6 +2590,7 @@ describe("DS11 device sign-in secrets never reach logs or stored state", () => {
           }),
         )
       ).json()) as Record<string, string>;
+
       expect(refreshed.refresh_token).toBeTruthy();
       await raw("/v1/me", { headers: { authorization: `Bearer ${refreshed.access_token}` } });
       // Reusing the rotated refresh token revokes the session (and must not log the token).
@@ -2376,7 +2625,9 @@ describe("DS11 device sign-in secrets never reach logs or stored state", () => {
         refreshed.refresh_token!,
         session.token,
       ];
+
       const logged = lines.join("\n");
+
       for (const secret of secrets)
         expect(logged, `log leaked ${secret.slice(0, 10)}…`).not.toContain(secret);
 
@@ -2386,10 +2637,13 @@ describe("DS11 device sign-in secrets never reach logs or stored state", () => {
           .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
           .all<{ name: string }>()
       ).results.map((t) => t.name);
+
       const dump: Array<string> = [];
+
       for (const t of tables)
         dump.push(JSON.stringify((await h.d1.prepare(`SELECT * FROM "${t}"`).all()).results));
       const stored = dump.join("\n");
+
       for (const secret of secrets)
         expect(stored, `D1 stores ${secret.slice(0, 10)}…`).not.toContain(secret);
     } finally {
@@ -2399,10 +2653,7 @@ describe("DS11 device sign-in secrets never reach logs or stored state", () => {
 });
 
 describe("device-code rate limits", () => {
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
 
   interface Account {
     readonly userId: string;
@@ -2416,16 +2667,19 @@ describe("device-code rate limits", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     await h.env.CALENDARS.getByName(account.calendarId).provision({
       ownerId: account.userId,
       selfAddresses: [address],
       defaultZone: "UTC",
     });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -2452,12 +2706,15 @@ describe("device-code rate limits", () => {
       ),
     };
     const cookie = `__Host-session=${ana.token}`;
+
     const lookup = await handleFetch(
       new Request(`${h.env.APP_ORIGIN}/device?user_code=BCDF-GHJK`, { headers: { cookie } }),
       h.env,
       ctx,
     );
+
     expect(lookup.status).toBe(429);
+
     const decide = await handleFetch(
       new Request(`${h.env.APP_ORIGIN}/device`, {
         method: "POST",
@@ -2471,6 +2728,7 @@ describe("device-code rate limits", () => {
       h.env,
       ctx,
     );
+
     expect(decide.status).toBe(429);
     expect(seen.every((k) => k.startsWith("device:"))).toBe(true);
   });
@@ -2480,17 +2738,20 @@ describe("image proxy DNS lookups", () => {
   it("[§10] the image proxy's A and AAAA lookups run concurrently", async () => {
     let inFlight = 0;
     let peak = 0;
+
     const doh = async (url: string) => {
       inFlight++;
       peak = Math.max(peak, inFlight);
       await new Promise((r) => setTimeout(r, 5));
       inFlight--;
       const type = new URL(url).searchParams.get("type");
+
       return Response.json({
         Status: 0,
         Answer: type === "A" ? [{ type: 1, data: "93.184.216.34" }] : [],
       });
     };
+
     vi.useRealTimers();
     expect(await forbiddenResolution("cdn.example.net", doh as never)).toBeNull();
     expect(peak).toBe(2);
@@ -2506,10 +2767,7 @@ describe("live sockets and credentials", () => {
     }
   };
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
 
   interface Account {
     readonly userId: string;
@@ -2523,15 +2781,18 @@ describe("live sockets and credentials", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -2547,24 +2808,23 @@ describe("live sockets and credentials", () => {
     path: string,
     init: { json?: unknown; body?: BodyInit; headers?: Record<string, string> } = {},
   ) => {
-    const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(init.json !== undefined ? { "content-type": "application/json" } : {}),
-          ...init.headers,
-        },
-        ...(init.json !== undefined
-          ? { body: JSON.stringify(init.json) }
-          : init.body !== undefined
-            ? { body: init.body }
-            : {}),
-      }),
-      h.env,
-      ctx,
-    );
+    const requestHeaders = new Headers();
+
+    if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (init.json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(init.headers ?? {})) requestHeaders.set(k, v);
+
+    const requestInit: RequestInit = { method, headers: requestHeaders };
+
+    if (init.json !== undefined) requestInit.body = JSON.stringify(init.json);
+    else if (init.body !== undefined) requestInit.body = init.body;
+
+    const r = await handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, requestInit), h.env, ctx);
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
@@ -2581,13 +2841,16 @@ describe("live sockets and credentials", () => {
 
   it("[DS09] live sockets are tagged with the server-verified credential and closed when it is revoked", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const second = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(ana.userId, "phone", true);
+
     const phone = { ...ana, token: second.token };
     const pairs = installWebSocketPair();
+
     try {
       // A client-supplied credential header is ignored: the API tags with the verified session.
       for (const who of [ana, phone])
@@ -2601,6 +2864,7 @@ describe("live sockets and credentials", () => {
     } finally {
       pairs.restore();
     }
+
     const state = h.namespaces.MAILBOXES.state(ana.mailboxId);
     expect(pairs.created).toHaveLength(2);
     const [laptopSocket, phoneSocket] = pairs.created as [FakeServerSocket, FakeServerSocket];
@@ -2612,6 +2876,7 @@ describe("live sockets and credentials", () => {
     const sessions = (await call(h, phone, "GET", "/v1/security/sessions")).body.items as Array<{
       id: string;
     }>;
+
     expect(sessions).toHaveLength(2);
     expect((await call(h, phone, "DELETE", `/v1/security/sessions/${ana.sessionId}`)).status).toBe(
       200,
@@ -2632,10 +2897,7 @@ describe("live sockets on credential rotation", () => {
     }
   };
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
 
   interface Account {
     readonly userId: string;
@@ -2649,15 +2911,18 @@ describe("live sockets on credential rotation", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -2673,24 +2938,23 @@ describe("live sockets on credential rotation", () => {
     path: string,
     init: { json?: unknown; body?: BodyInit; headers?: Record<string, string> } = {},
   ) => {
-    const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(init.json !== undefined ? { "content-type": "application/json" } : {}),
-          ...init.headers,
-        },
-        ...(init.json !== undefined
-          ? { body: JSON.stringify(init.json) }
-          : init.body !== undefined
-            ? { body: init.body }
-            : {}),
-      }),
-      h.env,
-      ctx,
-    );
+    const requestHeaders = new Headers();
+
+    if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (init.json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(init.headers ?? {})) requestHeaders.set(k, v);
+
+    const requestInit: RequestInit = { method, headers: requestHeaders };
+
+    if (init.json !== undefined) requestInit.body = JSON.stringify(init.json);
+    else if (init.body !== undefined) requestInit.body = init.body;
+
+    const r = await handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, requestInit), h.env, ctx);
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
@@ -2706,9 +2970,11 @@ describe("live sockets on credential rotation", () => {
 
   it("[DS09] step-up rotation, OAuth revoke and refresh-token reuse close the old credential's sockets", async () => {
     const ana = await signup(h, "ana@bye.test");
-    const instance = h.namespaces.MAILBOXES.instance(ana.mailboxId) as unknown as {
+
+    const instance = h.namespaces.MAILBOXES.instance(ana.mailboxId) as {
       closeSockets(id?: string): number;
     };
+
     const closed: Array<string | undefined> = [];
     instance.closeSockets = (id?: string) => (closed.push(id), 0);
 
@@ -2717,9 +2983,11 @@ describe("live sockets on credential rotation", () => {
     const { secret } = await auth.enrollTotp(ana.userId);
     await auth.confirmTotp(ana.userId, await hotp(base32Decode(secret), totpStep(Date.now())));
     vi.setSystemTime(Date.now() + 30_000);
+
     const stepped = await call(h, ana, "POST", "/auth/step-up/totp", {
       json: { code: await hotp(base32Decode(secret), totpStep(Date.now())) },
     });
+
     expect(stepped.status).toBe(200);
     expect(closed).toEqual([ana.sessionId]);
 
@@ -2728,6 +2996,7 @@ describe("live sockets on credential rotation", () => {
       [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)))]
         .map((b) => b.toString(16).padStart(2, "0"))
         .join("");
+
     const device = async (id: string, refresh: string, rotated: boolean) => {
       const now = Date.now();
       await h.d1
@@ -2743,11 +3012,13 @@ describe("live sockets on credential rotation", () => {
         .bind(await sha(refresh), id, now, rotated ? now : null)
         .run();
     };
+
     const form = (fields: Record<string, string>) => ({
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(fields).toString(),
     });
+
     await device("dvs_revoke", "refresh-token-to-revoke", false);
     await handleFetch(
       new Request(`${h.env.APP_ORIGIN}/oauth/revoke`, form({ token: "refresh-token-to-revoke" })),
@@ -2755,6 +3026,7 @@ describe("live sockets on credential rotation", () => {
       ctx,
     );
     await device("dvs_reuse", "already-rotated-refresh", true);
+
     const reuse = await handleFetch(
       new Request(
         `${h.env.APP_ORIGIN}/oauth/token`,
@@ -2767,6 +3039,7 @@ describe("live sockets on credential rotation", () => {
       h.env,
       ctx,
     );
+
     expect(reuse.status).toBe(400);
     expect(closed).toEqual([ana.sessionId, "dvs_revoke", "dvs_reuse"]);
   });

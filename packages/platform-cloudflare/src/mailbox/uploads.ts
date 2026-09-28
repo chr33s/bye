@@ -10,6 +10,21 @@ export const DEFAULT_QUOTA_BYTES = 100 * 1024 * 1024 * 1024;
 
 const isOpen = (state: string): boolean => state === "reserved" || state === "uploading";
 
+type CreateFileLinkResult = { readonly linkId: string; readonly token: string };
+
+type UploadPartsResult = {
+  readonly r2UploadId: string | null;
+  readonly parts: ReadonlyArray<{
+    readonly n: number;
+    readonly size: number;
+    readonly etag: string;
+  }>;
+};
+
+type ReserveUploadResult = { readonly uploadId: string; readonly blobKey: string };
+
+type QuotaResult = { readonly limitBytes: number; readonly usedBytes: number };
+
 export class MailboxUploads {
   constructor(private readonly ctx: MailboxContext) {}
 
@@ -19,16 +34,19 @@ export class MailboxUploads {
 
   // ------------------------------------------------------------ quota (§12)
 
-  quota(): { readonly limitBytes: number; readonly usedBytes: number } {
+  quota(): QuotaResult {
     const limitBytes = this.ctx.setting<number>("quota:limitBytes", DEFAULT_QUOTA_BYTES);
+
     const mail = Number(
       this.sql.one<{ n: number | null }>("SELECT SUM(raw_size) AS n FROM deliveries")?.n ?? 0,
     );
+
     const uploads = Number(
       this.sql.one<{ n: number | null }>(
         "SELECT SUM(COALESCE(actual_size, declared_size)) AS n FROM uploads WHERE state IN ('reserved','uploading','complete')",
       )?.n ?? 0,
     );
+
     // Parts, normalized bodies and exports live outside this authority (D1 `storage_usage`); the
     // host refreshes their total before quota decisions and on reconcile.
     return { limitBytes, usedBytes: mail + uploads + this.externalUsage() };
@@ -53,11 +71,12 @@ export class MailboxUploads {
     readonly filename: string;
     readonly contentType: string;
     readonly declaredSize: number;
-  }): { readonly uploadId: string; readonly blobKey: string } {
+  }): ReserveUploadResult {
     // Zero is a valid size (empty files); it completes without any parts.
     if (!(Number.isInteger(input.declaredSize) && input.declaredSize >= 0))
       reject("bad_request", "declared size required");
     const q = this.quota();
+
     if (q.usedBytes + input.declaredSize > q.limitBytes)
       reject("payload_too_large", "quota exceeded", { ...q });
     const uploadId = this.ctx.id("upl");
@@ -71,22 +90,29 @@ export class MailboxUploads {
       blobKey,
       this.ctx.now(),
     );
+
     return { uploadId, blobKey };
   }
 
   recordUploadPart(uploadId: string, partNumber: number, size: number, etag: string): void {
     this.sql.tx(() => {
       const r = this.row(uploadId) ?? reject("not_found", "upload");
+
       if (r.state !== "reserved" && r.state !== "uploading") reject("conflict", "upload closed");
+
       const parts = json<Array<{ n: number; size: number; etag: string }>>(r.parts, []).filter(
         (p) => p.n !== partNumber,
       );
+
       parts.push({ n: partNumber, size, etag });
       const total = parts.reduce((s, p) => s + p.size, 0);
+
       if (total > Number(r.declared_size)) {
         this.close(uploadId, "failed", null);
+
         return;
       }
+
       this.sql.run(
         "UPDATE uploads SET state = 'uploading', parts = ? WHERE upload_id = ? AND state IN ('reserved','uploading')",
         JSON.stringify(parts.sort((a, b) => a.n - b.n)),
@@ -103,32 +129,42 @@ export class MailboxUploads {
    */
   completeUpload(uploadId: string, actualSize: number): MailboxUpload {
     const u = this.upload(uploadId) ?? reject("not_found", "upload");
+
     if (u.state === "complete" && u.actualSize === actualSize) return u;
+
     // Parts overran the declaration: the upload already failed; completing it only collects it.
     if (u.state === "failed") {
       this.ctx.kernel.emit("blob-gc", this.ctx.mailboxId, {
         key: u.blobKey,
         reason: "upload-failed",
       });
+
       return u;
     }
+
     if (!isOpen(u.state)) reject("conflict", `upload is ${u.state}`);
+
     if (actualSize > u.declaredSize) {
       if (!this.close(uploadId, "failed", actualSize)) reject("conflict", "upload closed");
       this.ctx.kernel.emit("blob-gc", this.ctx.mailboxId, {
         key: u.blobKey,
         reason: "upload-failed",
       });
+
       return this.upload(uploadId)!;
     }
+
     if (!this.close(uploadId, "complete", actualSize)) reject("conflict", "upload closed");
     this.ctx.kernel.emit("scan", this.ctx.mailboxId, { uploadId, key: u.blobKey });
+
     return this.upload(uploadId)!;
   }
 
   abortUpload(uploadId: string): void {
     const u = this.upload(uploadId) ?? reject("not_found", "upload");
+
     if (u.state === "aborted") return;
+
     if (!this.close(uploadId, "aborted", null)) reject("conflict", `upload is ${u.state}`);
     this.ctx.kernel.emit("blob-gc", this.ctx.mailboxId, { key: u.blobKey, reason: "aborted" });
   }
@@ -153,15 +189,9 @@ export class MailboxUploads {
     this.sql.run("UPDATE uploads SET r2_upload_id = ? WHERE upload_id = ?", r2UploadId, uploadId);
   }
 
-  uploadParts(uploadId: string): {
-    readonly r2UploadId: string | null;
-    readonly parts: ReadonlyArray<{
-      readonly n: number;
-      readonly size: number;
-      readonly etag: string;
-    }>;
-  } {
+  uploadParts(uploadId: string): UploadPartsResult {
     const r = this.row(uploadId) ?? reject("not_found", "upload");
+
     return { r2UploadId: r.r2_upload_id, parts: json(r.parts, []) };
   }
 
@@ -177,8 +207,10 @@ export class MailboxUploads {
   setScanResult(uploadId: string, status: "clean" | "infected" | "failed"): void {
     this.sql.tx(() => {
       this.sql.run("UPDATE uploads SET scan_status = ? WHERE upload_id = ?", status, uploadId);
+
       if (status === "clean") this.ctx.indexUpsert("upload", uploadId);
       else this.ctx.indexDelete("upload", uploadId);
+
       if (status !== "clean")
         this.sql.run(
           "UPDATE file_links SET revoked_at = ? WHERE upload_id = ? AND revoked_at IS NULL",
@@ -195,14 +227,17 @@ export class MailboxUploads {
 
   upload(uploadId: string): MailboxUpload | undefined {
     const r = this.row(uploadId);
+
     return r ? toUpload(r) : undefined;
   }
 
   /** Bytes a draft's attachments add; rejects anything not complete and scanned clean, or a bad file link. */
   attachmentBytes(uploadIds: ReadonlyArray<string>, fileLinks: ReadonlyArray<string>): number {
     let bytes = 0;
+
     for (const uploadId of uploadIds) {
       const u = this.upload(uploadId) ?? reject("bad_request", "unknown attachment", { uploadId });
+
       if (!isServableUpload(u))
         reject("conflict", "attachment not ready", {
           uploadId,
@@ -211,13 +246,16 @@ export class MailboxUploads {
         });
       bytes += u.actualSize ?? u.declaredSize;
     }
+
     for (const linkId of fileLinks) {
       const l = this.sql.one<{ revoked_at: number | null }>(
         "SELECT revoked_at FROM file_links WHERE link_id = ?",
         linkId,
       );
+
       if (!l || l.revoked_at !== null) reject("bad_request", "invalid file link", { linkId });
     }
+
     return bytes;
   }
 
@@ -241,6 +279,7 @@ export class MailboxUploads {
     readonly receivedAt: number;
   }> {
     const from = filter.from ? normalizeAddress(filter.from) : null;
+
     return this.sql
       .all<{
         delivery_id: string;
@@ -305,11 +344,9 @@ export class MailboxUploads {
   }
 
   /** Unguessable, revocable, optionally expiring; not a public R2 URL. */
-  createFileLink(
-    uploadId: string,
-    expiresAt?: number,
-  ): { readonly linkId: string; readonly token: string } {
+  createFileLink(uploadId: string, expiresAt?: number): CreateFileLinkResult {
     const u = this.upload(uploadId) ?? reject("not_found", "upload");
+
     if (!isServableUpload(u)) reject("conflict", "upload not ready");
     const linkId = this.ctx.id("lnk");
     const secret = this.ctx.secret(24);
@@ -321,6 +358,7 @@ export class MailboxUploads {
       expiresAt ?? null,
       this.ctx.now(),
     );
+
     return { linkId, token: `${linkId}.${secret}` };
   }
 
@@ -343,13 +381,16 @@ export class MailboxUploads {
     readonly size: number;
   } | null {
     const [linkId, secret] = token.split(".");
+
     if (!linkId || !secret) return null;
+
     const l = this.sql.one<{
       secret: string;
       upload_id: string;
       expires_at: number | null;
       revoked_at: number | null;
     }>("SELECT * FROM file_links WHERE link_id = ?", linkId);
+
     if (
       !l ||
       !timingSafeEqual(l.secret, secret) ||
@@ -358,7 +399,9 @@ export class MailboxUploads {
     )
       return null;
     const u = this.upload(l.upload_id);
+
     if (!u || !isServableUpload(u)) return null;
+
     return {
       blobKey: u.blobKey,
       filename: u.filename,

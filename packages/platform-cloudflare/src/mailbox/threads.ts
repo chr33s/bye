@@ -1,3 +1,4 @@
+import { Match } from "effect";
 import {
   type BubbleCondition,
   type Destination,
@@ -104,14 +105,17 @@ export class ThreadLedger {
   /** Follow local merges to the surviving thread. */
   resolve(threadId: string): string {
     let id = threadId;
+
     for (let i = 0; i < 16; i++) {
       const next = this.sql.one<{ merged_into: string | null }>(
         "SELECT merged_into FROM threads WHERE thread_id = ?",
         id,
       )?.merged_into;
+
       if (!next) return id;
       id = next;
     }
+
     return id;
   }
 
@@ -145,6 +149,7 @@ export class ThreadLedger {
       t.at,
       this.ctx.now(),
     );
+
     return threadId;
   }
 
@@ -181,6 +186,7 @@ export class ThreadLedger {
       d.receivedAt,
       d.scanStatus ?? null,
     );
+
     for (const a of d.attachments) {
       this.sql.run(
         `INSERT INTO attachments (delivery_id, part_id, thread_id, filename, content_type, size, inline, from_address, received_at)
@@ -196,7 +202,9 @@ export class ThreadLedger {
         d.receivedAt,
       );
     }
+
     this.ctx.indexUpsert("delivery", deliveryId);
+
     return deliveryId;
   }
 
@@ -207,18 +215,22 @@ export class ThreadLedger {
         "SELECT thread_id FROM deliveries WHERE delivery_id = ?",
         deliveryId,
       ) ?? reject("not_found", "delivery");
+
     this.sql.run("DELETE FROM attachments WHERE delivery_id = ?", deliveryId);
     this.sql.run("DELETE FROM deliveries WHERE delivery_id = ?", deliveryId);
     this.ctx.indexDelete("delivery", deliveryId);
+
     const left = Number(
       this.sql.one<{ n: number }>(
         "SELECT COUNT(*) AS n FROM deliveries WHERE thread_id = ?",
         d.thread_id,
       )?.n ?? 0,
     );
+
     if (left === 0) this.move(d.thread_id, "trash", { messageCount: 0, newForYou: false }, null);
     else this.recount(d.thread_id);
     this.ctx.change("thread", "delivery-moved", { threadId: d.thread_id, deliveryId });
+
     return d.thread_id;
   }
 
@@ -258,6 +270,7 @@ export class ThreadLedger {
       revision,
       threadId,
     );
+
     return revision;
   }
 
@@ -285,29 +298,36 @@ export class ThreadLedger {
   ): void {
     const sets = ["disposition = ?", "disposition_at = ?"];
     const args: Array<string | number | null> = [disposition, this.ctx.now()];
+
     if (patch.newForYou !== undefined) {
       sets.push("new_for_you = ?");
       args.push(patch.newForYou ? 1 : 0);
     }
+
     if (patch.quarantined !== undefined) {
       sets.push("quarantined = ?");
       args.push(patch.quarantined ? 1 : 0);
     }
+
     if (patch.destination !== undefined) {
       sets.push("destination = ?");
       args.push(patch.destination);
     }
+
     if (patch.bundleKey !== undefined) {
       sets.push("bundle_key = ?");
       args.push(patch.bundleKey);
     }
+
     if (patch.seenRevision !== undefined)
       sets.push(
         patch.seenRevision === "revision" ? "seen_revision = revision" : "seen_revision = 0",
       );
+
     if (patch.messageCount !== undefined) sets.push("message_count = 0");
     this.sql.run(`UPDATE threads SET ${sets.join(", ")} WHERE thread_id = ?`, ...args, threadId);
     this.ctx.reindexThread(threadId);
+
     if (change !== null)
       this.ctx.change(
         "thread",
@@ -320,47 +340,56 @@ export class ThreadLedger {
 
   /** The only writer of bubble state and of the `bubble` scheduled job. Returns the job generation when scheduling. */
   setBubble(threadId: string, next: BubbleChange): number | undefined {
-    switch (next._tag) {
-      case "Scheduled": {
-        const generation = this.ctx.kernel.schedule("bubble", threadId, next.at, {});
-        this.sql.run(
-          `UPDATE threads SET bubble_tag = 'Scheduled', bubble_at = ?, bubble_generation = ?, bubble_condition = ?${next.resetSeen ? ", new_for_you = 0, seen_revision = revision" : ""} WHERE thread_id = ?`,
-          next.at,
-          generation,
-          next.condition,
-          threadId,
-        );
-        this.ctx.change("thread", "bubble", { threadId, at: next.at, condition: next.condition });
-        return generation;
-      }
-      case "Pinned":
-        this.ctx.kernel.cancelJob("bubble", threadId);
-        this.sql.run(
-          "UPDATE threads SET bubble_tag = 'Pinned', bubble_at = ?, bubble_generation = bubble_generation + 1 WHERE thread_id = ?",
-          this.ctx.now(),
-          threadId,
-        );
-        this.ctx.change("thread", "bubble", { threadId, pinned: true });
-        return undefined;
-      case "Popped":
-        this.ctx.kernel.cancelJob("bubble", threadId);
-        this.sql.run(
-          `UPDATE threads SET bubble_tag = 'None', bubble_at = NULL, bubble_generation = bubble_generation + 1,
+    return Match.value(next).pipe(
+      Match.tagsExhaustive({
+        Scheduled: (next): number | undefined => {
+          const generation = this.ctx.kernel.schedule("bubble", threadId, next.at, {});
+          this.sql.run(
+            `UPDATE threads SET bubble_tag = 'Scheduled', bubble_at = ?, bubble_generation = ?, bubble_condition = ?${next.resetSeen ? ", new_for_you = 0, seen_revision = revision" : ""} WHERE thread_id = ?`,
+            next.at,
+            generation,
+            next.condition,
+            threadId,
+          );
+          this.ctx.change("thread", "bubble", { threadId, at: next.at, condition: next.condition });
+
+          return generation;
+        },
+        Pinned: () => {
+          this.ctx.kernel.cancelJob("bubble", threadId);
+          this.sql.run(
+            "UPDATE threads SET bubble_tag = 'Pinned', bubble_at = ?, bubble_generation = bubble_generation + 1 WHERE thread_id = ?",
+            this.ctx.now(),
+            threadId,
+          );
+          this.ctx.change("thread", "bubble", { threadId, pinned: true });
+
+          return undefined;
+        },
+        Popped: (next) => {
+          this.ctx.kernel.cancelJob("bubble", threadId);
+          this.sql.run(
+            `UPDATE threads SET bubble_tag = 'None', bubble_at = NULL, bubble_generation = bubble_generation + 1,
              bubbled_at = ?, new_for_you = CASE WHEN ? THEN 1 ELSE new_for_you END WHERE thread_id = ?`,
-          this.ctx.now(),
-          next.surface,
-          threadId,
-        );
-        this.ctx.change("thread", "bubble", { threadId, popped: next.surface });
-        return undefined;
-      case "Invalidated":
-        this.ctx.kernel.cancelJob("bubble", threadId);
-        this.sql.run(
-          "UPDATE threads SET bubble_tag = 'None', bubble_at = NULL, bubble_generation = bubble_generation + 1 WHERE thread_id = ?",
-          threadId,
-        );
-        return undefined;
-    }
+            this.ctx.now(),
+            next.surface,
+            threadId,
+          );
+          this.ctx.change("thread", "bubble", { threadId, popped: next.surface });
+
+          return undefined;
+        },
+        Invalidated: () => {
+          this.ctx.kernel.cancelJob("bubble", threadId);
+          this.sql.run(
+            "UPDATE threads SET bubble_tag = 'None', bubble_at = NULL, bubble_generation = bubble_generation + 1 WHERE thread_id = ?",
+            threadId,
+          );
+
+          return undefined;
+        },
+      }),
+    );
   }
 
   // ---------------------------------------------------------------- sender policies (E02)
@@ -371,6 +400,7 @@ export class ThreadLedger {
       kind,
       normalizeAddress(subject),
     );
+
     return r ? toPolicy(r) : undefined;
   }
 
@@ -398,6 +428,7 @@ export class ThreadLedger {
         : "SELECT * FROM policy_history ORDER BY at DESC, history_id DESC",
       ...(subject ? [normalizeAddress(subject)] : []),
     );
+
     return rows.map((r) => ({
       historyId: r.history_id,
       kind: r.kind,
@@ -417,6 +448,7 @@ export class ThreadLedger {
       next: string | null;
       at: number;
     }>("SELECT * FROM policy_history WHERE history_id = ?", historyId);
+
     return r
       ? {
           historyId: r.history_id,
@@ -443,7 +475,9 @@ export class ThreadLedger {
   ): boolean {
     const subject = normalizeAddress(rawSubject);
     const prior = this.policy(kind, subject) ?? null;
+
     if (options.onlyIfAbsent && prior !== null) return false;
+
     if (policy === null) {
       this.sql.run("DELETE FROM sender_policies WHERE kind = ? AND subject = ?", kind, subject);
     } else {
@@ -462,6 +496,7 @@ export class ThreadLedger {
         this.ctx.now(),
       );
     }
+
     this.sql.run(
       "INSERT INTO policy_history (history_id, kind, subject, prior, next, at) VALUES (?, ?, ?, ?, ?, ?)",
       this.ctx.id("pol"),
@@ -471,11 +506,13 @@ export class ThreadLedger {
       policy ? JSON.stringify(policy) : null,
       this.ctx.now(),
     );
+
     // Allowed-sender destination/bundle changes apply to existing active threads.
     if (policy?.decision === "allowed") {
       // Domain match is a suffix comparison, not LIKE: DO SQLite caps LIKE patterns at 50 bytes.
       const match =
         kind === "address" ? "sender = ?" : "lower(substr(sender, -length(?))) = lower(?)";
+
       const args = kind === "address" ? [subject] : [`@${subject}`, `@${subject}`];
       this.sql.run(
         `UPDATE threads SET destination = ?, bundle_key = ? WHERE disposition = 'active' AND ${match}`,
@@ -484,7 +521,9 @@ export class ThreadLedger {
         ...args,
       );
     }
+
     this.ctx.change("policy", "updated", { kind, subject });
+
     return true;
   }
 }

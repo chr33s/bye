@@ -26,6 +26,12 @@ interface SearchKind {
   readonly visible: (id: string, q: SearchQuery) => MailboxSearchHit | null;
 }
 
+type IndexWatermarkResult = {
+  readonly watermark: number;
+  readonly lagging: boolean;
+  readonly pending: number;
+};
+
 export class MailboxSearch {
   private readonly kinds: Readonly<Record<string, SearchKind>>;
 
@@ -38,13 +44,16 @@ export class MailboxSearch {
   ) {
     const activeThread = (threadId: string) =>
       this.ledger.row(this.ledger.resolve(threadId))?.disposition === "active";
+
     this.kinds = {
       delivery: {
         bodySource: (id) => this.views.delivery(id)?.messageKey,
         doc: (id, version, bodyText) => {
           const d = this.views.delivery(id);
+
           if (!d) return null;
           const t = this.views.thread(this.ledger.require(d.threadId));
+
           return {
             docId: `delivery:${id}`,
             kind: "delivery",
@@ -63,8 +72,10 @@ export class MailboxSearch {
         },
         visible: (id, q) => {
           const d = this.views.delivery(id);
+
           if (!d) return null;
           const t = this.ledger.row(this.ledger.resolve(d.threadId));
+
           return t && this.threadMatchesQuery(t, d, q, organize)
             ? {
                 kind: "delivery",
@@ -79,6 +90,7 @@ export class MailboxSearch {
       note: {
         doc: (id, version) => {
           const n = organize.note(id);
+
           return n
             ? {
                 docId: `note:${id}`,
@@ -94,9 +106,11 @@ export class MailboxSearch {
         },
         visible: (id) => {
           const n = organize.note(id);
+
           const inTrash = n?.threadId
             ? this.ledger.row(this.ledger.resolve(n.threadId))?.disposition === "trash"
             : false;
+
           return n && !inTrash
             ? {
                 kind: "note",
@@ -111,6 +125,7 @@ export class MailboxSearch {
       contact: {
         doc: (id, version) => {
           const c = organize.contact(id);
+
           return c
             ? {
                 docId: `contact:${id}`,
@@ -127,6 +142,7 @@ export class MailboxSearch {
         },
         visible: (id) => {
           const k = organize.contact(id);
+
           return k
             ? {
                 kind: "contact",
@@ -141,6 +157,7 @@ export class MailboxSearch {
       clip: {
         doc: (id, version) => {
           const c = organize.clip(id);
+
           return c
             ? {
                 docId: `clip:${id}`,
@@ -156,6 +173,7 @@ export class MailboxSearch {
         },
         visible: (id) => {
           const c = organize.clip(id);
+
           return c && activeThread(c.threadId)
             ? {
                 kind: "clip",
@@ -170,6 +188,7 @@ export class MailboxSearch {
       upload: {
         doc: (id, version) => {
           const u = uploads.upload(id);
+
           return u && isServableUpload(u)
             ? {
                 docId: `upload:${id}`,
@@ -185,6 +204,7 @@ export class MailboxSearch {
         },
         visible: (id) => {
           const u = uploads.upload(id);
+
           return u && isServableUpload(u)
             ? {
                 kind: "upload",
@@ -199,6 +219,7 @@ export class MailboxSearch {
       label: {
         doc: (id, version) => {
           const l = organize.label(id);
+
           return l
             ? {
                 docId: `label:${id}`,
@@ -213,6 +234,7 @@ export class MailboxSearch {
         },
         visible: (id) => {
           const l = organize.label(id);
+
           return l ? { kind: "label", id, threadId: null, date: 0, snippet: l.name } : null;
         },
       },
@@ -245,6 +267,7 @@ export class MailboxSearch {
     query: string,
   ): ReadonlyArray<MailboxSearchHit> {
     const q = parseSearchQuery(query);
+
     const mailFiltered =
       q.scope === "trash" ||
       q.scope === "spam" ||
@@ -252,12 +275,16 @@ export class MailboxSearch {
       q.to.length > 0 ||
       q.labels.length > 0 ||
       q.hasAttachment !== undefined;
+
     const out: Array<MailboxSearchHit> = [];
+
     for (const c of candidates) {
       if (c.kind !== "delivery" && mailFiltered) continue;
       const hit = this.kinds[c.kind]?.visible(c.refId, q);
+
       if (hit) out.push(hit);
     }
+
     return out;
   }
 
@@ -268,25 +295,36 @@ export class MailboxSearch {
     organize: MailboxOrganizer,
   ): boolean {
     if (q.scope === "trash" && t.disposition !== "trash") return false;
+
     if (q.scope === "spam" && t.disposition !== "spam") return false;
+
     if (q.scope === "mail" && t.disposition !== "active" && t.disposition !== "screening")
       return false;
+
     if (t.quarantined === 1 && q.scope !== "spam" && q.scope !== "everything-including-trash")
       return false;
+
     // `in:<view>` means exactly what the view shows: the same SQL filter the view pages over.
     if (q.view && isMailView(q.view) && !this.views.inView(t.thread_id, q.view)) return false;
     const labels = organize.threadLabels(t.thread_id).map((l) => l.toLowerCase());
+
     for (const l of q.labels) if (!labels.includes(l.toLowerCase())) return false;
     const from = normalizeAddress(d.from.address);
+
     for (const f of q.from)
       if (!(f.includes("@") ? from === f : from.endsWith(`@${f}`) || from.includes(f)))
         return false;
     const to = [...d.to, ...d.cc].map((a) => normalizeAddress(a.address));
+
     for (const x of q.to)
       if (!to.some((a) => (x.includes("@") ? a === x : a.includes(x)))) return false;
+
     if (q.hasAttachment !== undefined && d.attachments.length > 0 !== q.hasAttachment) return false;
+
     if (q.before !== undefined && d.date >= q.before) return false;
+
     if (q.after !== undefined && d.date < q.after) return false;
+
     return true;
   }
 
@@ -306,6 +344,7 @@ export class MailboxSearch {
         this.ctx.now(),
       );
     }
+
     return this.sql
       .all<{ name: string; from_date: number; sealed_at: number | null; stored_bytes: number }>(
         "SELECT name, from_date, sealed_at, stored_bytes FROM search_shards ORDER BY from_date",
@@ -324,6 +363,7 @@ export class MailboxSearch {
    */
   searchPlacement(docKey: string, date: number): string {
     const existing = this.existingPlacement(docKey);
+
     if (existing) return existing;
     const shards = this.searchShards();
     const shard = [...shards].reverse().find((x) => x.fromDate <= date)?.name ?? shards[0]!.name;
@@ -332,6 +372,7 @@ export class MailboxSearch {
       docKey,
       shard,
     );
+
     return shard;
   }
 
@@ -351,6 +392,7 @@ export class MailboxSearch {
     return this.sql.tx(() => {
       this.sql.run("UPDATE search_shards SET stored_bytes = ? WHERE name = ?", storedBytes, name);
       const newest = this.searchShards().at(-1);
+
       if (!rollover || !newest || newest.name !== name) return { opened: null };
       const now = this.ctx.now();
       const opened = `search:${this.ctx.mailboxId}:${now}`;
@@ -362,6 +404,7 @@ export class MailboxSearch {
         now,
       );
       this.ctx.change("search", "shard-opened", { name: opened });
+
       return { opened };
     });
   }
@@ -374,15 +417,13 @@ export class MailboxSearch {
   }
 
   /** Honest indexing watermark: everything at or below it is reflected in search. */
-  indexWatermark(): {
-    readonly watermark: number;
-    readonly lagging: boolean;
-    readonly pending: number;
-  } {
+  indexWatermark(): IndexWatermarkResult {
     const r = this.sql.one<{ n: number; m: number | null }>(
       "SELECT COUNT(*) AS n, MIN(emitted_seq) AS m FROM index_pending",
     );
+
     const pending = Number(r?.n ?? 0);
+
     return {
       watermark: pending > 0 ? Math.max(0, Number(r?.m ?? 0)) : this.ctx.kernel.currentSeq(),
       lagging: pending > 0,
@@ -393,11 +434,13 @@ export class MailboxSearch {
   /** Re-emit index events that stayed unacknowledged across a reconcile (lost/dead-lettered). */
   replayPendingIndex(limit = 200): number {
     const since = this.ctx.setting<number>("index:lastReconcileSeq", 0);
+
     const stale = this.sql.all<{ doc_key: string }>(
       "SELECT doc_key FROM index_pending WHERE emitted_seq <= ? LIMIT ?",
       since,
       limit,
     );
+
     for (const r of stale) {
       const i = r.doc_key.indexOf(":");
       this.ctx.kernel.outbox("index", this.ctx.mailboxId, {
@@ -406,7 +449,9 @@ export class MailboxSearch {
         id: r.doc_key.slice(i + 1),
       });
     }
+
     this.ctx.putSetting("index:lastReconcileSeq", this.ctx.kernel.currentSeq());
+
     return stale.length;
   }
 }

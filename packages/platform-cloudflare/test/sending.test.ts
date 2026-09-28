@@ -7,10 +7,12 @@ import { MemoryD1, TestClock } from "@bye/testing";
 const setup = async () => {
   const d1 = MemoryD1.migrated();
   const clock = new TestClock();
+
   const alice = await new ControlDirectory(d1, clock).provisionPersonalAccount({
     address: "alice@bye.test",
     displayName: "Alice",
   });
+
   return { d1, clock, alice, policy: new SendingPolicy(d1, clock) };
 };
 

@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { HOSTED_INSTANCE_URL, normalizeInstanceUrl } from "@bye/native-shared/instance";
 import type { CliConfig } from "./client.ts";
+import { Predicate } from "effect";
+import { isJsonObject, type JsonValue } from "./json.ts";
 
 // CLI configuration (spec §10 CLI). Scoped credentials are stored owner-readable only,
 // one entry per normalized instance URL, and are only ever sent to that exact instance.
@@ -52,35 +54,43 @@ export const targetOptions = (env: TargetEnv) =>
 export const normalizeTarget = (raw: string, env: TargetEnv = {}): string => {
   const input = raw.trim();
   const n = normalizeInstanceUrl(input, targetOptions(env));
+
   if (!n.ok)
     throw new TargetError(`invalid instance address ${JSON.stringify(input)}: ${n.reason}`);
+
   return n.url;
 };
 
 /** v1 files held one `apiUrl` and its token; they become that instance's entry and selection. */
-export const migrateConfig = (raw: unknown, env: TargetEnv = {}): StoredConfig => {
-  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  if (o.version === 2 && o.instances && typeof o.instances === "object") {
+export const migrateConfig = (raw: JsonValue, env: TargetEnv = {}): StoredConfig => {
+  const o = isJsonObject(raw) ? raw : {};
+
+  if (o.version === 2 && o.instances && isJsonObject(o.instances)) {
     return {
       version: 2,
-      selected: typeof o.selected === "string" ? o.selected : null,
+      selected: Predicate.isString(o.selected) ? o.selected : null,
       instances: o.instances as Record<string, SavedInstance>,
     };
   }
-  if (typeof o.apiUrl === "string") {
+
+  if (Predicate.isString(o.apiUrl)) {
     let url: string;
+
     try {
       url = normalizeTarget(o.apiUrl, env);
     } catch {
       return EMPTY_CONFIG; // an unusable old address is dropped with its token, never re-targeted
     }
+
     const entry: SavedInstance = {
-      ...(typeof o.token === "string" ? { token: o.token } : {}),
-      ...(typeof o.mailboxId === "string" ? { mailboxId: o.mailboxId } : {}),
-      ...(typeof o.calendarId === "string" ? { calendarId: o.calendarId } : {}),
+      token: Predicate.isString(o.token) ? o.token : undefined,
+      mailboxId: Predicate.isString(o.mailboxId) ? o.mailboxId : undefined,
+      calendarId: Predicate.isString(o.calendarId) ? o.calendarId : undefined,
     };
+
     return { version: 2, selected: url, instances: { [url]: entry } };
   }
+
   return EMPTY_CONFIG;
 };
 
@@ -88,6 +98,7 @@ export const migrateConfig = (raw: unknown, env: TargetEnv = {}): StoredConfig =
 export const resolveTarget = (stored: StoredConfig, env: TargetEnv): CliConfig => {
   let apiUrl: string;
   let source: TargetSource;
+
   if (env.BYE_API !== undefined && env.BYE_API !== "") {
     apiUrl = normalizeTarget(env.BYE_API, env);
     source = "BYE_API";
@@ -98,7 +109,9 @@ export const resolveTarget = (stored: StoredConfig, env: TargetEnv): CliConfig =
     apiUrl = HOSTED_INSTANCE_URL;
     source = "hosted";
   }
+
   const saved = stored.instances[apiUrl];
+
   return {
     apiUrl,
     source,
@@ -144,6 +157,7 @@ export const withInstance = (
 
 export const withoutInstance = (stored: StoredConfig, url: string): StoredConfig => {
   const { [url]: _removed, ...rest } = stored.instances;
+
   return {
     version: 2,
     selected: stored.selected === url ? null : stored.selected,

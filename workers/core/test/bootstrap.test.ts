@@ -6,16 +6,13 @@ import type { CoreEnv } from "../src/env.ts";
 import { Effect } from "effect";
 import { Authorization } from "@bye/application";
 import { controlAdapters, policyLayers } from "../src/services.ts";
-import { makeHarness } from "./harness.ts";
+import { type JsonRecord, makeHarness, executionContext } from "./harness.ts";
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const ctx = executionContext;
 
 const TOKEN = "b".repeat(43);
 
-const signup = async (env: CoreEnv, body: Record<string, unknown>) => {
+const signup = async (env: CoreEnv, body: JsonRecord) => {
   const r = await handleFetch(
     new Request(`${env.APP_ORIGIN}/auth/signup`, {
       method: "POST",
@@ -25,6 +22,7 @@ const signup = async (env: CoreEnv, body: Record<string, unknown>) => {
     env,
     ctx,
   );
+
   return {
     status: r.status,
     body: (await r.json().catch(() => null)) as { userId?: string } | null,
@@ -39,6 +37,7 @@ describe("first-account bootstrap", () => {
     turnstileCalls = 0;
     globalThis.fetch = (async () => {
       turnstileCalls++;
+
       return Response.json({ success: false });
     }) as typeof fetch;
   });
@@ -50,6 +49,7 @@ describe("first-account bootstrap", () => {
   const harness = (token = TOKEN) => {
     const h = makeHarness();
     (h.env as { BOOTSTRAP_TOKEN?: string }).BOOTSTRAP_TOKEN = token;
+
     return h;
   };
 
@@ -59,12 +59,14 @@ describe("first-account bootstrap", () => {
     expect(first.status).toBe(201);
     expect(turnstileCalls).toBe(0);
     expect((await controlAdapters(env)).operators).toContain(first.body!.userId);
+
     // The same operator on the non-HTTP policy path (inbound resolution, dispatch claim).
     const isOperator = await Effect.runPromise(
       Effect.gen(function* () {
         return (yield* Authorization).isOperator(first.body!.userId!);
       }).pipe(Effect.provide(await policyLayers(env))),
     );
+
     expect(isOperator).toBe(true);
 
     // Single use: the same link can't create a second account.
@@ -132,7 +134,8 @@ describe("first-account bootstrap", () => {
       APP_ORIGIN: "https://bye.example.com",
       BOOTSTRAP_ADDRESS_DOMAIN: "example.com",
     });
-    const req = (body: Record<string, unknown>) =>
+
+    const req = (body: JsonRecord) =>
       handleFetch(
         new Request("https://bye.example.com/auth/signup", {
           method: "POST",
@@ -142,6 +145,7 @@ describe("first-account bootstrap", () => {
         env,
         ctx,
       );
+
     // Another domain (including the app hostname) is refused before the claim is taken.
     expect((await req({ address: "chris@other.test", bootstrap: TOKEN })).status).toBe(400);
     expect((await req({ address: "chris@bye.example.com", bootstrap: TOKEN })).status).toBe(400);
@@ -149,12 +153,14 @@ describe("first-account bootstrap", () => {
     expect(ok.status).toBe(201);
     const { userId } = (await ok.json()) as { userId: string };
     expect((await controlAdapters(env)).operators).toContain(userId);
+
     // The personal organization's membership is `owner`.
     const role = await env.DIRECTORY.prepare(
       "SELECT m.role AS role FROM memberships m WHERE m.user_id = ?",
     )
       .bind(userId)
       .first<{ role: string }>();
+
     expect(role?.role).toBe("owner");
     // Reused token: refused.
     expect((await req({ address: "other@example.com", bootstrap: TOKEN })).status).toBe(403);

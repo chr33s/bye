@@ -1,7 +1,7 @@
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Predicate } from "effect";
 import { describe, expect, it } from "vitest";
 import {
-  arcChainShape,
+  arcChainSummary,
   arcInstanceCount,
   arcSeal,
   arcSigningData,
@@ -22,7 +22,11 @@ import {
 } from "@bye/platform-cloudflare";
 
 type Key = Awaited<ReturnType<typeof crypto.subtle.importKey>>;
+
+type KeyPair = { readonly privateKey: Key; readonly publicKey: Key };
+
 const DAY = 86_400_000;
+
 const srs = { secret: "test-srs-secret", domain: "fwd.bye.test" };
 
 describe("SRS (sender rewriting)", () => {
@@ -76,10 +80,13 @@ describe("SRS (sender rewriting)", () => {
 });
 
 const signer = async (): Promise<{ signer: ArcSigner; publicKey: Key }> => {
-  const pair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+  const generated: unknown = await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
     "sign",
     "verify",
-  ])) as unknown as { publicKey: Key; privateKey: Key };
+  ]);
+
+  const pair = generated as KeyPair;
+
   return {
     signer: {
       algorithm: "ed25519-sha256",
@@ -113,6 +120,7 @@ describe("ARC sealing (RFC 8617, RFC 6376 relaxed, RFC 8463)", () => {
 
   it("[E22] seals i=1 with cv=none and signatures that verify with the public key", async () => {
     const { signer: s, publicKey } = await signer();
+
     const sealed = await arcSeal({
       raw: MSG,
       signer: s,
@@ -120,7 +128,8 @@ describe("ARC sealing (RFC 8617, RFC 6376 relaxed, RFC 8463)", () => {
       priorChain: "none",
       now: 1_790_000_000_000,
     });
-    if (sealed._tag !== "Sealed") throw new Error("expected sealed");
+
+    if (!Predicate.isTagged(sealed, "Sealed")) throw new Error("expected sealed");
     const { headers, body } = splitMessage(sealed.raw);
     expect(arcInstanceCount(headers)).toBe(1);
     const as = headers.find(([n]) => n === "ARC-Seal")![1];
@@ -141,10 +150,12 @@ describe("ARC sealing (RFC 8617, RFC 6376 relaxed, RFC 8463)", () => {
     ).toBe(true);
     // Verify AS over AAR, AMS and AS(b=).
     const asNoB = as.replace(/b=[^;]*$/, "b=");
+
     const sealData =
       relaxedHeader("ARC-Authentication-Results", aar) +
       relaxedHeader("ARC-Message-Signature", ams) +
       relaxedHeader("ARC-Seal", asNoB).replace(/\r\n$/, "");
+
     expect(await verifyEd(publicKey, /b=([^;]*)$/.exec(as)![1]!, sealData)).toBe(true);
     // A modified body breaks the body hash.
     expect(await bodyHash(`${body}tampered`)).not.toBe(/bh=([^;]+);/.exec(ams)![1]);
@@ -152,38 +163,46 @@ describe("ARC sealing (RFC 8617, RFC 6376 relaxed, RFC 8463)", () => {
 
   it("[E22] later instances report cv from our MX's ARC verdict and the chain stops at 50", async () => {
     const { signer: s } = await signer();
+
     const one = await arcSeal({
       raw: MSG,
       signer: s,
       authResults: "mx.bye.test; arc=none",
       priorChain: "none",
     });
+
     const two = await arcSeal({
       raw: (one as { raw: string }).raw,
       signer: s,
       authResults: "mx.bye.test; arc=pass",
       priorChain: "pass",
     });
+
     expect(two).toMatchObject({ _tag: "Sealed", instance: 2 });
     expect(
       splitMessage((two as { raw: string }).raw).headers.find(([n]) => n === "ARC-Seal")![1],
     ).toMatch(/i=2;.*cv=pass/);
+
     const failed = await arcSeal({
       raw: (one as { raw: string }).raw,
       signer: s,
       authResults: "mx.bye.test; arc=fail",
       priorChain: "fail",
     });
+
     expect(
       splitMessage((failed as { raw: string }).raw).headers.find(([n]) => n === "ARC-Seal")![1],
     ).toMatch(/cv=fail/);
     // A genuine, contiguous 50-set chain is a loop.
     let chain = MSG;
+
     for (let i = 1; i <= 50; i++) {
       const sealed = await arcSeal({ raw: chain, signer: s, authResults: "x", priorChain: "pass" });
-      if (sealed._tag !== "Sealed") throw new Error(`expected sealed at ${i}`);
+
+      if (!Predicate.isTagged(sealed, "Sealed")) throw new Error(`expected sealed at ${i}`);
       chain = sealed.raw;
     }
+
     expect(
       (await arcSeal({ raw: chain, signer: s, authResults: "x", priorChain: "pass" }))._tag,
     ).toBe("LoopLimit");
@@ -191,6 +210,7 @@ describe("ARC sealing (RFC 8617, RFC 6376 relaxed, RFC 8463)", () => {
 
   it("[E22] a planted high ARC instance is a broken chain (cv=fail), not a forced loop rejection", async () => {
     const { signer: s } = await signer();
+
     for (const planted of [
       `ARC-Seal: i=50; a=ed25519-sha256; cv=pass; d=x; s=y; b=z\r\n${MSG}`,
       `ARC-Seal: i=9999; a=ed25519-sha256; cv=pass; d=x; s=y; b=z\r\n${MSG}`,
@@ -203,24 +223,29 @@ describe("ARC sealing (RFC 8617, RFC 6376 relaxed, RFC 8463)", () => {
         authResults: "x",
         priorChain: "pass",
       });
+
       expect(sealed._tag).toBe("Sealed");
       const as = splitMessage((sealed as { raw: string }).raw).headers[0]!;
       expect(as[0]).toBe("ARC-Seal");
       expect(as[1]).toMatch(/cv=fail/);
     }
-    expect(arcChainShape(splitMessage(MSG).headers)).toEqual({ _tag: "None" });
+
+    expect(arcChainSummary(splitMessage(MSG).headers)).toEqual({ _tag: "None" });
   });
 
   it("[E22] only the topmost Authentication-Results (our MX) is trusted; forged lower ones are ignored", () => {
     const forged = splitMessage(
       "Authentication-Results: mx.cloudflare.net; spf=fail; dkim=fail; arc=fail\r\nAuthentication-Results: mx.cloudflare.net; spf=pass; arc=pass\r\nFrom: a@b.test\r\n\r\nx",
     ).headers;
+
     expect(trustedResults(forged)).toMatchObject({ arc: "fail" });
     expect(trustedResults(forged).results).toContain("spf=fail");
+
     // Sender-supplied header below a foreign top header: untrusted, defaults to cv=fail.
     const spoof = splitMessage(
       "Authentication-Results: other.example; spf=none\r\nAuthentication-Results: mx.cloudflare.net; arc=pass\r\n\r\nx",
     ).headers;
+
     expect(trustedResults(spoof)).toEqual({ results: "none", arc: "fail" });
     expect(trustedResults(splitMessage("From: a@b.test\r\n\r\nx").headers).arc).toBe("fail");
   });
@@ -230,6 +255,7 @@ describe("ForwardingTransport", () => {
   it("[E22] forwards the original with an SRS envelope, loop marker and ARC set", async () => {
     const { signer: s } = await signer();
     const calls: Array<{ body: { from: string; raw: string } }> = [];
+
     const adapter = makeSealedForwardingTransport(
       {
         endpoint: "https://fwd.provider.test/send",
@@ -242,9 +268,11 @@ describe("ForwardingTransport", () => {
       async (_u, init) => {
         const json = JSON.parse(String(init.body)) as { from: string; raw: string };
         calls.push({ body: { ...json, raw: atob(json.raw) } });
+
         return { status: 202, json: async () => ({ id: "p1" }), text: async () => "" };
       },
     );
+
     const exit = await Effect.runPromiseExit(
       adapter.submit({
         sendJobId: "snd_1",
@@ -256,6 +284,7 @@ describe("ForwardingTransport", () => {
         bytes: 100,
       }),
     );
+
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(calls[0]!.body.from).toMatch(/^SRS0=.+=example\.com=alice@fwd\.bye\.test$/);
     expect(calls[0]!.body.raw).toMatch(/^ARC-Seal:/);
@@ -267,13 +296,16 @@ describe("ForwardingTransport", () => {
     const head = new TextEncoder().encode(
       "From: a@example.com\r\nContent-Transfer-Encoding: 8bit\r\n\r\ncaf",
     );
+
     const original = new Uint8Array([...head, 0xe9, 0xff, 0x0d, 0x0a]);
+
     const prepared = await prepareForward(
       { endpoint: "", apiKey: "", srs, signer: null, authservId: "mx" },
       original,
       "bob@bye.test",
     );
-    if (prepared._tag !== "Ready") throw new Error("expected ready");
+
+    if (!Predicate.isTagged(prepared, "Ready")) throw new Error("expected ready");
     expect(prepared.raw.slice(prepared.raw.length - original.length)).toEqual(original);
   });
 
@@ -309,12 +341,15 @@ describe("ExternalIdentityTransport", () => {
       clientId: "c",
       expiresAt: 0,
     };
+
     const calls: Array<string> = [];
+
     const adapter = makeExternalIdentityApiTransport(
       { resolve: async () => stored, persist: async (_f, c) => void (stored = c) },
       { load: async () => "From: me@gmail.test\r\n\r\nhi" },
       async (url, init) => {
         calls.push(url);
+
         if (url.startsWith("https://oauth.test"))
           return {
             status: 200,
@@ -328,9 +363,11 @@ describe("ExternalIdentityTransport", () => {
             .replace(/\//g, "_")
             .replace(/=+$/, ""),
         );
+
         return { status: 200, json: async () => ({ id: "gm-1" }), text: async () => "" };
       },
     );
+
     const result = await Effect.runPromise(adapter.submit(submission));
     expect(result.providerId).toBe("gm-1");
     expect(stored.accessToken).toBe("new");
@@ -346,8 +383,10 @@ describe("ExternalIdentityTransport", () => {
       { load: async () => "x" },
       async () => ({ status: 200, json: async () => ({}), text: async () => "" }),
     );
+
     const e1 = await Effect.runPromiseExit(none.submit(submission));
     expect(JSON.stringify(e1)).toContain("no authorized credential");
+
     const flaky = makeExternalIdentityApiTransport(
       {
         resolve: async () => ({
@@ -362,6 +401,7 @@ describe("ExternalIdentityTransport", () => {
         throw new Error("reset");
       },
     );
+
     const e2 = await Effect.runPromiseExit(flaky.submit(submission));
     expect(JSON.stringify(e2)).toContain("Unknown");
   });
@@ -375,26 +415,32 @@ describe("ExternalIdentityTransport", () => {
       clientId: "c",
       expiresAt: 0,
     };
+
     let refreshes = 0;
     let persists = 0;
     const signals: Array<AbortSignal | undefined> = [];
+
     const adapter = makeExternalIdentityApiTransport(
       { resolve: async () => stored, persist: async (_f, c) => void (persists++, (stored = c)) },
       { load: async () => "From: me@gmail.test\r\n\r\nhi" },
       async (url, init) => {
         signals.push(init.signal);
+
         if (url.startsWith("https://oauth.test")) {
           refreshes++;
           await new Promise((r) => setTimeout(r, 10));
+
           return {
             status: 200,
             json: async () => ({ access_token: "new", refresh_token: "r2", expires_in: 3600 }),
             text: async () => "",
           };
         }
+
         return { status: 202, json: async () => ({}), text: async () => "" };
       },
     );
+
     await Promise.all([
       Effect.runPromise(adapter.submit(submission)),
       Effect.runPromise(adapter.submit(submission)),

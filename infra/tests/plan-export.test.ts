@@ -1,61 +1,64 @@
 // plan-export maps the Alchemy engine's plan snapshot to reviewable rows. The engine itself needs
 // cloud credentials, so its `Stack.plan` is replaced by a fixed snapshot here.
-import { Effect, Layer } from "effect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Effect } from "effect";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  exportPlan as exportPlanWith,
+  type PlanRequest,
+  type PlanRunner,
+} from "../policies/plan-export.ts";
 
-const planned = vi.hoisted(() => ({ requests: [] as Array<unknown> }));
-vi.mock("alchemy/Alchemist", () => ({
-  layer: () => Layer.empty,
-  Stack: {
-    plan: (request: unknown) => {
-      planned.requests.push(request);
-      return Effect.succeed({
-        stack: { name: "MailboxPlatform", stage: "dev-ci" },
-        resources: [
-          {
-            fqn: "MailboxPlatform/MailCore",
-            logicalId: "MailCore",
-            resourceType: "Cloudflare.Worker",
-            action: "update",
-          },
-          {
-            fqn: "MailboxPlatform/Site",
-            logicalId: "Site",
-            resourceType: "Cloudflare.Worker",
-            action: "create",
-          },
-          {
-            fqn: "MailboxPlatform/Db",
-            logicalId: "Db",
-            resourceType: "Cloudflare.D1Database",
-            action: "noop",
-          },
-          {
-            fqn: "MailboxPlatform/Gone",
-            logicalId: "Gone",
-            resourceType: "Cloudflare.Worker",
-            action: "delete",
-          },
-        ],
-        native: {
-          resources: {
-            "MailboxPlatform/MailCore": {
-              resource: { Type: "Cloudflare.Worker" },
-              props: { env: { DB: {}, SESSION_KEY: "secret-value" } },
-            },
-            "MailboxPlatform/Site": { resource: { Type: "Cloudflare.Worker" }, props: {} },
-            "MailboxPlatform/Db": {
-              resource: { Type: "Cloudflare.D1Database" },
-              props: { env: { NOT_A_WORKER: 1 } },
-            },
-          },
+const planned = { requests: [] as Array<PlanRequest> };
+
+const fixedPlan: PlanRunner = (request: PlanRequest) => {
+  planned.requests.push(request);
+
+  return Effect.succeed({
+    stack: { name: "MailboxPlatform", stage: "dev-ci" },
+    resources: [
+      {
+        fqn: "MailboxPlatform/MailCore",
+        logicalId: "MailCore",
+        resourceType: "Cloudflare.Worker",
+        action: "update",
+      },
+      {
+        fqn: "MailboxPlatform/Site",
+        logicalId: "Site",
+        resourceType: "Cloudflare.Worker",
+        action: "create",
+      },
+      {
+        fqn: "MailboxPlatform/Db",
+        logicalId: "Db",
+        resourceType: "Cloudflare.D1Database",
+        action: "noop",
+      },
+      {
+        fqn: "MailboxPlatform/Gone",
+        logicalId: "Gone",
+        resourceType: "Cloudflare.Worker",
+        action: "delete",
+      },
+    ],
+    native: {
+      resources: {
+        "MailboxPlatform/MailCore": {
+          resource: { Type: "Cloudflare.Worker" },
+          props: { env: { DB: {}, SESSION_KEY: "secret-value" } },
         },
-      });
+        "MailboxPlatform/Site": { resource: { Type: "Cloudflare.Worker" }, props: {} },
+        "MailboxPlatform/Db": {
+          resource: { Type: "Cloudflare.D1Database" },
+          props: { env: { NOT_A_WORKER: 1 } },
+        },
+      },
     },
-  },
-}));
+  } as never);
+};
 
-const { exportPlan } = await import("../policies/plan-export.ts");
+const exportPlan = (stage: string, operation: "deploy" | "destroy") =>
+  exportPlanWith(stage, operation, undefined, fixedPlan);
 
 describe("plan export", () => {
   beforeEach(() => {

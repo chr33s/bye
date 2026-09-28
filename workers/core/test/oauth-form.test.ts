@@ -38,6 +38,7 @@ describe("[§10] capped OAuth form bodies", () => {
         "content-type": "application/json",
       }),
     );
+
     expect(form.get("client_id")).toBe("bye-desktop");
   });
 });

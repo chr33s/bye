@@ -19,6 +19,7 @@ export const guardD1 = async <T>(op: string, fn: () => Promise<T>): Promise<T> =
     return await fn();
   } catch (error) {
     if (isRejection(error)) throw error;
+
     return reject("unavailable", `${op}: directory unavailable`);
   }
 };

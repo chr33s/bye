@@ -9,7 +9,9 @@ import { reject } from "@bye/contracts";
 // on the user's own log, and revoking the grant ends all its sessions immediately.
 
 export const SUPPORT_MAX_HOURS = 72;
+
 export const SUPPORT_SESSION_MS = 60 * 60_000;
+
 export const SUPPORT_TOKEN_PREFIX = "bsp_";
 
 export class ControlSupport {
@@ -24,6 +26,7 @@ export class ControlSupport {
     hours: number,
   ): Promise<{ readonly id: string; readonly expiresAt: number }> {
     if (!reason.trim() || reason.length > 500) reject("bad_request", "reason required");
+
     if (!(hours > 0 && hours <= SUPPORT_MAX_HOURS))
       reject("bad_request", `grant must be 1–${SUPPORT_MAX_HOURS} hours`);
     const id = this.clock.id("sup");
@@ -45,6 +48,7 @@ export class ControlSupport {
         detail: { hours },
       }),
     ]);
+
     return { id, expiresAt };
   }
 
@@ -63,6 +67,7 @@ export class ControlSupport {
         target: grantId,
       }),
     ]);
+
     return changesOf(results[0]) === 1;
   }
 
@@ -76,6 +81,7 @@ export class ControlSupport {
     }>
   > {
     const now = this.clock.now();
+
     const rows = await q(
       primary(this.db),
       "SELECT id, reason, granted_at, expires_at, revoked_at FROM support_grants WHERE user_id = ? ORDER BY granted_at DESC LIMIT 50",
@@ -87,6 +93,7 @@ export class ControlSupport {
       expires_at: number;
       revoked_at: number | null;
     }>();
+
     return rows.results.map((r) => ({
       id: r.id,
       reason: r.reason,
@@ -108,7 +115,9 @@ export class ControlSupport {
         grantId,
       ).first<{ user_id: string; expires_at: number; revoked_at: number | null }>(),
     );
+
     const now = this.clock.now();
+
     if (!g || g.revoked_at !== null || g.expires_at <= now)
       return reject("forbidden", "no active support grant");
     const token = `${SUPPORT_TOKEN_PREFIX}${randomToken()}`;
@@ -130,6 +139,7 @@ export class ControlSupport {
         detail: { operatorId },
       }),
     ]);
+
     return { token, expiresAt, userId: g.user_id };
   }
 
@@ -140,6 +150,7 @@ export class ControlSupport {
     readonly operatorId: string;
   } | null> {
     const now = this.clock.now();
+
     const row = await guardD1("support", async () =>
       q(
         primary(this.db),
@@ -150,6 +161,7 @@ export class ControlSupport {
         now,
       ).first<{ grant_id: string; operator_id: string; user_id: string }>(),
     );
+
     if (!row) return null;
     await audit(this.db, this.clock, {
       actorId: row.user_id,
@@ -157,6 +169,7 @@ export class ControlSupport {
       target: row.grant_id,
       detail: { operatorId: row.operator_id },
     }).run();
+
     return { grantId: row.grant_id, userId: row.user_id, operatorId: row.operator_id };
   }
 }

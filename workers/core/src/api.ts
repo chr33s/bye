@@ -55,8 +55,10 @@ type LiveTarget = { readonly kind: "mailbox" | "calendar" | "space"; readonly id
 const liveTarget = (params: URLSearchParams): LiveTarget | null => {
   const given = (["mailbox", "calendar", "space"] as const).flatMap((kind) => {
     const id = params.get(kind);
+
     return id ? [{ kind, id }] : [];
   });
+
   return given.length === 1 && /^[A-Za-z0-9_-]{1,128}$/.test(given[0]!.id) ? given[0]! : null;
 };
 
@@ -69,6 +71,7 @@ const authorizeLive = (env: CoreEnv, target: LiveTarget) =>
     if (target.kind === "mailbox")
       return yield* requireMailbox(target.id, "read").pipe(Effect.asVoid);
     const principal = yield* requireScope("read");
+
     const allowed =
       target.kind === "calendar"
         ? yield* Effect.promise(() =>
@@ -84,6 +87,7 @@ const authorizeLive = (env: CoreEnv, target: LiveTarget) =>
                 () => false,
               ),
           );
+
     if (!allowed) return yield* new Forbidden({ reason: `no access to this ${target.kind}` });
   });
 
@@ -98,6 +102,7 @@ const healthz = async (env: CoreEnv): Promise<Response> => {
       (r) => Number(r?.ok) === 1,
       () => false,
     );
+
   return new Response(ok ? "ok" : "unavailable", {
     status: ok ? 200 : 503,
     headers: {
@@ -116,6 +121,7 @@ export const handleFetch = async (
 ): Promise<Response> => {
   const onRenderOrigin = new URL(request.url).host === new URL(env.MAIL_ORIGIN).host;
   const response = await routeFetch(request, env, ctx);
+
   return withSecurityHeaders(response, onRenderOrigin ? new URL(env.APP_ORIGIN).origin : "'none'");
 };
 
@@ -133,7 +139,9 @@ const routeFetch = async (
   if (url.host === mailHost) {
     if (url.pathname.startsWith("/render/"))
       return handleRender(request, env, safeDecode(url.pathname.slice(8)) ?? "");
+
     if (url.pathname === "/img") return handleImageProxy(request, env);
+
     return new Response("not found", { status: 404 });
   }
 
@@ -142,28 +150,34 @@ const routeFetch = async (
     if (request.headers.get("upgrade") !== "websocket")
       return errorResponse("bad_request", "websocket required");
     const target = liveTarget(url.searchParams);
+
     if (!target)
       return errorResponse("bad_request", "exactly one of mailbox, calendar or space is required");
+
     // Cross-site WebSocket hijacking: browsers attach the session cookie to a socket opened from
     // any page, and upgrades aren't subject to CORS. A cookie-authenticated upgrade must come from
     // the app origin; bearer upgrades (CLI, native — a browser can't set Authorization on a
     // WebSocket) may omit Origin.
     if (!bearer(request) && request.headers.get("origin") !== env.APP_ORIGIN)
       return errorResponse("forbidden", "cross-origin socket rejected");
+
     // Authorize before handing the socket to the authority. The socket is tagged with the
     // authenticated credential (never a client-supplied value) so revocation closes exactly it.
     const authorized = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const auth = yield* authenticate(request, env);
         yield* authorizeLive(env, target).pipe(Effect.provide(requestAuthLayer(auth)));
+
         return auth.credentialId;
       }),
     );
+
     if (Exit.isFailure(authorized)) return runHttp(Effect.failCause(authorized.cause), requestId());
     const credential = authorized.value;
     const headers = new Headers(request.headers);
     headers.set("x-bye-credential", credential);
     const forwarded = new Request(request, { headers });
+
     switch (target.kind) {
       case "mailbox":
         return env.MAILBOXES.getByName(target.id).fetch(forwarded);
@@ -175,20 +189,26 @@ const routeFetch = async (
   }
 
   let match: ReturnType<typeof matchRoute<CoreEnv>>;
+
   try {
     match = matchRoute(ALL_ROUTES, request.method, url.pathname);
   } catch {
     return errorResponse("bad_request", "malformed path");
   }
+
   if (match === "method-not-allowed") return errorResponse("bad_request", "method not allowed");
+
   if (!match) return errorResponse("not_found", "not found");
+
   try {
     return await match.route.handler(request, match.params, env, ctx);
   } catch (error) {
     if (error instanceof Unauthenticated)
       return errorResponse("unauthenticated", "unauthenticated");
     const tag = (error as { _tag?: string })._tag;
+
     if (tag === "PayloadTooLarge") return errorResponse("payload_too_large", "payload too large");
+
     if (tag === "BadRequest") return errorResponse("bad_request", "invalid JSON");
     console.error(
       JSON.stringify({
@@ -198,6 +218,7 @@ const routeFetch = async (
         error: describeError(error),
       }),
     );
+
     return errorResponse("internal", "internal error");
   }
 };

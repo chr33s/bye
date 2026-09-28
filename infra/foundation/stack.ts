@@ -40,17 +40,20 @@ export const stateEnv = {
   STATE_BUILD_HASH: stateBuildHash(),
 };
 
-export const makeStateWorker = (domain: string | undefined) =>
-  Cloudflare.Worker("ByeStateStore", {
+export const makeStateWorker = (domain: string | undefined) => {
+  const custom = domain ? { domain } : undefined;
+
+  return Cloudflare.Worker("ByeStateStore", {
     main: "./infra/state/worker.ts",
     compatibility: COMPATIBILITY,
     // Reachable only through the reviewed custom domain; no workers.dev exposure.
     workersDev: false,
     logpush: false,
     observability: { enabled: true, headSamplingRate: 1 },
-    ...(domain ? { domain } : {}),
+    ...custom,
     env: stateEnv,
   });
+};
 
 /**
  * Zone-level WAF (§15.4 protection and caching). The foundation owns each service zone's custom
@@ -117,6 +120,7 @@ export default Alchemy.Stack(
     const worker = yield* makeStateWorker(domain || undefined).pipe(retain);
     // Adopt (never create) each service zone, then own its custom firewall and rate-limit phases.
     const zones = yield* Config.String("BYE_SERVICE_ZONE").pipe(Config.withDefault(""));
+
     for (const { name, id } of serviceZones(zones)) {
       const zone = yield* Cloudflare.Zone.Zone(`ServiceZone${id}`, { name }).pipe(retain);
       yield* Cloudflare.Ruleset.Ruleset(`WafRules${id}`, {
@@ -133,6 +137,7 @@ export default Alchemy.Stack(
         })),
       }).pipe(retain);
     }
+
     return { stateUrl: worker.url.as<string>() };
   }),
 );

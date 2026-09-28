@@ -26,6 +26,7 @@ const reload = () => window.dispatchEvent(new HashChangeEvent("hashchange"));
  */
 const setupForm = (config: NewsletterConfigView): HTMLElement => {
   const repair = config.status === "needs-attention" && config.configuredAt !== undefined;
+
   const key = h("input", {
     type: "password",
     name: "apiKey",
@@ -34,6 +35,7 @@ const setupForm = (config: NewsletterConfigView): HTMLElement => {
     placeholder: "re_…",
     required: true,
   });
+
   return section(
     "newsletters-title",
     repair ? "Reconnect newsletters" : "Set up newsletters",
@@ -89,12 +91,15 @@ export const newsletterGate = (
   config: NewsletterConfigView,
 ): "open" | "setup" | "not-configured" | "unavailable" => {
   if (config.status === "ready") return "open";
+
   if (config.status === "blocked" || !config.qualified) return "unavailable";
+
   return config.canConfigure ? "setup" : "not-configured";
 };
 
 export const renderNewsletters = async (signal: AbortSignal): Promise<void> => {
   const config = await api<NewsletterConfigView>("GET", "/v1/newsletter/config", undefined, signal);
+
   switch (newsletterGate(config)) {
     case "open":
       return show(

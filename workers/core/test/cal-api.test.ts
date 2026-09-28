@@ -1,9 +1,17 @@
+import { generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ControlAuth, ControlDirectory } from "@bye/platform-cloudflare";
 import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import { authConfig } from "../src/services.ts";
-import { type Harness, makeHarness, enablePersonalMail } from "./harness.ts";
+import {
+  type Harness,
+  type JsonRecord,
+  makeHarness,
+  mockAs,
+  enablePersonalMail,
+  executionContext,
+} from "./harness.ts";
 import { signDayPhotoUrl } from "../src/routes/calendar.ts";
 import { mint } from "../src/capability.ts";
 import { hmacHex } from "@bye/domain";
@@ -11,18 +19,18 @@ import { hmacHex } from "@bye/domain";
 // Calendar API end to end over in-memory bindings: discovery of shared calendars, private feed
 // tokens, day photos, subscription refresh, reminder notifications, views, and outbound iTIP.
 
-const notifications = vi.hoisted(() => [] as Array<Record<string, unknown>>);
-vi.mock("../src/push.ts", () => ({
-  deliverNotification: async (_env: unknown, request: Record<string, unknown>) => {
-    notifications.push(request);
-    return { delivered: 1 };
-  },
-}));
+/** An APNs-shaped push as observed at the network edge (the real notification pipeline runs). */
+interface ApnsPush {
+  readonly aps: { readonly alert: { readonly title: string; readonly body: string } };
+  readonly url: string;
+}
 
-const ctx = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
-} as unknown as ExecutionContext;
+const apnsKeyPem = () =>
+  generateKeyPairSync("ec", { namedCurve: "P-256" })
+    .privateKey.export({ type: "pkcs8", format: "pem" })
+    .toString();
+
+const ctx = executionContext;
 
 interface Account {
   readonly userId: string;
@@ -36,6 +44,7 @@ const signup = async (h: Harness, address: string): Promise<Account> => {
   const account = await new ControlDirectory(h.env.DIRECTORY, kernelClock).provisionPersonalAccount(
     { address, displayName: address.split("@")[0]! },
   );
+
   await h.env.CALENDARS.getByName(account.calendarId).provision({
     ownerId: account.userId,
     selfAddresses: [account.address],
@@ -43,38 +52,45 @@ const signup = async (h: Harness, address: string): Promise<Account> => {
   });
   const auth = new ControlAuth(h.env.DIRECTORY, kernelClock, await authConfig(h.env));
   const session = await auth.issueSession(account.userId, "test", true);
+
   return { ...account, cookie: `__Host-session=${session.token}` };
 };
 
-const call = async (
+const call = async <BodyValue>(
   h: Harness,
   who: Account | null,
   method: string,
   path: string,
-  body?: unknown,
+  body?: BodyValue,
   headers: Record<string, string> = {},
 ) => {
   const isBytes = body instanceof Uint8Array;
+
+  const requestHeaders = new Headers();
+
+  if (who) requestHeaders.set("cookie", who.cookie);
+
+  if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+  if (method !== "GET")
+    requestHeaders.set("content-type", isBytes ? "application/octet-stream" : "application/json");
+
+  for (const [k, v] of Object.entries(headers ?? {})) requestHeaders.set(k, v);
+
   const response = await handleFetch(
-    new Request(path.startsWith("http") ? path : `${h.env.APP_ORIGIN}${path}`, {
-      method,
-      headers: {
-        ...(who ? { cookie: who.cookie } : {}),
-        ...(method === "GET"
-          ? {}
-          : {
-              origin: h.env.APP_ORIGIN,
-              "content-type": isBytes ? "application/octet-stream" : "application/json",
-            }),
-        ...headers,
-      },
-      ...(body === undefined ? {} : { body: isBytes ? body : JSON.stringify(body) }),
-    }),
+    new Request(
+      path.startsWith("http") ? path : `${h.env.APP_ORIGIN}${path}`,
+      body !== undefined
+        ? { method, headers: requestHeaders, body: isBytes ? body : JSON.stringify(body) }
+        : { method, headers: requestHeaders },
+    ),
     h.env,
     ctx,
   );
+
   const type = response.headers.get("content-type") ?? "";
   const text = await response.text();
+
   return {
     status: response.status,
     headers: response.headers,
@@ -83,8 +99,10 @@ const call = async (
 };
 
 let n = 0;
+
 const cmdId = () => `cmd_cal_${(++n).toString(36).padStart(16, "0")}`;
-const command = (h: Harness, who: Account, space: string, cmd: Record<string, unknown>) =>
+
+const command = (h: Harness, who: Account, space: string, cmd: JsonRecord) =>
   call(h, who, "POST", `/v1/calendars/${space}/commands`, {
     schemaVersion: 1,
     command: { commandId: cmdId(), ...cmd },
@@ -96,7 +114,9 @@ const newCalendar = async (h: Harness, who: Account) => {
     name: "Work",
     color: "#123456",
   });
+
   expect(created.status, JSON.stringify(created.body)).toBe(200);
+
   return created.body.calendarId as string;
 };
 
@@ -112,7 +132,6 @@ describe("calendar API", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.UTC(2026, 8, 25, 12));
     h = makeHarness();
-    notifications.length = 0;
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -143,16 +162,20 @@ describe("calendar API", () => {
     await h.drain();
 
     const listed = await call(h, bob, "GET", "/v1/calendars");
+
     const shared = (
       listed.body.items as Array<{ spaceId: string; id: string; role: string; owned: boolean }>
     ).find((c) => c.id === work);
+
     expect(shared).toMatchObject({ spaceId: ana.calendarId, role: "read", owned: false });
+
     const events = await call(
       h,
       bob,
       "GET",
       `/v1/calendars/${ana.calendarId}/events?from=2026-09-28T00:00:00Z&to=2026-10-05T00:00:00Z&calendarIds=${work}`,
     );
+
     expect(
       events.body.occurrences.map((o: { data: { summary: string } }) => o.data.summary),
     ).toEqual(["Planning"]);
@@ -193,12 +216,14 @@ describe("calendar API", () => {
       data: { summary: "Standup" },
       privateNote: "SECRET NOTE",
     });
+
     const created = await call(h, ana, "POST", `/v1/calendars/${ana.calendarId}/feed-tokens`, {
       schemaVersion: 1,
       commandId: cmdId(),
       calendarIds: [work],
       label: "Phone",
     });
+
     expect(created.status).toBe(201);
     const feedPath = new URL(created.body.url).pathname;
     const feed = await call(h, null, "GET", feedPath);
@@ -262,6 +287,7 @@ describe("calendar API", () => {
     const ana = await signup(h, "ana@bye.test");
     const bob = await signup(h, "bob@bye.test");
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+
     const up = await call(
       h,
       ana,
@@ -269,6 +295,7 @@ describe("calendar API", () => {
       `/v1/calendars/${ana.calendarId}/days/2026-09-25/photo`,
       png,
     );
+
     expect(up.status, JSON.stringify(up.body)).toBe(201);
     expect(up.body.photoKey).toMatch(new RegExp(`^cal/${ana.calendarId}/photo/`));
     await h.drain(); // the photo is served only after the scanner marks it clean
@@ -286,6 +313,7 @@ describe("calendar API", () => {
         )
       ).status,
     ).toBe(403);
+
     // A capability minted for another purpose over the same key is refused.
     const wrong = await mint(
       h.env.PROXY_SIGNING_KEY,
@@ -294,6 +322,7 @@ describe("calendar API", () => {
       60_000,
       Date.now(),
     );
+
     expect((await call(h, null, "GET", `/v1/calendar-photos?t=${wrong}`)).status).toBe(403);
     // Pre-unification `key/exp/sig` links are no longer accepted, even with a valid MAC.
     const exp = Date.now() + 60_000;
@@ -308,12 +337,14 @@ describe("calendar API", () => {
         )
       ).status,
     ).toBe(403);
+
     const context = await call(
       h,
       ana,
       "GET",
       `/v1/calendars/${ana.calendarId}/days/2026-09-25/context`,
     );
+
     expect(context.body.photoUrl).toContain("/v1/calendar-photos?");
     vi.setSystemTime(Date.now() + 11 * 60_000);
     expect((await call(h, null, "GET", up.body.photoUrl)).status).toBe(403);
@@ -335,6 +366,7 @@ describe("calendar API", () => {
     const ana = await signup(h, "ana@bye.test");
     const bob = await signup(h, "bob@bye.test");
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+
     const up = await call(
       h,
       ana,
@@ -342,23 +374,29 @@ describe("calendar API", () => {
       `/v1/calendars/${ana.calendarId}/days/2026-09-25/photo`,
       png,
     );
+
     expect(up.status).toBe(201);
     await h.drain();
+
     // Bob can't attach Ana's photo key (read from her link) to his own day and re-sign it.
     const laundered = await command(h, bob, bob.calendarId, {
       type: "SetDayDecoration",
       date: { year: 2030, month: 1, day: 1 },
       photoKey: up.body.photoKey,
     });
+
     expect(laundered.status).toBe(400);
+
     const context = await call(
       h,
       bob,
       "GET",
       `/v1/calendars/${bob.calendarId}/days/2030-01-01/context`,
     );
+
     expect(context.body.photoKey).toBeUndefined();
     expect(context.body.photoUrl).toBeUndefined();
+
     // A link is bound to the space whose day shows the photo: a mismatched space is refused.
     const crossSpace = await mint(
       h.env.PROXY_SIGNING_KEY,
@@ -367,7 +405,9 @@ describe("calendar API", () => {
       60_000,
       Date.now(),
     );
+
     expect((await call(h, null, "GET", `/v1/calendar-photos?t=${crossSpace}`)).status).toBe(403);
+
     const legacyArity = await mint(
       h.env.PROXY_SIGNING_KEY,
       "dayphoto",
@@ -375,6 +415,7 @@ describe("calendar API", () => {
       60_000,
       Date.now(),
     );
+
     expect((await call(h, null, "GET", `/v1/calendar-photos?t=${legacyArity}`)).status).toBe(403);
 
     // Replacing the day's photo deletes the prior object; clearing it deletes the replacement.
@@ -385,20 +426,24 @@ describe("calendar API", () => {
       `/v1/calendars/${ana.calendarId}/days/2026-09-25/photo`,
       png,
     );
+
     expect(next.status).toBe(201);
     expect(h.buckets.PARTS.objects.has(up.body.photoKey)).toBe(false);
     expect(h.buckets.PARTS.objects.has(next.body.photoKey)).toBe(true);
+
     const cleared = await command(h, ana, ana.calendarId, {
       type: "SetDayDecoration",
       date: { year: 2026, month: 9, day: 25 },
       photoKey: null,
     });
+
     expect(cleared.status).toBe(200);
     expect(h.buckets.PARTS.objects.has(next.body.photoKey)).toBe(false);
 
     // Uploads are rate limited per user, before any bytes are stored.
     h.rateLimit.deny = (key) => key === `dayphoto:${ana.userId}`;
     const before = h.buckets.PARTS.objects.size;
+
     const limited = await call(
       h,
       ana,
@@ -406,6 +451,7 @@ describe("calendar API", () => {
       `/v1/calendars/${ana.calendarId}/days/2026-09-26/photo`,
       png,
     );
+
     expect(limited.status).toBe(429);
     expect(h.buckets.PARTS.objects.size).toBe(before);
   });
@@ -424,6 +470,7 @@ describe("calendar API", () => {
         })
       ).status,
     ).toBe(200);
+
     const invite = (who: Account, attendees: Array<{ address: string }>) =>
       command(h, who, ana.calendarId, {
         type: "CreateEvent",
@@ -433,6 +480,7 @@ describe("calendar API", () => {
         data: { summary: "Kickoff" },
         attendees,
       });
+
     expect((await invite(bob, [{ address: "victim@example.net" }])).status).toBe(403);
     expect((await invite(ana, [{ address: "not an address" }])).status).toBe(400);
     const many = Array.from({ length: 101 }, (_, i) => ({ address: `p${i}@example.net` }));
@@ -443,18 +491,24 @@ describe("calendar API", () => {
   it("[C05] subscriptions refresh through DNS-checked fetches and keep their schedule after errors", async () => {
     const ana = await signup(h, "ana@bye.test");
     const fetched: Array<string> = [];
+
     let feedBody =
       "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\nBEGIN:VEVENT\r\nUID:holiday-1@feeds.example\r\nDTSTAMP:20260901T000000Z\r\nDTSTART;VALUE=DATE:20261012\r\nDTEND;VALUE=DATE:20261013\r\nSUMMARY:Holiday\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
     vi.stubGlobal("fetch", (async (input: Parameters<typeof fetch>[0]) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
+
       if (url.hostname === "cloudflare-dns.com") {
         const name = url.searchParams.get("name");
         const ip = name === "feeds.example" ? "93.184.216.34" : "10.1.2.3";
+
         return Response.json({
           Answer: url.searchParams.get("type") === "A" ? [{ type: 1, data: ip }] : [],
         });
       }
+
       fetched.push(url.toString());
+
       return new Response(feedBody, { headers: { "content-type": "text/calendar" } });
     }) as typeof fetch);
 
@@ -464,17 +518,20 @@ describe("calendar API", () => {
       color: "#0a0",
       url: "https://feeds.example/holidays.ics",
     });
+
     expect(added.status).toBe(200);
     const calendarDo = h.namespaces.CALENDARS.instance(ana.calendarId);
     await calendarDo.alarm();
     await h.drain();
     expect(fetched).toEqual(["https://feeds.example/holidays.ics"]);
+
     const events = await call(
       h,
       ana,
       "GET",
       `/v1/calendars/${ana.calendarId}/events?from=2026-10-10T00:00:00Z&to=2026-10-15T00:00:00Z`,
     );
+
     expect(
       events.body.occurrences.map((o: { data: { summary: string } }) => o.data.summary),
     ).toEqual(["Holiday"]);
@@ -484,17 +541,39 @@ describe("calendar API", () => {
     vi.setSystemTime(Date.now() + 2 * 3_600_000);
     await calendarDo.alarm();
     await h.drain();
-    const store = (
-      calendarDo as unknown as {
-        store: { kernel: { job(kind: string, key: string): { dueAt: number } | undefined } };
-      }
-    ).store;
+
+    const view: {
+      store: { kernel: { job(kind: string, key: string): { dueAt: number } | undefined } };
+    } = mockAs(calendarDo);
+
+    const store = view.store;
+
     expect(store.kernel.job("subscription", added.body.calendarId)).toBeDefined();
   });
 
   it("[C02] reminders and invitation changes are delivered through the notification boundary with deep links", async () => {
     const ana = await signup(h, "ana@bye.test");
     const work = await newCalendar(h, ana);
+    Object.assign(h.env, {
+      APNS_KEY_P8: apnsKeyPem(),
+      APNS_KEY_ID: "KEY1234567",
+      APNS_TEAM_ID: "TEAM123456",
+      APNS_TOPIC: "test.bye.app",
+    });
+    expect(
+      (
+        await call(h, ana, "POST", "/v1/push/subscriptions", {
+          kind: "apns",
+          endpoint: "ab".repeat(32),
+        })
+      ).status,
+    ).toBe(201);
+    const pushes: Array<ApnsPush> = [];
+    vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+      pushes.push(JSON.parse(await new Response(init?.body).text()));
+
+      return new Response(null, { status: 200 });
+    });
     await command(h, ana, ana.calendarId, {
       type: "CreateEvent",
       calendarId: work,
@@ -506,15 +585,18 @@ describe("calendar API", () => {
     vi.setSystemTime(Date.UTC(2026, 8, 25, 13, 31));
     await h.namespaces.CALENDARS.instance(ana.calendarId).alarm();
     await h.drain();
-    expect(notifications).toHaveLength(1);
-    expect(notifications[0]).toMatchObject({
-      userId: ana.userId,
-      kind: "calendar.reminder",
-      title: "Dentist",
-      body: "Starts in 30 minutes",
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]).toMatchObject({
+      aps: { alert: { title: "Dentist", body: "Starts in 30 minutes" } },
     });
-    expect(String(notifications[0]!.url)).toMatch(/^bye:\/\/calendar\/event\//);
-    expect(String(notifications[0]!.dedupeKey)).toMatch(/^reminder:/);
+    expect(pushes[0]!.url).toMatch(/^bye:\/\/calendar\/event\//);
+
+    const deliveries = await h.d1
+      .prepare("SELECT dedupe_key FROM push_deliveries")
+      .all<{ dedupe_key: string }>();
+
+    expect(deliveries.results).toHaveLength(1);
+    expect(deliveries.results[0]!.dedupe_key).toMatch(/^reminder:/);
   });
 
   it("[C01][C06][C07][C10] views, weekly tasks, habits, timer, widget, preferences and locations are served", async () => {
@@ -533,11 +615,13 @@ describe("calendar API", () => {
       firstWeekday: 1,
       title: "Plan Q4",
     });
+
     const habit = await command(h, ana, ana.calendarId, {
       type: "CreateHabit",
       name: "Read",
       weekdays: [1, 2, 3, 4, 5],
     });
+
     await command(h, ana, ana.calendarId, {
       type: "SetHabitCompletion",
       habitId: habit.body.habitId,
@@ -570,10 +654,12 @@ describe("calendar API", () => {
     const widget = await call(h, ana, "GET", `${base}/widget`);
     expect(widget.body).toMatchObject({ today: "2026-09-25", activeTimer: { label: "Deep work" } });
     expect(widget.body.upcoming[0].data.summary).toBe("Review");
+
     const prefs = await call(h, ana, "PATCH", `${base}/preferences`, {
       commandId: cmdId(),
       preferences: { lastView: "week", lastDate: "2026-09-25", timeZone: "Europe/London" },
     });
+
     expect(prefs.status).toBe(200);
     expect((await call(h, ana, "GET", `${base}/preferences`)).body).toMatchObject({
       lastView: "week",
@@ -587,6 +673,7 @@ describe("calendar API", () => {
     const ics = await call(h, ana, "GET", `${base}/export.ics`);
     expect(ics.headers.get("content-disposition")).toContain("attachment");
     expect(ics.body).toContain("SUMMARY:Review");
+
     const imported = await call(h, ana, "POST", `${base}/import`, {
       commandId: cmdId(),
       calendarId: work,
@@ -594,11 +681,13 @@ describe("calendar API", () => {
         .replace("SUMMARY:Review", "SUMMARY:Imported")
         .replace(/UID:[^\r\n]+/, "UID:imported-1@bye.test"),
     });
+
     expect(imported.body).toMatchObject({ imported: 1 });
   });
 
   it("[C01] a stale event write is a 409 carrying the current revision", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const created = await command(h, ana, ana.calendarId, {
       type: "CreateEvent",
       calendarId: await newCalendar(h, ana),
@@ -606,7 +695,9 @@ describe("calendar API", () => {
       end: at(2026, 10, 1, 10),
       data: { summary: "Standup" },
     });
+
     const eventId = created.body.eventId as string;
+
     const update = (expectedRevision: number) =>
       command(h, ana, ana.calendarId, {
         type: "UpdateEvent",
@@ -615,6 +706,7 @@ describe("calendar API", () => {
         scope: "series",
         changes: { data: { summary: `v${expectedRevision}` } },
       });
+
     expect((await update(1)).status).toBe(200);
     const stale = await update(1);
     expect(stale.status).toBe(409);
@@ -645,11 +737,13 @@ describe("calendar API", () => {
       grantee: bob.userId,
       role: "read",
     });
+
     const changes = async (who: Account) =>
       (await call(h, who, "GET", `/v1/calendars/${ana.calendarId}/changes?cursor=0`)).body as {
         changes: Array<{ resource: string }>;
         cursor: number;
       };
+
     const own = await changes(ana);
     expect(own.changes.map((c) => c.resource)).toContain("journal");
     const granted = await changes(bob);
@@ -674,6 +768,7 @@ describe("calendar API", () => {
       kind: "hosted",
     });
     const work = await newCalendar(h, ana);
+
     const created = await command(h, ana, ana.calendarId, {
       type: "CreateEvent",
       calendarId: work,
@@ -682,6 +777,7 @@ describe("calendar API", () => {
       data: { summary: "Kickoff" },
       attendees: [{ address: "guest@example.net" }],
     });
+
     await h.drain();
     await command(h, ana, ana.calendarId, {
       type: "DeleteEvent",
@@ -692,9 +788,11 @@ describe("calendar API", () => {
     vi.setSystemTime(Date.now() + 60_000);
     await h.namespaces.MAILBOXES.instance(ana.mailboxId).alarm();
     await h.drain();
-    const mime = [...h.buckets.ORIGINALS.objects.entries()]
-      .filter(([k]) => k.includes("/out/"))
-      .map(([, v]) => new TextDecoder().decode(v.bytes));
+
+    const mime = [...h.buckets.ORIGINALS.objects.entries()].flatMap(([k, v]) =>
+      k.includes("/out/") ? [new TextDecoder().decode(v.bytes)] : [],
+    );
+
     expect(mime.some((m) => /method=REQUEST/i.test(m) && /^To: guest@example.net/im.test(m))).toBe(
       true,
     );
@@ -725,10 +823,8 @@ describe("[C08] day photos are virus-scanned before they are served", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
+
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 
   const setup = async () => {
@@ -736,31 +832,38 @@ describe("[C08] day photos are virus-scanned before they are served", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address: "ana@bye.test", displayName: "ana" });
+
     await h.env.CALENDARS.getByName(account.calendarId).provision({
       ownerId: account.userId,
       selfAddresses: [account.address],
       defaultZone: "UTC",
     });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const call = async (method: string, path: string, body?: BodyInit) => {
+      const requestHeaders = new Headers({ cookie: `__Host-session=${session.token}` });
+
+      if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
       const r = await handleFetch(
-        new Request(`${h.env.APP_ORIGIN}${path}`, {
-          method,
-          headers: {
-            cookie: `__Host-session=${session.token}`,
-            ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          },
-          ...(body ? { body } : {}),
-        }),
+        new Request(
+          `${h.env.APP_ORIGIN}${path}`,
+          body
+            ? { method, headers: requestHeaders, body: body }
+            : { method, headers: requestHeaders },
+        ),
         h.env,
         ctx,
       );
+
       return { status: r.status, body: (await r.json().catch(() => null)) as any };
     };
+
     return { account, call };
   };
 
@@ -769,8 +872,10 @@ describe("[C08] day photos are virus-scanned before they are served", () => {
     const up = await call("POST", `/v1/calendars/${account.calendarId}/days/2026-09-25/photo`, png);
     expect(up.status).toBe(201);
     expect(up.body.scan).toBe("pending");
+
     const read = () =>
       handleFetch(new Request(`${h.env.APP_ORIGIN}${up.body.photoUrl}`), h.env, ctx);
+
     expect((await read()).status).toBe(409);
     await h.drain();
     expect(h.scanner.scanned).toHaveLength(1);
@@ -797,6 +902,7 @@ describe("[C08] day photos are virus-scanned before they are served", () => {
     h.scanner.mode = "infected";
     const up = await call("POST", `/v1/calendars/${account.calendarId}/days/2026-09-25/photo`, png);
     const replacement = `cal/${account.calendarId}/photo/replacement00000001`;
+
     const set = await call(
       "POST",
       `/v1/calendars/${account.calendarId}/commands`,
@@ -815,6 +921,7 @@ describe("[C08] day photos are virus-scanned before they are served", () => {
         { type: "application/json" },
       ),
     );
+
     expect(set.status).toBe(200);
     await h.drain();
     expect(h.buckets.PARTS.objects.has(up.body.photoKey)).toBe(false);
@@ -824,10 +931,7 @@ describe("[C08] day photos are virus-scanned before they are served", () => {
 });
 
 describe("day photo scanning recovery", () => {
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
 
   interface Account {
     readonly userId: string;
@@ -841,16 +945,19 @@ describe("day photo scanning recovery", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     await h.env.CALENDARS.getByName(account.calendarId).provision({
       ownerId: account.userId,
       selfAddresses: [address],
       defaultZone: "UTC",
     });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -866,24 +973,23 @@ describe("day photo scanning recovery", () => {
     path: string,
     init: { json?: unknown; body?: BodyInit; headers?: Record<string, string> } = {},
   ) => {
-    const r = await handleFetch(
-      new Request(`${h.env.APP_ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-          ...(method === "GET" ? {} : { origin: h.env.APP_ORIGIN }),
-          ...(init.json !== undefined ? { "content-type": "application/json" } : {}),
-          ...init.headers,
-        },
-        ...(init.json !== undefined
-          ? { body: JSON.stringify(init.json) }
-          : init.body !== undefined
-            ? { body: init.body }
-            : {}),
-      }),
-      h.env,
-      ctx,
-    );
+    const requestHeaders = new Headers();
+
+    if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+    if (method !== "GET") requestHeaders.set("origin", h.env.APP_ORIGIN);
+
+    if (init.json !== undefined) requestHeaders.set("content-type", "application/json");
+
+    for (const [k, v] of Object.entries(init.headers ?? {})) requestHeaders.set(k, v);
+
+    const requestInit: RequestInit = { method, headers: requestHeaders };
+
+    if (init.json !== undefined) requestInit.body = JSON.stringify(init.json);
+    else if (init.body !== undefined) requestInit.body = init.body;
+
+    const r = await handleFetch(new Request(`${h.env.APP_ORIGIN}${path}`, requestInit), h.env, ctx);
+
     return { status: r.status, body: (await r.json().catch(() => null)) as any };
   };
 
@@ -917,10 +1023,12 @@ describe("day photo scanning recovery", () => {
     (h.env.PROPAGATE as { send: unknown }).send = async () => {
       throw new Error("queue down");
     };
+
     const r = await call(h, ana, "POST", `/v1/calendars/${ana.calendarId}/days/2026-10-01/photo`, {
       body: JPEG,
       headers: { "content-type": "image/jpeg" },
     });
+
     (h.env.PROPAGATE as { send: unknown }).send = realSend;
     expect(r.status).toBe(503);
     expect(
@@ -928,12 +1036,14 @@ describe("day photo scanning recovery", () => {
         k.startsWith(`cal/${ana.calendarId}/photo/`),
       ),
     ).toEqual([]);
+
     const day = await call(
       h,
       ana,
       "GET",
       `/v1/calendars/${ana.calendarId}/days/2026-10-01/context`,
     );
+
     expect(day.body?.photoKey).toBeUndefined();
   });
 });
@@ -947,10 +1057,7 @@ describe("day photo upload limits", () => {
     }
   };
 
-  const ctx = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext;
+  const ctx = executionContext;
 
   interface Account {
     readonly userId: string;
@@ -964,15 +1071,18 @@ describe("day photo upload limits", () => {
       h.env.DIRECTORY,
       kernelClock,
     ).provisionPersonalAccount({ address, displayName: address.split("@")[0]! });
+
     const session = await new ControlAuth(
       h.env.DIRECTORY,
       kernelClock,
       await authConfig(h.env),
     ).issueSession(account.userId, "t", true);
+
     const row = await h.d1
       .prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
       .bind(account.userId)
       .first<{ id: string }>();
+
     return {
       userId: account.userId,
       mailboxId: account.mailboxId,
@@ -993,16 +1103,19 @@ describe("day photo upload limits", () => {
 
   it("[C07] day photos: anonymous bodies are rejected before reading; chunked uploads are capped", async () => {
     const ana = await signup(h, "ana@bye.test");
+
     const calendarId = (await h.d1
       .prepare("SELECT id FROM calendars WHERE owner_user_id = ?")
       .bind(ana.userId)
       .first<{ id: string }>())!.id;
+
     await h.env.CALENDARS.getByName(calendarId).provision({
       ownerId: ana.userId,
       selfAddresses: ["ana@bye.test"],
       defaultZone: "UTC",
     });
     let pulled = 0;
+
     const stream = (bytes: number) =>
       new ReadableStream<Uint8Array>(
         {
@@ -1015,20 +1128,24 @@ describe("day photo upload limits", () => {
         },
         { highWaterMark: 0 },
       );
-    const post = (a: Account | null, body: ReadableStream<Uint8Array>) =>
-      handleFetch(
+
+    const post = (a: Account | null, body: ReadableStream<Uint8Array>) => {
+      const requestHeaders = new Headers({ origin: h.env.APP_ORIGIN });
+
+      if (a) requestHeaders.set("cookie", `__Host-session=${a.token}`);
+
+      return handleFetch(
         new Request(`${h.env.APP_ORIGIN}/v1/calendars/${calendarId}/days/2026-10-01/photo`, {
           method: "POST",
-          headers: {
-            ...(a ? { cookie: `__Host-session=${a.token}` } : {}),
-            origin: h.env.APP_ORIGIN,
-          },
+          headers: requestHeaders,
           body,
           duplex: "half",
         } as RequestInit),
         h.env,
         ctx,
       );
+    };
+
     expect((await post(null, stream(50 << 20))).status).toBe(401);
     expect(pulled).toBe(0);
     pulled = 0;

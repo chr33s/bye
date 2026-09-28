@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   calAgenda,
   calAllDay,
+  type CalEventData,
   calBuildCancel,
   calBuildReply,
   calBuildRequest,
@@ -38,9 +39,12 @@ const dt = (s: string) => {
   const [d, t = "00:00:00"] = s.split("T");
   const [year, month, day] = d!.split("-").map(Number);
   const [hour, minute, second = 0] = t.split(":").map(Number);
+
   return { year: year!, month: month!, day: day!, hour: hour!, minute: minute!, second };
 };
+
 const utc = (s: string) => Date.parse(s.endsWith("Z") ? s : `${s}Z`);
+
 const iso = (ms: number) => new Date(ms).toISOString();
 
 describe("time zones", () => {
@@ -79,6 +83,7 @@ describe("time zones", () => {
       },
       { from: 0, to: utc("2027-01-01T00:00:00") },
     );
+
     expect(occ.map((o) => calWallClock(o.startMs, "America/New_York").hour)).toEqual([9, 9, 9, 9]);
     expect(occ[2]!.startMs - occ[1]!.startMs).toBe(23 * 3600_000);
   });
@@ -90,12 +95,14 @@ describe("time zones", () => {
       dtend: calAllDay(calParseDate("2026-09-26")),
       data: { summary: "Birthday" },
     };
+
     for (const zone of ["Pacific/Auckland", "America/Los_Angeles", "UTC"]) {
       const [o] = calExpandSeries(series, [], {
         from: utc("2026-09-01T00:00:00"),
         to: utc("2026-10-01T00:00:00"),
         viewerZone: zone,
       });
+
       expect(o!.allDay).toBe(true);
       expect(calWallClock(o!.startMs, zone)).toMatchObject({
         year: 2026,
@@ -111,6 +118,7 @@ describe("time zones", () => {
 
 describe("recurrence", () => {
   const w = { from: utc("2026-01-01T00:00:00"), to: utc("2027-12-31T00:00:00") };
+
   const dates = (rule: string, start = "2026-01-01T10:00", zone = "UTC", window = w) =>
     calExpand({ dtstart: calTimed(dt(start), zone), rule: calParseRRule(rule) }, window).map((o) =>
       iso(o.startMs).slice(0, 10),
@@ -136,10 +144,12 @@ describe("recurrence", () => {
       "2026-01-03",
     ]);
     expect(dates("FREQ=DAILY;UNTIL=20260103")).toHaveLength(3);
+
     const forever = dates("FREQ=YEARLY", "2026-02-28T10:00", "UTC", {
       from: utc("2100-01-01T00:00:00"),
       to: utc("2102-01-01T00:00:00"),
     });
+
     expect(forever).toEqual(["2100-02-28", "2101-02-28"]);
   });
 
@@ -204,6 +214,7 @@ describe("recurrence", () => {
       rdates: [calTimed(dt("2026-09-27T12:00"), "Europe/London")],
       data: { summary: "Standup" },
     };
+
     const occ = calExpandSeries(
       series,
       [
@@ -217,12 +228,14 @@ describe("recurrence", () => {
       ],
       { from: utc("2026-09-20T00:00:00"), to: utc("2026-10-10T00:00:00") },
     );
+
     expect(occ.map((o) => [o.key, o.data.summary])).toEqual([
       ["20260921T090000", "Standup"],
       ["20260925T090000", "Standup"],
       ["20260927T120000", "Standup"],
       ["20260923T090000", "Moved"],
     ]);
+
     // A window that only contains the moved occurrence still finds it.
     const moved = calExpandSeries(
       series,
@@ -238,6 +251,7 @@ describe("recurrence", () => {
         to: utc("2027-04-01T00:00:00"),
       },
     );
+
     expect(moved.map((o) => o.key)).toEqual(["20260923T090000"]);
   });
 
@@ -249,6 +263,7 @@ describe("recurrence", () => {
       rule: calParseRRule("FREQ=WEEKLY;COUNT=10"),
       data: { summary: "Sync" },
     };
+
     const split = calSplitSeries(
       series,
       [
@@ -261,6 +276,7 @@ describe("recurrence", () => {
       },
       "weekly-2",
     );
+
     expect(split.head?.rule?.count).toBe(3);
     expect(split.tail.rule?.count).toBe(7);
     expect(split.headExceptions.map((e) => e.recurrenceKey)).toEqual(["20260908T100000"]);
@@ -271,24 +287,30 @@ describe("recurrence", () => {
       splitKey: "20260922T100000",
     });
     const window = { from: 0, to: utc("2027-06-01T00:00:00") };
+
     const total =
       calExpandSeries(split.head!, [], window).length +
       calExpandSeries(split.tail, [], window).length;
+
     expect(total).toBe(10);
+
     const untilSplit = calSplitSeries(
       { ...series, rule: calParseRRule("FREQ=WEEKLY") },
       [],
       { key: "20260915T100000", start: calTimed(dt("2026-09-15T10:00"), "America/New_York") },
       "w3",
     );
+
     expect(untilSplit.head?.rule?.until).toBe("20260915T135959Z");
     expect(calExpandSeries(untilSplit.head!, [], window)).toHaveLength(2);
+
     const atStart = calSplitSeries(
       series,
       [],
       { key: "20260901T100000", start: series.dtstart },
       "w4",
     );
+
     expect(atStart.head).toBeUndefined();
   });
 });
@@ -337,10 +359,12 @@ describe("iCalendar", () => {
 
   it("[A04] [C05] round-trips through serialization with folding", () => {
     const cal = calParseCalendar(sample);
+
     const out = calSerializeCalendar(cal.events, {
       now: utc("2026-09-25T00:00:00"),
       method: "PUBLISH",
     });
+
     for (const line of out.split("\r\n"))
       expect(new TextEncoder().encode(line).length).toBeLessThanOrEqual(75);
     const again = calParseCalendar(out);
@@ -362,6 +386,7 @@ describe("iCalendar", () => {
       "END:VEVENT",
       "END:VCALENDAR",
     ].join("\r\n");
+
     const bounded = calParseCalendar(many, { maxItems: 3 });
     expect(bounded.events).toHaveLength(3);
     expect(bounded.truncated).toBe(true);
@@ -391,6 +416,7 @@ describe("iTIP", () => {
     ],
     alarms: [],
   });
+
   const knownAt = (sequence: number, dtstamp: number): CalKnownInvitation => ({
     organizer: "boss@example.com",
     weAreOrganizer: false,
@@ -507,6 +533,7 @@ describe("iTIP", () => {
       },
     ]);
     expect(calBuildCancel(e, 30).ics).toContain("STATUS:CANCELLED");
+
     const organizerKnown: CalKnownInvitation = {
       organizer: "me@bye.test",
       weAreOrganizer: true,
@@ -514,6 +541,7 @@ describe("iTIP", () => {
       seriesRevision: undefined,
       attendeeRevisions: {},
     };
+
     const replyEvent = parsed.events[0]!;
     expect(
       calInterpretItip({
@@ -556,12 +584,14 @@ describe("views and planning", () => {
       { id: "c", startMs: 60, endMs: 120 },
       { id: "d", startMs: 200, endMs: 300 },
     ]);
+
     expect(layout).toEqual([
       { id: "a", column: 0, columns: 2 },
       { id: "b", column: 1, columns: 2 },
       { id: "c", column: 0, columns: 2 },
       { id: "d", column: 0, columns: 1 },
     ]);
+
     const occ = calExpandSeries(
       {
         uid: "trip",
@@ -572,6 +602,7 @@ describe("views and planning", () => {
       [],
       { from: utc("2026-12-01T00:00:00"), to: utc("2027-02-01T00:00:00") },
     );
+
     expect(calYearOverview(occ, "UTC", 2026)).toEqual({ "2026-12-30": 1, "2026-12-31": 1 });
   });
 
@@ -586,6 +617,7 @@ describe("views and planning", () => {
       [],
       { from: utc("2026-09-25T00:00:00"), to: utc("2026-09-26T00:00:00") },
     );
+
     expect(
       calNightHoursBusy(late, calParseDate("2026-09-25"), "UTC", {
         startMinute: 7 * 60,
@@ -601,7 +633,7 @@ describe("views and planning", () => {
   });
 
   it("[C08] computes uninterrupted free time respecting transparency, all-day and hidden calendars", () => {
-    const mk = (id: string, s: string, e: string, extra: object = {}) => ({
+    const mk = (id: string, s: string, e: string, extra: Partial<CalEventData> = {}) => ({
       ...calExpandSeries(
         {
           uid: id,
@@ -614,18 +646,21 @@ describe("views and planning", () => {
       )[0]!,
       calendarId: id === "hidden" ? "cal_hidden" : "cal_main",
     });
+
     const occ = [
       mk("a", "2026-09-25T10:00", "2026-09-25T11:00"),
       mk("b", "2026-09-25T10:30", "2026-09-25T12:00"),
       mk("free", "2026-09-25T13:00", "2026-09-25T14:00", { transparent: true }),
       mk("hidden", "2026-09-25T15:00", "2026-09-25T16:00"),
     ];
+
     const free = calFreeTime(occ, calParseDate("2026-09-25"), {
       viewerZone: "UTC",
       waking: { startMinute: 9 * 60, endMinute: 17 * 60 },
       visibleCalendarIds: new Set(["cal_main"]),
       minimumMinutes: 30,
     });
+
     expect(free.map((f) => [iso(f.startMs).slice(11, 16), iso(f.endMs).slice(11, 16)])).toEqual([
       ["09:00", "10:00"],
       ["12:00", "17:00"],
@@ -639,7 +674,9 @@ describe("views and planning", () => {
     expect(calWeekAnchor(fri, 6)).toEqual(calParseDate("2026-09-19"));
     expect(calWeekAnchor(calParseDate("2026-09-20"), 1)).toEqual(calParseDate("2026-09-14"));
     let keys = [calOrderKeyBetween(undefined, undefined)];
+
     for (let i = 0; i < 50; i++) keys.push(calOrderKeyBetween(keys.at(-1), undefined));
+
     for (let i = 0; i < 50; i++) keys.splice(1, 0, calOrderKeyBetween(keys[0], keys[1]));
     expect([...keys].sort()).toEqual(keys);
     expect(new Set(keys).size).toBe(keys.length);
@@ -665,6 +702,7 @@ describe("views and planning", () => {
       rule: calParseRRule("FREQ=DAILY;COUNT=2"),
       data: { summary: "R" },
     };
+
     const now = utc("2026-09-25T12:00:00");
     const first = calNextReminder("evt", 1, series, [], [15, 1440], now)!;
     // The 1-day reminder for the first occurrence is already past; the 15-minute one is next.

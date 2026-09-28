@@ -14,10 +14,12 @@ export const STATE_WORKER_SOURCES = [
 
 export const stateBuildHash = (dir = import.meta.dirname): string => {
   const hash = createHash("sha256");
+
   for (const file of STATE_WORKER_SOURCES) {
     hash.update(`${file}\0`);
     hash.update(readFileSync(join(dir, file)));
     hash.update("\0");
   }
+
   return hash.digest("hex");
 };

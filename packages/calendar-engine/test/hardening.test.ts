@@ -25,7 +25,9 @@ import {
 } from "../src/index.ts";
 
 const utc = (s: string) => Date.parse(`${s}Z`);
+
 const ny = (s: string) => calTimed(calParseDateTime(s), "America/New_York");
+
 const DAY = 86_400_000;
 
 const wrap = (body: string, method?: string) =>
@@ -73,6 +75,7 @@ describe("RECURRENCE-ID keys follow the series zone", () => {
         "CANCEL",
       ),
     ).events[0]!;
+
     const decision = calInterpretItip({
       method: "CANCEL",
       event: e,
@@ -81,12 +84,14 @@ describe("RECURRENCE-ID keys follow the series zone", () => {
       known: undefined,
       seriesStart: series,
     });
+
     expect(decision).toEqual({ _tag: "Apply", action: "cancel", recurrenceKey: "20261102T090000" });
   });
 });
 
 describe("iCalendar output cannot be injected into", () => {
   const evil = "x\r\nATTENDEE:mailto:attacker@evil.test\r\nBEGIN:VALARM";
+
   const event: CalIcsEvent = {
     uid: `u1${evil}`,
     sequence: 0,
@@ -125,6 +130,7 @@ describe("iCalendar output cannot be injected into", () => {
       .replace(/\r\n[ \t]/g, "")
       .split("\r\n")
       .find((l) => l.startsWith("ORGANIZER"))!;
+
     expect(line).toMatch(/^ORGANIZER;CN="Bossx/);
     expect(line.match(/"/g)).toHaveLength(2);
   });
@@ -135,6 +141,7 @@ describe("DURATION days are nominal (RFC 5545 §3.3.6)", () => {
     const [e] = calParseCalendar(
       wrap("UID:d1\r\nDTSTART;TZID=America/New_York:20261031T100000\r\nDURATION:P1D"),
     ).events;
+
     expect(e!.series.dtend).toEqual(ny("2026-11-01T10:00:00"));
     expect(calInstant(e!.series.dtend) - calInstant(e!.series.dtstart)).toBe(25 * 3_600_000);
   });
@@ -156,6 +163,7 @@ describe("DURATION days are nominal (RFC 5545 §3.3.6)", () => {
         "END:VCALENDAR",
       ].join("\r\n"),
     ).events;
+
     expect(a!.series.dtend).toEqual(ny("2026-03-08T11:00:00"));
     expect(b!.series.dtend).toEqual(ny("2026-03-08T11:00:00"));
     expect(calInstant(a!.series.dtend) - calInstant(a!.series.dtstart)).toBe(24 * 3_600_000);
@@ -165,6 +173,7 @@ describe("DURATION days are nominal (RFC 5545 §3.3.6)", () => {
     const [e] = calParseCalendar(
       wrap("UID:d4\r\nDTSTART;VALUE=DATE:20261031\r\nDURATION:P2D"),
     ).events;
+
     expect(e!.series.dtend).toEqual(calAllDay(calParseDate("20261102")));
     expect(calParseDurationParts("-P1W2DT3H")).toEqual({ days: -9, ms: -3 * 3_600_000 });
     expect(calParseDuration("-PT15M")).toBe(-15 * 60_000);
@@ -185,10 +194,12 @@ describe("EXDATE;VALUE=DATE on a timed series", () => {
         ].join("\r\n"),
       ),
     ).events;
+
     const keys = calExpandSeries(e!.series, [], {
       from: utc("2026-10-01T00:00:00"),
       to: utc("2026-12-01T00:00:00"),
     }).map((o) => o.key);
+
     expect(keys).toEqual(["20261030T213000", "20261101T213000", "20261102T213000"]);
   });
 
@@ -201,12 +212,14 @@ describe("EXDATE;VALUE=DATE on a timed series", () => {
       },
       { from: utc("2026-09-01T00:00:00"), to: utc("2026-11-01T00:00:00") },
     ).map((o) => o.key);
+
     expect(starts).toEqual(["20261001", "20261003"]);
   });
 });
 
 describe("reminders beyond the lookahead horizon", () => {
   const now = utc("2026-09-25T12:00:00");
+
   const farSeries: CalSeries = {
     uid: "far",
     dtstart: ny("2028-06-01T09:00:00"),
@@ -229,16 +242,21 @@ describe("reminders beyond the lookahead horizon", () => {
       dtend: ny("2026-01-01T10:00:00"),
       rule: calParseRRule("FREQ=WEEKLY;COUNT=3"),
     };
+
     expect(calReminderRecheckAt(ended, [], [10], now)).toBeUndefined();
     expect(calReminderRecheckAt(ended, [], [], now)).toBeUndefined();
+
     const moved = [
       { recurrenceKey: "20260108T090000", cancelled: false, start: ny("2028-01-08T09:00:00") },
     ];
+
     expect(calReminderRecheckAt(ended, moved, [10], now)).toBe(now + 400 * DAY);
+
     const yearly: CalSeries = {
       ...ended,
       rule: calParseRRule("FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29"),
     };
+
     expect(calReminderRecheckAt(yearly, [], [10], utc("2028-03-01T00:00:00"))).toBe(
       utc("2028-03-01T00:00:00") + 400 * DAY,
     );
@@ -302,6 +320,7 @@ describe("iTIP REQUEST round-trip", () => {
       },
       0,
     ).ics;
+
     expect(ics).not.toMatch(/\r\nX-EVIL/);
     expect(calParseCalendar(ics).events).toHaveLength(1);
   });

@@ -1,6 +1,8 @@
 // Stage classes (§15.2). Stage names flow into physical resource names, so they are
 // validated, opaque, and never carry customer data.
 
+import { Predicate } from "effect";
+
 export type StageClass = "dev" | "preview" | "staging" | "prod";
 
 export interface StageInfo {
@@ -11,6 +13,7 @@ export interface StageInfo {
 }
 
 const DEV = /^dev-[a-z0-9]{6,16}$/;
+
 const PREVIEW = /^preview-[1-9][0-9]{0,6}$/;
 
 export type StageValidation =
@@ -19,11 +22,15 @@ export type StageValidation =
 
 export const classifyStage = (name: string): StageValidation => {
   if (name === "prod") return { _tag: "Valid", stage: { name, class: "prod", persistent: true } };
+
   if (name === "staging")
     return { _tag: "Valid", stage: { name, class: "staging", persistent: true } };
+
   if (PREVIEW.test(name))
     return { _tag: "Valid", stage: { name, class: "preview", persistent: false } };
+
   if (DEV.test(name)) return { _tag: "Valid", stage: { name, class: "dev", persistent: false } };
+
   return {
     _tag: "Invalid",
     reason: `stage "${name}" must be one of prod, staging, preview-<number>, dev-<6-16 lowercase alphanumerics>`,
@@ -32,7 +39,9 @@ export const classifyStage = (name: string): StageValidation => {
 
 export const requireStage = (name: string): StageInfo => {
   const result = classifyStage(name);
-  if (result._tag === "Invalid") throw new Error(result.reason);
+
+  if (Predicate.isTagged(result, "Invalid")) throw new Error(result.reason);
+
   return result.stage;
 };
 

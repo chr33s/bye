@@ -59,6 +59,7 @@ import { renderThread } from "./views/thread.ts";
 // renders in sandboxed iframes on the separate render origin (§10). Views live in ./views/*.
 
 let inflight: AbortController | null = null;
+
 let live: (() => void) | null = null;
 
 type RouteHandler = (
@@ -111,6 +112,7 @@ const HANDLERS: Readonly<Record<RouteName, RouteHandler>> = {
 
 const dispatch = (signal: AbortSignal): Promise<void> => {
   const { name, params, query } = matchRoute(location.hash);
+
   return HANDLERS[name](params, query, signal);
 };
 
@@ -121,12 +123,14 @@ const route = async (): Promise<void> => {
   const { path } = matchRoute(location.hash);
   document.querySelectorAll("nav a").forEach((a) => a.removeAttribute("aria-current"));
   document.querySelector(`nav a[href="#${path}"]`)?.setAttribute("aria-current", "page");
+
   try {
     if (!state.me) {
       const me = await api<Me>("GET", "/v1/me", undefined, signal);
       // Another account's offline drafts never reach this one (shared browser).
       await bindLocalOwner(me.userId);
       state.me = me;
+
       if (continueAuthorization()) return;
       state.mailboxId = state.me.mailboxIds[0] ?? null;
       state.calendarId = state.me.calendarIds[0] ?? null;
@@ -135,10 +139,12 @@ const route = async (): Promise<void> => {
       // Optional "Set up incoming email" offer for the onboarding zone (never blocks the app).
       void showIncomingMailBanner().catch(() => undefined);
     }
+
     await dispatch(signal);
     main().focus({ preventScroll: true });
   } catch (error) {
     if (signal.aborted) return;
+
     if (isSignedOut(error)) {
       state.me = null;
       state.mailboxId = null;
@@ -147,6 +153,7 @@ const route = async (): Promise<void> => {
       live = null;
       await onSignedOut();
     }
+
     main().replaceChildren(
       isSignedOut(error) ? signInScreen(() => void route()) : errorState(error, () => void route()),
     );
@@ -155,6 +162,7 @@ const route = async (): Promise<void> => {
 
 const shortcuts = (event: KeyboardEvent): void => {
   const target = event.target as HTMLElement;
+
   if (
     target.closest("input, textarea, select, [contenteditable]") ||
     event.metaKey ||
@@ -163,6 +171,7 @@ const shortcuts = (event: KeyboardEvent): void => {
   )
     return;
   const view = MAIL_VIEW_NAV.find((n) => n.key === event.key);
+
   if (view) location.hash = `#/mail/${view.view}`;
   else if (event.key === "c") location.hash = "#/compose";
   else if (event.key === "/") {
@@ -181,16 +190,13 @@ const boot = (): void => {
   applyTheme(remember.get("theme"));
   // PWA share target (manifest `share_target` → "/?subject&text&url"): open compose prefilled.
   const shared = new URLSearchParams(location.search);
+
   if (shared.has("subject") || shared.has("text") || shared.has("url"))
     history.replaceState(null, "", `/#/compose?${shared.toString()}`);
   const nav = document.getElementById("nav")!;
   nav.replaceChildren(
     ...MAIL_VIEW_NAV.map((n) =>
-      h(
-        "a",
-        { href: `#/mail/${n.view}`, ...(n.key ? { "aria-keyshortcuts": n.key } : {}) },
-        n.label,
-      ),
+      h("a", { href: `#/mail/${n.view}`, "aria-keyshortcuts": n.key || undefined }, n.label),
     ),
     h("a", { href: "#/calendar", "aria-keyshortcuts": "g" }, "Calendar"),
     h("a", { href: "#/search", "aria-keyshortcuts": "/" }, "Search"),
