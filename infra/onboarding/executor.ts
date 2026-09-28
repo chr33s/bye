@@ -8,7 +8,6 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { ExportedPlan } from "../policies/plan-normalize.ts";
-import { encode } from "./seal.ts";
 import { REQUIRED_DEPLOY_ENV } from "../policies/telemetry.ts";
 
 export interface ExecutionContext {
@@ -32,9 +31,37 @@ export interface ApplyResult {
   readonly aborted: boolean;
 }
 
+/** A detached apply (hosted deployer job) that outlives the process following it. */
+export interface JobHandle {
+  readonly id: string;
+  /** Where the job runs (the deployer's origin); not a secret. */
+  readonly endpoint: string;
+}
+
 export interface DeployExecutor {
+  /**
+   * Planning writes to the account (hosted: it provisions the deployer first), so the service
+   * records it and never plans for a target that fails its prerequisites.
+   */
+  readonly provisionsOnPlan?: boolean;
   plan(ctx: ExecutionContext): Promise<ExportedPlan>;
-  apply(ctx: ExecutionContext, onLine: (line: string) => void): Promise<ApplyResult>;
+  /** `onStarted` fires once when the apply runs as a detached job that `resume` can follow. */
+  apply(
+    ctx: ExecutionContext,
+    onLine: (line: string) => void,
+    onStarted?: (job: JobHandle) => void | Promise<void>,
+  ): Promise<ApplyResult>;
+  /**
+   * Follows a detached apply from line `from` after a restart. A job the executor no longer has
+   * (its runner restarted) resolves as not ok with an uncertain outcome. Absent: applies die with
+   * the process that runs them, so a restarted service marks them interrupted.
+   */
+  resume?(
+    ctx: ExecutionContext,
+    job: JobHandle,
+    from: number,
+    onLine: (line: string) => void,
+  ): Promise<ApplyResult>;
 }
 
 /**
@@ -95,6 +122,32 @@ export const redactor = (secrets: ReadonlyArray<string>) => {
   };
 };
 
+/**
+ * Whole lines from a byte stream. A chunk can end mid-line (and mid-secret), so the tail is held
+ * until its newline arrives: the redactor only matches a secret it sees whole.
+ */
+export const lineSplitter = (onLine: (line: string) => void) => {
+  let partial = "";
+  const decoder = new TextDecoder();
+
+  const emit = (text: string) => {
+    if (text.trim() !== "") onLine(text);
+  };
+
+  return {
+    push: (chunk: Uint8Array) => {
+      const parts = (partial + decoder.decode(chunk, { stream: true })).split("\n");
+      partial = parts.pop() ?? "";
+
+      for (const l of parts) emit(l);
+    },
+    flush: () => {
+      emit(partial + decoder.decode());
+      partial = "";
+    },
+  };
+};
+
 const run = (
   command: string,
   args: ReadonlyArray<string>,
@@ -115,14 +168,14 @@ const run = (
     if (signal.aborted) abort();
     else signal.addEventListener("abort", abort, { once: true });
 
-    const lines = (chunk: Buffer) => {
-      for (const l of encode(chunk, "utf8").split("\n")) if (l.trim() !== "") onLine(l);
-    };
-
-    child.stdout.on("data", lines);
-    child.stderr.on("data", lines);
+    const out = lineSplitter(onLine);
+    const err = lineSplitter(onLine);
+    child.stdout.on("data", out.push);
+    child.stderr.on("data", err.push);
     child.on("error", () => resolve({ code: null, aborted }));
     child.on("close", (code) => {
+      out.flush();
+      err.flush();
       signal.removeEventListener("abort", abort);
       resolve({ code, aborted });
     });

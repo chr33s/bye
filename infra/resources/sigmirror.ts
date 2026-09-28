@@ -12,6 +12,7 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import { Config } from "effect";
 import type { SigMirrorJob as SigMirrorJobClass } from "../../workers/sigmirror/src/index.ts";
 import { COMPATIBILITY } from "./compat.ts";
+import { prebuiltImage } from "./container-images.ts";
 import { devServer } from "./dev.ts";
 import type { StageInfo } from "./stage.ts";
 
@@ -24,9 +25,11 @@ export const ClamSignatures = Cloudflare.R2.Bucket("ClamSignatures", {
   publicAccess: false,
 });
 
+const image = prebuiltImage(process.env, "SIGMIRROR_IMAGE");
+
 /** cvdupdate job image; one instance at a time (the DO is a singleton named "mirror"). */
 export const SigMirrorJob = Cloudflare.Container<SigMirrorJobClass>("SigMirrorJob", {
-  context: "./containers/sigmirror",
+  ...(image ? { image } : { context: "./containers/sigmirror" }),
   className: "SigMirrorJob",
   instanceType: "basic",
   maxInstances: 1,

@@ -9,6 +9,9 @@ import { parseInstanceHandoff } from "../../packages/native-shared/src/instance/
 import { INVENTORY } from "../resources/inventory.ts";
 import type { ExportedPlan, ExportedPlanRow } from "../policies/plan-normalize.ts";
 import { guard } from "../policies/guard-stage.ts";
+import { requiredConfig, scannerProblems } from "../policies/check-config.ts";
+import { DurableObjectStore, MapStorage } from "../onboarding/do-store.ts";
+import { manifestRelease } from "../onboarding/hosted-release.ts";
 import {
   type Account,
   type CloudflareReader,
@@ -19,6 +22,7 @@ import {
   childEnv,
   type DeployExecutor,
   type ExecutionContext,
+  type JobHandle,
   redactor,
 } from "../onboarding/executor.ts";
 import { checkCallback, cloudflareOAuthConfig, type Fetch } from "../onboarding/oauth.ts";
@@ -48,7 +52,8 @@ import {
 } from "../onboarding/service.ts";
 import { ONBOARDING_PAGE } from "../onboarding/ui.ts";
 import { QUALIFICATION_FILE, releaseQualification } from "../onboarding/release.ts";
-import { FileStore, MemoryStore, type OnboardingStore } from "../onboarding/store.ts";
+import { FileStore } from "../onboarding/file-store.ts";
+import { MemoryStore, type OnboardingStore } from "../onboarding/store.ts";
 
 const KEYS = parseKeyRing(`v1:${"ab".repeat(32)}`);
 
@@ -160,6 +165,34 @@ class FakeExecutor implements DeployExecutor {
   }
 }
 
+/** Runs applies as detached jobs (like the hosted deployer), which a restarted service can follow. */
+class ResumableExecutor extends FakeExecutor {
+  resumes: Array<{ job: JobHandle; from: number }> = [];
+  resumeBehavior: () => Promise<{ ok: boolean; detail: string; aborted: boolean }> = async () => ({
+    ok: true,
+    detail: "applied",
+    aborted: false,
+  });
+  override async apply(
+    ctx: ExecutionContext,
+    onLine: (l: string) => void,
+    onStarted?: (job: JobHandle) => void | Promise<void>,
+  ) {
+    await onStarted?.({ id: "job1", endpoint: "https://bye-deployer.operator.workers.dev" });
+
+    return super.apply(ctx, onLine);
+  }
+  async resume(ctx: ExecutionContext, job: JobHandle, from: number, onLine: (l: string) => void) {
+    this.resumes.push({ job, from });
+    onLine(`resumed for ${ctx.installationId}`);
+    const r = await this.resumeBehavior();
+
+    if (r.ok) this.applied = true;
+
+    return r;
+  }
+}
+
 const fakeCloudflare = (
   accounts: ReadonlyArray<Account> = [ACCOUNT],
 ): CloudflareReader & {
@@ -253,6 +286,7 @@ const VERIFIED = ONBOARDING_SCOPES.map((g) => ({ ...g, verified: true }));
 const world = (
   options: {
     store?: OnboardingStore;
+    executor?: FakeExecutor;
     accounts?: ReadonlyArray<Account>;
     verifiedScopes?: boolean;
   } = {},
@@ -260,7 +294,7 @@ const world = (
   const calls: Array<string> = [];
   const revoked: Array<string> = [];
   const store = options.store ?? new MemoryStore();
-  const executor = new FakeExecutor();
+  const executor = options.executor ?? new FakeExecutor();
   const cf = fakeCloudflare(options.accounts);
 
   const w: World = {
@@ -273,6 +307,7 @@ const world = (
     release: {
       resolve: () => ({ ok: true, release: { ref: RELEASE, dir: REPO } }),
       migrations: async () => ["d1:0001_identity.sql", "do:MailCore:v1"],
+      requiredConfig: (dir) => requiredConfig(join(dir, "infra/resources")).map((c) => c.name),
     },
     now: Date.parse("2026-09-26T12:00:00Z"),
     service: null as never,
@@ -338,7 +373,11 @@ const world = (
     fetch: fetcher,
     cloudflare: cf,
     executor,
-    release: { resolve: () => w.release.resolve(), migrations: (d) => w.release.migrations(d) },
+    release: {
+      resolve: () => w.release.resolve(),
+      migrations: (d) => w.release.migrations(d),
+      requiredConfig: (d) => w.release.requiredConfig(d),
+    },
     dataDir: mkdtempSync(join(tmpdir(), "bye-onboarding-")),
     now: () => w.now,
     healthTimeouts: { request: 200, async: 300 },
@@ -1546,5 +1585,334 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     const config = w.executor.applies[0]!.config;
     expect(config.NEWSLETTER_QUALIFIED).toBe("EVIDENCE.md#1 run-42");
     expect(config.ZONE_TOKEN_SEAL_KEY).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  });
+});
+
+describe("hosted onboarding: service on Durable Object storage", () => {
+  const IMAGES = {
+    deployer: `ghcr.io/chr33s/bye/deployer@sha256:${"1".repeat(64)}`,
+    scanner: `ghcr.io/chr33s/bye/scanner@sha256:${"2".repeat(64)}`,
+    mime: `ghcr.io/chr33s/bye/mime@sha256:${"3".repeat(64)}`,
+    sigmirror: `ghcr.io/chr33s/bye/sigmirror@sha256:${"4".repeat(64)}`,
+  };
+
+  it("runs the standard install end to end on the Durable Object store", async () => {
+    const store = new DurableObjectStore(new MapStorage());
+    const w = world({ store, verifiedScopes: true });
+    const result = await createBye(w);
+    expect(result.status).toBe("deploying");
+    const inst = (await store.installationForOperator("op@example.com"))!;
+    expect(inst.ready).toBe(true);
+    expect(await store.installationForTarget(ACCOUNT.id, "prod")).toMatchObject({ id: inst.id });
+    expect((await store.operations(inst.id))[0]!.status).toBe("succeeded");
+    expect(await store.writerHolder(inst.id)).toBeNull();
+    const kinds = (await store.events(inst.id)).map((e) => e.kind);
+    expect(kinds[0]).toBe("installation.created");
+    expect(kinds.at(-1)).toBe("operation.succeeded");
+  });
+
+  it("a release with images deploys them from the account's registry, covered by the digest", async () => {
+    const w = world({ verifiedScopes: true });
+    w.release = {
+      ...w.release,
+      resolve: () => ({ ok: true, release: { ref: { ...RELEASE, images: IMAGES }, dir: REPO } }),
+    };
+    await createBye(w);
+    const config = w.executor.applies[0]!.config;
+    expect(config.SCANNER_SIGNATURES).toBe("baked");
+    expect(config.SCANNER_IMAGE).toBe(
+      `registry.cloudflare.com/${ACCOUNT.id}/bye-scanner@sha256:${"2".repeat(64)}`,
+    );
+    expect(config.MIME_IMAGE).toBe(
+      `registry.cloudflare.com/${ACCOUNT.id}/bye-mime@sha256:${"3".repeat(64)}`,
+    );
+    expect(config.SIGMIRROR_IMAGE).toBe(
+      `registry.cloudflare.com/${ACCOUNT.id}/bye-sigmirror@sha256:${"4".repeat(64)}`,
+    );
+    // The stack accepts exactly these references.
+    expect(scannerProblems(config)).toEqual([]);
+  });
+
+  it("a pinned release manifest resolves without a checkout; no pin blocks installs", async () => {
+    expect(manifestRelease(null).resolve()).toMatchObject({ ok: false });
+
+    const pin = {
+      format: "bye.onboarding-release.v1" as const,
+      ref: { ...RELEASE, images: IMAGES },
+      migrations: ["d1:0001_identity.sql"],
+      requiredConfig: ["APP_ORIGIN"],
+      qualification: { newsletter: null },
+    };
+
+    const source = manifestRelease(pin);
+    expect(source.resolve()).toMatchObject({ ok: true, release: { ref: pin.ref } });
+    expect(await source.migrations("/anywhere")).toEqual(pin.migrations);
+    expect(source.requiredConfig("/anywhere")).toEqual(["APP_ORIGIN"]);
+
+    const w = world();
+    w.release = manifestRelease(null);
+    await connect(w);
+    await expect(
+      w.service.install("op@example.com", { accountId: ACCOUNT.id, zoneId: ZONE.id, label: "bye" }),
+    ).rejects.toMatchObject({ code: "blocked" });
+  });
+});
+
+describe("review during a deployment", () => {
+  it("is refused up front instead of planning against a running apply", async () => {
+    const w = world();
+    await connect(w);
+    await w.service.bind("op@example.com", ACCOUNT.id, "dev-trial01");
+    const review = await w.service.review("op@example.com");
+    const approval = await w.service.approve("op@example.com", review.id, review.digest);
+    w.executor.applyBehavior = () => new Promise(() => {});
+    await w.service.deploy("op@example.com", approval.id);
+    await new Promise((r) => setTimeout(r, 20));
+    const plans = w.executor.planCalls;
+    await expect(w.service.review("op@example.com")).rejects.toMatchObject({
+      code: "conflict",
+      nextAction: "Wait for it to finish, then review again",
+    });
+    expect(w.executor.planCalls).toBe(plans);
+  });
+});
+
+describe("hosted onboarding: resuming after a restart (spec §47)", () => {
+  /** Service 1 starts "Create Bye" and dies at the given step; returns its store and operation. */
+  const lostAt = async (hang: "plan" | "apply") => {
+    const store = new DurableObjectStore(new MapStorage());
+    const executor = new ResumableExecutor();
+    const w1 = world({ store, executor, verifiedScopes: true });
+
+    // The process dies mid-step: the executor never returns.
+    if (hang === "apply") executor.applyBehavior = () => new Promise(() => {});
+    else
+      executor.plans.push(
+        (ctx) => planOf(ctx.stage),
+        () => new Promise(() => {}) as never,
+      );
+    await connect(w1);
+    w1.health = healthyInstance(`https://bye.${ZONE.name}`);
+
+    const pending = w1.service.install("op@example.com", {
+      accountId: ACCOUNT.id,
+      zoneId: ZONE.id,
+      label: "bye",
+    });
+
+    if (hang === "apply") await pending;
+    await new Promise((r) => setTimeout(r, 20));
+    const inst = (await store.installationForOperator("op@example.com"))!;
+    const op = (await store.operations(inst.id))[0]!;
+
+    return { store, inst, op };
+  };
+
+  const restart = (store: OnboardingStore) => {
+    const executor = new ResumableExecutor();
+    const w2 = world({ store, executor, verifiedScopes: true });
+    w2.health = healthyInstance(`https://bye.${ZONE.name}`);
+
+    return w2;
+  };
+
+  it("follows the running deployer job instead of interrupting it, with no second apply", async () => {
+    const { store, inst, op } = await lostAt("apply");
+    expect(op).toMatchObject({ status: "running", step: "apply", job: { id: "job1", next: 0 } });
+    expect(op.planned!.length).toBeGreaterThan(0);
+
+    const w2 = restart(store);
+    expect(await w2.service.recover(await store.installationIds())).toBe(0);
+    await w2.service.settled(op.id);
+
+    const done = (await store.getOperation(op.id))!;
+    expect(done.status).toBe("succeeded");
+    expect(w2.executor.applies).toHaveLength(0);
+    expect((w2.executor as ResumableExecutor).resumes).toEqual([
+      { job: { id: "job1", endpoint: "https://bye-deployer.operator.workers.dev" }, from: 0 },
+    ]);
+    expect((await store.getInstallation(inst.id))!.ready).toBe(true);
+    expect(await store.writerHolder(inst.id)).toBeNull();
+    const kinds = (await store.events(inst.id)).map((e) => e.kind);
+    expect(kinds).toContain("operation.resumed");
+  });
+
+  it("a job the deployer no longer has fails with an uncertain outcome, never a replay", async () => {
+    const { store, op } = await lostAt("apply");
+    const w2 = restart(store);
+
+    (w2.executor as ResumableExecutor).resumeBehavior = async () => ({
+      ok: false,
+      aborted: false,
+      detail:
+        "the deployer no longer has this job (its container restarted); the deploy's outcome is uncertain",
+    });
+
+    await w2.service.recover(await store.installationIds());
+    await w2.service.settled(op.id);
+    const failed = (await store.getOperation(op.id))!;
+    expect(failed).toMatchObject({ status: "failed", step: "apply" });
+    expect(failed.error!.message).toContain("no longer has this job");
+    expect(w2.executor.applies).toHaveLength(0);
+  });
+
+  it("an operation lost before any write revalidates from the start", async () => {
+    const { store, inst, op } = await lostAt("plan");
+    expect(op).toMatchObject({ status: "running", step: "revalidate" });
+    expect((await store.getInstallation(inst.id))!.firstWriteAt).toBeNull();
+
+    const w2 = restart(store);
+    expect(await w2.service.recover(await store.installationIds())).toBe(0);
+    await w2.service.settled(op.id);
+    expect((await store.getOperation(op.id))!.status).toBe("succeeded");
+    expect(w2.executor.applies).toHaveLength(1);
+  });
+
+  it("without a connected authorization, or an executor that can resume, it is interrupted", async () => {
+    const { store, inst, op } = await lostAt("apply");
+    const current = (await store.getInstallation(inst.id))!;
+    await store.putInstallation({
+      ...current,
+      authorization: { ...current.authorization, status: "expired" },
+    });
+    const w2 = restart(store);
+    expect(await w2.service.recover(await store.installationIds())).toBe(1);
+    expect((await store.getOperation(op.id))!.status).toBe("interrupted");
+
+    const again = await lostAt("apply");
+    const plain = world({ store: again.store, verifiedScopes: true }); // FakeExecutor: no resume
+    expect(await plain.service.recover(await again.store.installationIds())).toBe(1);
+    expect((await again.store.getOperation(again.op.id))!.status).toBe("interrupted");
+  });
+});
+
+describe("hosted onboarding: re-attaching a new session (spec §43)", () => {
+  const setup = async () => {
+    const store = new DurableObjectStore(new MapStorage());
+    const w = world({ store, verifiedScopes: true });
+    await createBye(w);
+    const inst = (await store.installationForOperator("op@example.com"))!;
+
+    return { store, w, inst };
+  };
+
+  it("a fresh grant to the account takes the installation over; the old session loses it", async () => {
+    const { store, w, inst } = await setup();
+    await connect(w, "session:new", "session-2");
+
+    expect(await w.service.reattachable("session:new")).toEqual([
+      {
+        installationId: inst.id,
+        accountName: ACCOUNT.name,
+        appUrl: `https://bye.${ZONE.name}`,
+        ready: true,
+      },
+    ]);
+
+    const status = await w.service.reattach("session:new", inst.id);
+    expect(status.installation.id).toBe(inst.id);
+    expect(status.state).toBe("ready");
+    expect((await store.getInstallation(inst.id))!.operatorId).toBe("session:new");
+    // The new session's own empty installation is gone; the old session starts from nothing.
+    expect(await store.installationIds()).toEqual([inst.id]);
+    expect(await store.installationForOperator("op@example.com")).toBeNull();
+    expect((await w.service.status("op@example.com")).installation.id).not.toBe(inst.id);
+    // The grant was resealed for this installation: management works (review re-plans).
+    await expect(w.service.review("session:new")).resolves.toMatchObject({
+      installationId: inst.id,
+    });
+    expect((await store.events(inst.id)).map((e) => e.kind)).toContain("installation.reattached");
+    // The recovery kit is still issued once, not again because of the new session.
+    expect((await store.getInstallation(inst.id))!.recoveryKitIssuedAt ?? null).toBeNull();
+  });
+
+  it("a grant that can't reach the installation's account is refused and offered nothing", async () => {
+    const { w, inst } = await setup();
+    w.cf.accountsFor = () => [OTHER];
+    await connect(w, "session:new", "session-2");
+    expect(await w.service.reattachable("session:new")).toEqual([]);
+    await expect(w.service.reattach("session:new", inst.id)).rejects.toMatchObject({
+      code: "unauthorized",
+    });
+  });
+
+  it("moves the grant as refreshed, not the credentials read before the refresh", async () => {
+    const { store, w, inst } = await setup();
+    await connect(w, "session:new", "session-2");
+    // The new session's access token expires: re-attach refreshes it first.
+    w.now += 2 * 3_600_000;
+    await w.service.reattach("session:new", inst.id);
+    const moved = (await store.getInstallation(inst.id))!;
+    const creds = open<{ expiresAt: number }>(KEYS, moved.credentials!, inst.id);
+    expect(creds.expiresAt).toBeGreaterThan(w.now);
+    expect(moved.authorization.expiresAt).toBe(new Date(creds.expiresAt).toISOString());
+    // And it stays usable: no "expired" on the next management call.
+    await expect(w.service.review("session:new")).resolves.toMatchObject({
+      installationId: inst.id,
+    });
+  });
+
+  it("only standard (prod) installations can be taken over", async () => {
+    const w = world();
+    await connect(w);
+    const staged = await w.service.bind("op@example.com", ACCOUNT.id, "dev-trial01");
+    await connect(w, "session:new", "session-2");
+    expect(await w.service.reattachable("session:new")).toEqual([]);
+    await expect(w.service.reattach("session:new", staged.id)).rejects.toMatchObject({
+      code: "not_found",
+    });
+    expect((await w.store.getInstallation(staged.id))!.operatorId).toBe("op@example.com");
+  });
+
+  it("a session with its own bound installation cannot take another", async () => {
+    const { w, inst } = await setup();
+    w.cf.accountsFor = () => [ACCOUNT, OTHER];
+    await connect(w, "session:new", "session-2");
+    await w.service.bind("session:new", OTHER.id, "dev-other01");
+    await expect(w.service.reattach("session:new", inst.id)).rejects.toMatchObject({
+      code: "conflict",
+    });
+    expect(await w.service.reattachable("session:new")).toEqual([]);
+  });
+});
+
+describe("hosted onboarding: provisioning the deployer is a write (spec §44)", () => {
+  /** Like the remote executor: planning provisions the deployer in the account first. */
+  class ProvisioningExecutor extends ResumableExecutor {
+    readonly provisionsOnPlan = true;
+  }
+
+  it("is recorded before the first plan and fixes the target", async () => {
+    const executor = new ProvisioningExecutor();
+    // Unverified scopes send a prod install to review: no apply, yet the plan wrote the deployer.
+    const w = world({ executor });
+    const result = await createBye(w);
+    expect(result.status).toBe("needs-review");
+    const inst = (await w.store.installationForOperator("op@example.com"))!;
+    expect(inst.provisionedAt).not.toBeNull();
+    expect(inst.firstWriteAt).toBeNull();
+    expect((await w.store.events(inst.id)).map((e) => e.kind)).toContain("deployer.provisioning");
+    // The deployer lives in this account now: the target can't move to another hostname.
+    await expect(
+      w.service.install("op@example.com", {
+        accountId: ACCOUNT.id,
+        zoneId: ZONE.id,
+        label: "mail",
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+  });
+
+  it("never provisions for a target that fails its prerequisites", async () => {
+    const executor = new ProvisioningExecutor();
+    const w = world({ executor, verifiedScopes: true });
+    await connect(w);
+    const inst = await w.service.bind("op@example.com", ACCOUNT.id, "dev-trial01");
+    w.cf.workers.push(inst.workerName!); // a Worker with the installation's name already exists
+    await expect(w.service.review("op@example.com")).rejects.toMatchObject({
+      code: "blocked",
+      nextAction: "Resolve these first; nothing has been created in your Cloudflare account yet",
+    });
+    expect(executor.planCalls).toBe(0);
+    expect((await w.store.getInstallation(inst.id))!.provisionedAt ?? null).toBeNull();
   });
 });

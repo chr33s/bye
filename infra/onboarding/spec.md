@@ -20,6 +20,8 @@ After the first owner is created, Bye immediately offers a separate **incoming e
 
 All infrastructure planning, provisioning, health checks, recovery metadata, and safe-resume behavior remain implemented, but are moved behind the flow rather than presented as mandatory setup screens.
 
+Onboarding is hosted as a Cloudflare Worker, and the Alchemy run executes in a deployer provisioned in the user's own account after authorization (Part J).
+
 Newsletter configuration must not appear during onboarding. When an operator first opens the newsletter feature, Bye prompts for a Resend API key, validates it, provisions the required Resend webhook automatically, stores the credentials encrypted, and then opens the feature.
 
 ---
@@ -111,7 +113,7 @@ Bye runs in your Cloudflare account.
 [ Continue with Cloudflare ]
 ```
 
-No prerequisites list is shown on the main path. A secondary **What Bye creates** disclosure may describe Workers, D1, R2, Queues, Durable Objects, Workflows, Containers, state, and one Worker custom hostname.
+No prerequisites list is shown on the main path. A secondary **What Bye creates** disclosure may describe Workers, D1, R2, Queues, Durable Objects, Workflows, Containers, state, one Worker custom hostname, and the deployer Worker + container that runs the installation in the user's account (Part J).
 
 ### OAuth
 
@@ -1503,8 +1505,8 @@ Retries resume the recorded installation and target; they never silently select 
 
 ## 31. Cloudflare
 
-- Cloudflare OAuth credentials remain sealed in onboarding storage only.
-- OAuth credentials never become Worker bindings.
+- Cloudflare OAuth credentials remain sealed in onboarding storage only. The in-account deployer (Part J) receives the access token per request and never stores it.
+- OAuth credentials never become Worker bindings (the deployer's only secret binding is its per-installation request secret).
 - The application Worker receives no Cloudflare deployment-management token.
 - Zone access is read-only.
 - Custom-hostname write access is narrowly scoped through Workers Routes.
@@ -1877,3 +1879,87 @@ References:
 - https://resend.com/changelog/new-api-key-permissions
 
 The implementation must still pin/test the actual API behavior used by the release rather than relying solely on documentation.
+
+---
+
+# Part J — Hosting: onboarding Worker and in-account deployer
+
+Onboarding is offered as a public page (`https://onboarding.<DOMAIN>`) so a new user needs nothing but a browser and a Cloudflare account. The page and its state run on a Cloudflare Worker in Bye's account. The Alchemy run that creates the installation runs **in the user's own account**, in a deployer Worker + Container that onboarding provisions after Cloudflare authorization.
+
+## 42. Topology
+
+```text
+onboarding.<DOMAIN>   (Bye's account)
+  Onboarding Worker ──▶ OnboardingDO (one per service, SQLite storage)
+                          · OnboardingService (unchanged ordering and safety rules)
+                          · DurableObjectStore (installations, reviews, approvals, operations, events)
+                          · RemoteExecutor ─┐
+                                            │ Cloudflare API (the user's OAuth token)
+                                            ▼
+user's account
+  registry.cloudflare.com/<account>/bye-{deployer,scanner,mime,sigmirror}@sha256:…
+  <worker>-deployer  Worker ──▶ Deployer DO ──▶ Container (Node + the pinned release checkout)
+                                                   └─ pnpm run deploy (Alchemy) ──▶ the Bye stack
+  Alchemy state: Cloudflare.state() in the same account (unchanged)
+```
+
+- The onboarding Worker never runs Alchemy. The deployer never stores the OAuth token: every plan/apply request carries it, and it lives only in that request's child-process environment (`executor.ts` `childEnv`, unchanged).
+- The same `fetchHandler` (`http.ts`) serves the hosted Worker and the self-hosted Node process (`server.ts`), so routes, CSRF, host and cookie rules are identical.
+
+## 43. Operator identity (hosted)
+
+- **Session mode** (hosted default): the operator is the signed session (`__Host-bye-onboarding`, HMAC with a Worker secret). Anyone can start; only that browser session can act on its installation. API calls without an established session are refused (a crawler never creates installations).
+- **Access mode** stays available (`BYE_ONBOARDING_ACCESS_*`) for an operator-only deployment.
+- **Re-attach.** Losing the session cookie never loses the installation. A new session that connects Cloudflare, and has no installation of its own yet, is offered **Resume your Bye** for each standard (`prod`) installation bound to an account its fresh grant reaches (`GET /api/reattach`). Confirming (`POST /api/reattach`) moves the installation to the new session:
+  - The proof is the grant itself: whoever holds a grant to that account could deploy there anyway, so re-attach adds no authority. A grant that cannot reach the bound account is refused.
+  - The previous session loses access (one operator per installation). The new grant is sealed for the installation and the one it replaces is revoked (best effort); the new session's empty record is deleted.
+  - Nothing is deployed, retried or re-issued: a running deployment keeps running, and the recovery kit stays issued once. The event log records `installation.reattached` without session identifiers.
+  - Never silent: the page asks first, and a session that already has a bound installation cannot take another.
+
+## 44. Deployer bootstrap
+
+Runs on every plan, before the first Alchemy call, with the user's OAuth token. It is idempotent: a deployer already at the pinned release is left alone.
+
+Provisioning is a write into the user's account, so it is treated as one. The service records `provisionedAt` on the installation before the first bootstrap, which fixes the target from then on (the deployer and images live in that account). A target that fails its prerequisites is refused before anything is created. `firstWriteAt` keeps meaning the stack's first apply. The standard path's consent is the **Create Bye** click; the "What Bye creates" disclosure lists the deployer.
+
+1. **Images.** Copy each pinned image (`deployer`, `scanner`, `mime`, `sigmirror`) from the public release registry (GHCR) into `registry.cloudflare.com/<account>/bye-<name>` over the OCI distribution API, using registry credentials from `POST /accounts/:id/containers/registries/registry.cloudflare.com/credentials` (`containers.write`). Manifests are copied byte-for-byte, so the digest in the user's registry equals the pinned digest; any mismatch stops the bootstrap. Cloudflare Containers only run images from the account's own registry, and neither the Worker nor the deployer can run Docker, so this copy replaces `docker pull/push`.
+2. **Deployer Worker.** Upload `<BYE_WORKERS_DEV_NAME>-deployer` (a dependency-free module, `deployer/worker.ts`) with one container-backed Durable Object class (`Deployer`, SQLite), a `DEPLOYER_SECRET` secret binding, the release and image as plain bindings, and tags `bye-deployer` and `bye-install:<installation>`. A script with that name that lacks the installation tag is someone else's: bootstrap stops with a blocker instead of overwriting it.
+3. **workers.dev.** Enable the script's workers.dev route (previews off); the deployer is reached at `https://<name>-deployer.<subdomain>.workers.dev`.
+4. **Container application.** Create or update `<name>-deployer` bound to the `Deployer` namespace, `max_instances: 1`, the copied deployer image by digest, and roll it out. A container update or rollout that failed after the Worker upload is retried on the next plan; a rollout this process started recently is left to finish.
+5. **Readiness.** Poll `GET /health` with the secret until the running container reports the release commit (the container's own answer, not the Worker's bindings, so a rollout in progress is waited for).
+
+`DEPLOYER_SECRET` is `HMAC-SHA256(BYE_ONBOARDING_DEPLOYER_KEY, installation id)`: never stored, reproducible after a restart, different per installation.
+
+## 45. Stack images and release identity
+
+- The stack accepts digest-pinned `MIME_IMAGE` and `SIGMIRROR_IMAGE` next to `SCANNER_IMAGE` (`SCANNER_SIGNATURES=baked`). With them set, Alchemy deploys the images as-is (they are already in the target registry) and never builds a container.
+- The pinned release (`release-pin.ts`, written by `release-manifest.ts` at release time) is the tag, commit, lockfile digest, the four image digests, the release's migrations, required stack configuration and qualification evidence. The image digests are part of `ReleaseRef`, so an approval covers them and a new image needs a fresh review.
+- The user-registry image references reach the stack through the installation configuration, so they are part of the configuration digest too.
+- Images are built for `linux/amd64` as single-platform manifests (`--provenance=false`); an index is refused.
+
+## 46. Open before release (hosting)
+
+- Bye's Cloudflare OAuth client registration with redirect `https://onboarding.<DOMAIN>/oauth/callback` (unchanged gate).
+- Verify on a nonproduction account that `containers.write` covers registry credentials and that `workers-scripts.write` covers script upload, workers.dev and container applications; record it with the scope verification.
+- Measure a full first deploy through the deployer (bootstrap copy + Alchemy run) against one access-token lifetime.
+- A plan job still running on the deployer when the service restarts makes the resumed revalidate fail with "another job is running"; retrying after it finishes succeeds.
+- Deployer teardown on disconnect (today the deployer stays in the user's account and holds nothing without a request).
+
+## 47. Resuming after a restart
+
+A deployment outlives the Durable Object that started it, because the apply runs as a job on the deployer. The onboarding service keeps enough on the operation to continue:
+
+- `planned` (the approved actions of this run) is saved before any write; `job` (`{id, endpoint, next}`) as soon as the deployer accepts the apply, with `next` advanced every 20 lines; `applied` (the job's result) as soon as it is known.
+- The heartbeat alarm stays armed while an operation runs, so an evicted object wakes up again. Its constructor runs `recover()`, which continues each queued or running operation where that is safe and otherwise marks it `interrupted` (the existing rule):
+
+| Left at                             | Continues with                                                                   |
+| ----------------------------------- | -------------------------------------------------------------------------------- |
+| queued, or `revalidate`             | revalidate from the start (nothing was written)                                  |
+| `apply` with a recorded job         | following the job from `next` (only the deployer secret; no Cloudflare API call) |
+| `apply` done, `reconcile`, `health` | reconcile and health again (both read-only)                                      |
+| `apply` without a recorded job      | `interrupted`                                                                    |
+| authorization not `connected`       | `interrupted`                                                                    |
+
+- A job the deployer no longer has (its container restarted, so the Alchemy run died with it) ends the operation as failed with an uncertain outcome after the usual reconcile; the next action is a retry with the same approval, which re-plans. Nothing is replayed blindly.
+- The writer lock stays with the resumed operation; approvals are not re-checked on resume (the apply they covered was already checked against a fresh plan before its first write).
+- The self-hosted Node executor has no detached jobs, so the Node process keeps the old rule: every operation left running is `interrupted`.

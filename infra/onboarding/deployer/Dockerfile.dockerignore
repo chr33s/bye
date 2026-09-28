@@ -1,0 +1,11 @@
+# Build context is the repository root; ship the release sources only. Never local secrets or state.
+**/node_modules
+**/dist
+.git
+.env
+.env.*
+!.env.example
+.alchemy
+screenshots
+demo-reel
+design.pdf

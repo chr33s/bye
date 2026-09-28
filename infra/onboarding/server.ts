@@ -1,4 +1,5 @@
-// Onboarding HTTP service (spec.md §15.11). Node, because deployments run the Alchemy CLI.
+// Self-hosted onboarding (spec.md §15.11): the Fetch handler (http.ts) on node:http, with deploys
+// run by the Alchemy CLI on this host. The hosted service is worker/onboarding.ts.
 //
 //   BYE_ONBOARDING_ORIGIN=https://onboard.example.com   public origin (OAuth redirect, CSRF check)
 //                                                         (default https://onboarding.<DOMAIN>)
@@ -19,20 +20,23 @@
 //                               set HOST explicitly to listen elsewhere (Access mode only)
 //
 // Usage: node --experimental-strip-types infra/onboarding/server.ts
-import { Option, Predicate, Schema } from "effect";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { Predicate } from "effect";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { domainDefaults } from "../resources/domain.ts";
+import { requiredConfig } from "../policies/check-config.ts";
 import { ACCESS_JWT_HEADER, accessVerifier } from "./access.ts";
 import { cloudflareReader } from "./cloudflare.ts";
 import { processExecutor } from "./executor.ts";
+import { FileStore } from "./file-store.ts";
+import { readBody } from "./node-body.ts";
+import { fetchHandler, type LocalOperatorAuth, localOperatorAuth, MAX_BODY } from "./http.ts";
 import { cloudflareOAuthConfig } from "./oauth.ts";
 import { releaseMigrations, resolveRelease } from "./release.ts";
-import { encode, parseKeyRing } from "./seal.ts";
-import { OnboardingError, OnboardingService } from "./service.ts";
-import { FileStore } from "./store.ts";
-import { ONBOARDING_PAGE, ONBOARDING_SCRIPT, ONBOARDING_STYLE } from "./ui.ts";
+import { parseKeyRing } from "./seal.ts";
+import { OnboardingService } from "./service.ts";
+
+export { type LocalOperatorAuth, localOperatorAuth, signSession } from "./http.ts";
 
 export interface ServerOptions {
   readonly service: OnboardingService;
@@ -40,322 +44,50 @@ export interface ServerOptions {
   readonly origin: string;
   /** Returns the authenticated operator for a request, or null. */
   readonly operator: (req: IncomingMessage) => string | null | Promise<string | null>;
-  /**
-   * HMAC key for session cookies. Only sessions this server issued are accepted, so a client
-   * cannot pick (or be handed) a session id of its choosing. Default: random per process.
-   */
+  /** HMAC key for session cookies (default: random per process). */
   readonly sessionSecret?: Buffer;
-  /**
-   * Local-operator mode: the operator is a constant, so the connecting peer must prove it is that
-   * operator with this process's bearer token (or a session opened by the one-time login URL).
-   */
+  /** Local-operator mode (see http.ts). */
   readonly local?: LocalOperatorAuth;
 }
-
-/** Per-process credentials for local-operator mode (printed once at startup, never stored). */
-export interface LocalOperatorAuth {
-  /** `Authorization: Bearer <token>` for API clients. */
-  readonly token: string;
-  /** `GET /login?code=<loginCode>` sets an authenticated session cookie, once. */
-  readonly loginCode: string;
-}
-
-export const localOperatorAuth = (): LocalOperatorAuth => ({
-  token: encode(randomBytes(32), "base64url"),
-  loginCode: encode(randomBytes(32), "base64url"),
-});
 
 /** Loopback bind addresses local-operator mode accepts. */
 export const isLoopbackHost = (host: string): boolean =>
   /^(localhost|::1|\[::1\]|127\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.test(host);
 
-const safeEqual = (a: string, b: string): boolean => {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
+/** node:http adapter over the Fetch handler (http.ts); the Node request is kept for `operator`. */
+export const handler = ({ service, origin, operator, sessionSecret, local }: ServerOptions) => {
+  const requests = new WeakMap<Request, IncomingMessage>();
 
-  return x.length === y.length && timingSafeEqual(x, y);
-};
-
-const SESSION_COOKIE = "__Host-bye-onboarding";
-
-const sessionMac = (secret: Buffer, id: string) =>
-  createHmac("sha256", secret).update(`bye-onboarding-session\0${id}`).digest("base64url");
-
-/** Cookie value for a server-issued session id: `<id>.<mac>`. */
-export const signSession = (secret: Buffer, id: string): string =>
-  `${id}.${sessionMac(secret, id)}`;
-
-/** The session id from a cookie this server signed, or null (missing, malformed or forged). */
-export const sessionOf = (req: IncomingMessage, secret: Buffer): string | null => {
-  const m = /(?:^|;\s*)__Host-bye-onboarding=([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})(?:;|$)/.exec(
-    req.headers.cookie ?? "",
-  );
-
-  if (!m) return null;
-  const expected = Buffer.from(sessionMac(secret, m[1]!));
-  const given = Buffer.from(m[2]!);
-
-  return expected.length === given.length && timingSafeEqual(expected, given) ? m[1]! : null;
-};
-
-const SECURITY_HEADERS = {
-  "cache-control": "no-store",
-  "x-content-type-options": "nosniff",
-  "referrer-policy": "no-referrer",
-  "x-frame-options": "DENY",
-  "content-security-policy":
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-};
-
-const send = <T>(
-  res: ServerResponse,
-  status: number,
-  body: T,
-  headers: Record<string, string> = {},
-) => {
-  res.writeHead(status, { ...SECURITY_HEADERS, "content-type": "application/json", ...headers });
-  res.end(JSON.stringify(body));
-};
-
-const RequestBody = Schema.Record(Schema.String, Schema.Unknown);
-
-type RequestBody = typeof RequestBody.Type;
-
-const decodeRequestBody = Schema.decodeUnknownOption(RequestBody);
-
-const readJson = async (req: IncomingMessage): Promise<RequestBody> => {
-  const chunks: Array<Buffer> = [];
-  let size = 0;
-
-  for await (const c of req) {
-    size += (c as Buffer).length;
-
-    if (size > 16_384) throw new OnboardingError("invalid", "request too large");
-    chunks.push(c as Buffer);
-  }
-
-  try {
-    return Option.getOrElse(
-      decodeRequestBody(JSON.parse(encode(Buffer.concat(chunks), "utf8") || "{}")),
-      (): RequestBody => ({}),
-    );
-  } catch {
-    throw new OnboardingError("invalid", "invalid JSON");
-  }
-};
-
-const str = (body: RequestBody, k: string) => {
-  const v = body[k];
-
-  if (!Predicate.isString(v) || v.length === 0 || v.length > 256)
-    throw new OnboardingError("invalid", `${k} is required`);
-
-  return v;
-};
-
-const STATUS: Record<OnboardingError["code"], number> = {
-  not_found: 404,
-  unauthorized: 401,
-  conflict: 409,
-  invalid: 400,
-  blocked: 422,
-  not_ready: 409,
-};
-
-const ASSETS = new Map([
-  ["/app.js", { type: "text/javascript; charset=utf-8", body: ONBOARDING_SCRIPT }],
-  ["/app.css", { type: "text/css; charset=utf-8", body: ONBOARDING_STYLE }],
-]);
-
-export const handler = ({
-  service,
-  origin,
-  operator,
-  sessionSecret = randomBytes(32),
-  local,
-}: ServerOptions) => {
-  const expectedHost = new URL(origin).host.toLowerCase();
-  // Local mode: sessions opened through the one-time login URL (in memory, per process).
-  const authenticated = new Set<string>();
-  let loginUsed = false;
-
-  const cookieFor = (session: string) =>
-    `${SESSION_COOKIE}=${signSession(sessionSecret, session)}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=86400`;
+  const handle = fetchHandler({
+    service,
+    origin,
+    sessionSecret,
+    local,
+    operator: (r) => operator(requests.get(r)!),
+  });
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const url = new URL(req.url ?? "/", origin);
-
     try {
-      // DNS rebinding: a request whose Host is not the configured origin's is refused, so a page
-      // on another name that resolves here can't read even the GET routes.
-      if ((req.headers.host ?? "").toLowerCase() !== expectedHost)
-        return send(res, 421, { error: "unexpected host" });
-      const op = await operator(req);
+      const headers = new Headers();
 
-      if (op === null) return send(res, 401, { error: "sign in through the access proxy first" });
-      let session = sessionOf(req, sessionSecret);
-      const setCookie: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.headers))
+        if (v !== undefined) headers.set(k, Predicate.isString(v) ? v : v.join(", "));
 
-      if (session === null) {
-        session = encode(randomBytes(32), "base64url");
-        setCookie["set-cookie"] = cookieFor(session);
-      }
+      const method = req.method ?? "GET";
 
-      const asset = req.method === "GET" ? ASSETS.get(url.pathname) : undefined;
+      const body =
+        method === "GET" || method === "HEAD" ? undefined : await readBody(req, MAX_BODY);
 
-      if (asset) {
-        res.writeHead(200, { ...SECURITY_HEADERS, "content-type": asset.type });
-
-        return void res.end(asset.body);
-      }
-
-      if (local) {
-        if (req.method === "GET" && url.pathname === "/login") {
-          const code = url.searchParams.get("code") ?? "";
-
-          if (loginUsed || !safeEqual(code, local.loginCode))
-            return send(res, 401, { error: "login link invalid or already used" });
-          loginUsed = true;
-          // Always a fresh session: a pre-planted cookie is never promoted.
-          const fresh = encode(randomBytes(32), "base64url");
-          authenticated.add(fresh);
-          res.writeHead(303, {
-            ...SECURITY_HEADERS,
-            location: "/",
-            "set-cookie": cookieFor(fresh),
-          });
-
-          return void res.end();
-        }
-
-        const bearer = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "")?.[1];
-
-        const peer =
-          (bearer !== undefined && safeEqual(bearer, local.token)) ||
-          (setCookie["set-cookie"] === undefined && authenticated.has(session));
-
-        // The page itself is static; everything that reads or changes state needs the operator.
-        if (!peer && !(req.method === "GET" && url.pathname === "/"))
-          return send(res, 401, {
-            error: "open the login URL printed at startup, or send Authorization: Bearer <token>",
-          });
-      }
-
-      if (req.method === "GET" && url.pathname === "/") {
-        res.writeHead(200, {
-          ...SECURITY_HEADERS,
-          "content-type": "text/html; charset=utf-8",
-          ...setCookie,
-        });
-
-        return void res.end(ONBOARDING_PAGE);
-      }
-
-      if (req.method === "GET" && url.pathname === "/oauth/callback") {
-        const result = await service.completeAuthorization(op, session, url.searchParams);
-        const to = result.ok ? "/" : `/?error=${encodeURIComponent(result.reason)}`;
-        res.writeHead(303, { ...SECURITY_HEADERS, location: to, ...setCookie });
-
-        return void res.end();
-      }
-
-      if (req.method === "GET") {
-        const opMatch = /^\/api\/operations\/([A-Za-z0-9_-]{1,64})$/.exec(url.pathname);
-
-        if (opMatch) return send(res, 200, await service.operation(op, opMatch[1]!), setCookie);
-
-        switch (url.pathname) {
-          case "/api/status":
-            return send(res, 200, await service.status(op), setCookie);
-          case "/api/accounts":
-            return send(res, 200, { accounts: await service.accounts(op) }, setCookie);
-          case "/api/zones": {
-            const accountId = url.searchParams.get("accountId") ?? "";
-
-            if (!/^[A-Za-z0-9]{1,64}$/.test(accountId))
-              throw new OnboardingError("invalid", "accountId is required");
-
-            return send(res, 200, { zones: await service.zones(op, accountId) }, setCookie);
-          }
-
-          case "/api/guide":
-            return send(res, 200, await service.guide(op), setCookie);
-          case "/api/handoff":
-            return send(res, 200, await service.handoff(op), setCookie);
-        }
-
-        return send(res, 404, { error: "not found" });
-      }
-
-      if (req.method !== "POST") return send(res, 405, { error: "method not allowed" });
-
-      // CSRF: state-changing calls come only from this origin's page, as JSON.
-      if (
-        req.headers.origin !== origin ||
-        !(req.headers["content-type"] ?? "").startsWith("application/json")
-      )
-        return send(res, 403, { error: "cross-origin request refused" });
-      const body = await readJson(req);
-
-      switch (url.pathname) {
-        case "/api/authorize":
-          return send(res, 200, await service.startAuthorization(op, session), setCookie);
-        case "/api/install": {
-          // Only ids and the label: zone name, hostname and stage are derived server-side.
-          const result = await service.install(op, {
-            accountId: str(body, "accountId"),
-            zoneId: str(body, "zoneId"),
-            label: Predicate.isString(body.label) ? body.label : "bye",
-          });
-
-          return send(res, result.status === "deploying" ? 202 : 200, result);
-        }
-
-        case "/api/bind":
-          await service.bind(op, str(body, "accountId"), str(body, "stage"));
-
-          return send(res, 200, await service.status(op));
-        case "/api/review":
-          return send(res, 200, await service.review(op));
-        case "/api/approve":
-          return send(
-            res,
-            200,
-            await service.approve(
-              op,
-              str(body, "reviewId"),
-              str(body, "digest"),
-              body.acknowledgeDestructive === true,
-            ),
-          );
-        case "/api/deploy":
-          return send(res, 202, await service.deploy(op, str(body, "approvalId")));
-        case "/api/disconnect":
-          return send(res, 200, await service.disconnect(op));
-        case "/api/first-account":
-          return send(res, 200, await service.firstAccountLink(op));
-        case "/api/recovery-kit":
-          return send(res, 200, await service.recoveryKit(op), {
-            "content-disposition": 'attachment; filename="bye-recovery-kit.json"',
-          });
-      }
-
-      return send(res, 404, { error: "not found" });
-    } catch (e) {
-      if (e instanceof OnboardingError)
-        return send(res, STATUS[e.code], {
-          error: e.message,
-          code: e.code,
-          nextAction: e.nextAction ?? null,
-        });
-      console.error(
-        `onboarding: ${req.method} ${url.pathname} failed: ${e instanceof Error ? e.name : "error"}`,
-      );
-
-      return send(res, 500, {
-        error: "internal error",
-        nextAction: "Reload to see the recorded status",
-      });
+      const request = new Request(new URL(req.url ?? "/", origin), { method, headers, body });
+      requests.set(request, req);
+      const response = await handle(request);
+      res.writeHead(response.status, Object.fromEntries(response.headers));
+      res.end(response.body === null ? undefined : await response.text());
+    } catch {
+      // A client that aborts mid-upload (or a malformed request) must not take the process down,
+      // and with it every running deployment.
+      if (!res.headersSent) res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "bad request" }));
     }
   };
 };
@@ -424,7 +156,11 @@ if (import.meta.main) {
     fetch,
     cloudflare: cloudflareReader(fetch),
     executor: processExecutor(),
-    release: { resolve: () => resolveRelease(releaseDir, version), migrations: releaseMigrations },
+    release: {
+      resolve: () => resolveRelease(releaseDir, version),
+      migrations: releaseMigrations,
+      requiredConfig: (dir) => requiredConfig(join(dir, "infra/resources")).map((c) => c.name),
+    },
     dataDir,
   });
 

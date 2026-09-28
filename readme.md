@@ -76,7 +76,7 @@ STAGE=<stage> pnpm logs   # fetch logs from a deployed stage (append -- --tail t
 
 Clients are not built per server. The apps and CLI default to the hosted service and can add any compatible instance: they validate its `/.well-known/bye-instance` document and RFC 8414 metadata without credentials, then sign in there with PKCE and an issuer-checked callback (RFC 9207). Onboarding hands off with `bye://add-instance?url=<https URL>`. In the CLI, `BYE_API` overrides the saved default for one invocation.
 
-Operators without a CI pipeline can deploy into their own Cloudflare account through the onboarding service (`pnpm onboarding`; see [`infra/onboarding/README.md`](./infra/onboarding/README.md)). It has not yet been run against Cloudflare.
+Operators without a CI pipeline can deploy into their own Cloudflare account through the onboarding service: hosted as a Worker at `https://onboarding.<DOMAIN>` (its own stack: `pnpm deploy:onboarding`, or `vars.BYE_ONBOARDING` in CI), which runs each installation's deploy in a deployer it provisions in that user's account, or self-hosted with `pnpm onboarding`. See [`infra/onboarding/README.md`](./infra/onboarding/README.md). It has not yet been run against Cloudflare.
 
 Deployment goes through `pnpm deploy:plan` / `pnpm run deploy` with `STAGE` set to `dev-<id>`, `preview-<n>`, `staging` or `prod`. The scripts disable CLI telemetry, and production runs only from CI. Read [`infra/RUNBOOK.md`](./infra/RUNBOOK.md) first: bootstrapping the state backend is an explicit, authorized operation.
 

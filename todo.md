@@ -34,7 +34,7 @@ Everything that could be fixed in code has been removed from this list. What rem
   - Decide between per-stage grants on one backend and a separate prod backend.
 - [ ] **Do the two-phase first deploy for Turnstile** (RUNBOOK "First deploy: Turnstile"). Afterwards, set `TURNSTILE_SECRET` and `TURNSTILE_SITEKEY`.
 - [ ] **MX cutover:** follow RUNBOOK "MX cutover" after the first prod deploy has stabilized. Keep `BYE_MX_CUTOVER` unset until then.
-- [ ] **Onboarding host:** create a Cloudflare Access application (set `BYE_ONBOARDING_ACCESS_TEAM_DOMAIN` and `BYE_ONBOARDING_ACCESS_AUD`) and a tunnel. The server binds to `127.0.0.1` by default. Escrow `BYE_ONBOARDING_KEYS`, and register and verify the OAuth client (see `infra/onboarding/README.md`; the readme's "Open before release" section no longer exists).
+- [ ] **Onboarding host:** register Bye's Cloudflare OAuth client (redirect `https://onboarding.<DOMAIN>/oauth/callback`), publish the four release images to GHCR and pin them (`infra/onboarding/release-manifest.ts`), then deploy it (`pnpm deploy:onboarding`, or `vars.BYE_ONBOARDING=true` and the `onboarding` environment in CI) with `BYE_ONBOARDING_KEYS`, `BYE_ONBOARDING_SESSION_KEY` and `BYE_ONBOARDING_DEPLOYER_KEY` escrowed (`infra/onboarding/README.md` "Hosted"). Verify the scope set, including registry credentials and container applications, on a nonproduction account.
 
 ### Mail providers
 

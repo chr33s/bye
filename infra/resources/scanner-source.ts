@@ -3,6 +3,8 @@
 // when infra/resources/scanner.ts is loaded. Both names are read from the process environment at
 // deploy time (not Worker bindings), and CI maps them into every deploy job.
 
+import { DIGEST_PINNED } from "./container-images.ts";
+
 export type ScannerSignatureSource =
   | { readonly mode: "mirror" }
   | { readonly mode: "baked"; readonly image: string };
@@ -23,7 +25,7 @@ export const scannerSignatureSource = (
     throw new Error(`SCANNER_SIGNATURES must be "mirror" or "baked", got ${mode}`);
   const image = env.SCANNER_IMAGE ?? "";
 
-  if (!/@sha256:[0-9a-f]{64}$/.test(image))
+  if (!DIGEST_PINNED.test(image))
     throw new Error(
       "SCANNER_SIGNATURES=baked requires SCANNER_IMAGE pinned by digest (…@sha256:…)",
     );

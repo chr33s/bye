@@ -9,7 +9,6 @@ import { Match } from "effect";
 import { createPublicKey, generateKeyPairSync, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { addInstanceLink } from "../../packages/native-shared/src/instance/handoff.ts";
-import { requiredConfig } from "../policies/check-config.ts";
 import type { ExportedPlan } from "../policies/plan-normalize.ts";
 import {
   type Account,
@@ -17,8 +16,9 @@ import {
   type CloudflareReader,
   type Zone,
 } from "./cloudflare.ts";
-import type { DeployExecutor, ExecutionContext } from "./executor.ts";
+import type { ApplyResult, DeployExecutor, ExecutionContext } from "./executor.ts";
 import { manualGuide, type ManualGuide } from "./guide.ts";
+import { accountImageRef, INSTALL_IMAGES } from "./images.ts";
 import { runHealthChecks } from "./health.ts";
 import {
   beginAuthorization,
@@ -54,6 +54,7 @@ import type {
   OnboardingStore,
   Operation,
   OperationStep,
+  PlannedAction,
   ResourceOutcome,
   Review,
 } from "./store.ts";
@@ -116,6 +117,10 @@ interface RuntimeConfig {
   NEWSLETTER_QUALIFIED?: string;
   MAIL_DKIM_PUBLIC_KEY?: string;
   MAIL_TRAFFIC_CLASSES?: string;
+  SCANNER_SIGNATURES?: string;
+  SCANNER_IMAGE?: string;
+  MIME_IMAGE?: string;
+  SIGMIRROR_IMAGE?: string;
 }
 
 /** The DKIM `p=` value (base64 SPKI DER) for a PKCS#8 PEM private key. */
@@ -128,6 +133,7 @@ export const WHAT_BYE_CREATES: ReadonlyArray<string> = [
   "A D1 database, R2 buckets, a KV namespace and Queues for your mail and data.",
   "Deployment state in your own account (Cloudflare state store).",
   "One Worker custom hostname: the Bye address you choose. No DNS, MX or Email Routing changes.",
+  "A deployer Worker and container that runs the installation in your account, from Bye's release images copied into your account's container registry.",
 ];
 
 /** Kept for stage-bound (internal/operator) installations and older clients. */
@@ -220,6 +226,8 @@ export class OnboardingError extends Error {
 export interface ReleaseSource {
   resolve(): ReleaseResolution;
   migrations(dir: string): Promise<ReadonlyArray<string>>;
+  /** Stack configuration names the release requires (check-config.ts `requiredConfig`). */
+  requiredConfig(dir: string): ReadonlyArray<string>;
 }
 
 export interface ServiceDeps {
@@ -384,6 +392,20 @@ export type InstallResult =
       readonly reasons: ReadonlyArray<string>;
     };
 
+/**
+ * Where a deployment continues after a restart: from the start (nothing written yet), by
+ * following its detached apply job, or with the read-only reconcile and health steps.
+ */
+type ResumePoint = "revalidate" | "follow" | "reconcile";
+
+/** An existing installation a new session may take over (re-attach). */
+export interface ReattachCandidate {
+  readonly installationId: string;
+  readonly accountName: string;
+  readonly appUrl: string | null;
+  readonly ready: boolean;
+}
+
 export interface Handoff {
   readonly url: string;
   readonly link: string;
@@ -401,6 +423,11 @@ export class OnboardingService {
   constructor(deps: ServiceDeps) {
     this.deps = deps;
     this.now = deps.now ?? Date.now;
+  }
+
+  /** Whether a deployment or "Create Bye" is in progress in this process (hosted heartbeat). */
+  get busy(): boolean {
+    return this.running.size > 0 || this.installing.size > 0;
   }
 
   private iso() {
@@ -676,6 +703,106 @@ export class OnboardingService {
     return (await this.activeZones(token, accountId)).map((z) => ({ id: z.id, name: z.name }));
   }
 
+  // ── Re-attach (infra/onboarding/spec.md §43) ─────────────────────────────────────────────
+
+  /**
+   * Installations this session's fresh Cloudflare grant proves control of: standard (prod)
+   * installations bound to an account the grant reaches. Offered only to a session whose own
+   * installation is still unbound, e.g. after its browser lost the session cookie.
+   */
+  async reattachable(operatorId: string): Promise<ReadonlyArray<ReattachCandidate>> {
+    const inst = await this.installation(operatorId);
+
+    if (inst.boundAt !== null || inst.authorization.status !== "connected") return [];
+    const accounts = await this.deps.cloudflare.accounts(await this.accessToken(inst));
+    const out: Array<ReattachCandidate> = [];
+
+    for (const account of accounts) {
+      const other = await this.deps.store.installationForTarget(account.id, "prod");
+
+      if (other && other.id !== inst.id && other.boundAt !== null)
+        out.push({
+          installationId: other.id,
+          accountName: other.accountName ?? account.name,
+          appUrl: other.urls?.app ?? null,
+          ready: other.ready,
+        });
+    }
+
+    return out;
+  }
+
+  /**
+   * Moves an installation to this session. The proof is this session's fresh grant, which must
+   * reach the installation's account: whoever holds it could deploy there anyway. The previous
+   * operator loses access, the grant replaces the stored one (which is revoked), and nothing is
+   * deployed, retried or re-issued (the recovery kit stays issued once).
+   */
+  async reattach(operatorId: string, installationId: string): Promise<StatusView> {
+    const current = await this.installation(operatorId);
+
+    if (current.id === installationId) return this.status(operatorId);
+
+    if (current.boundAt !== null || this.installing.has(current.id))
+      throw new OnboardingError(
+        "conflict",
+        "this session already has its own installation",
+        "Open onboarding in a new browser session to resume another installation",
+      );
+    // May refresh (and rotate) the grant; the credentials moved below are read after it.
+    const token = await this.accessToken(current);
+    const target = await this.deps.store.getInstallation(installationId);
+
+    // Only what reattachable() offers: bound standard (prod) installations.
+    if (!target || target.boundAt === null || target.accountId === null || target.stage !== "prod")
+      throw new OnboardingError("not_found", "installation not found");
+    const accounts = await this.deps.cloudflare.accounts(token);
+
+    if (!accounts.some((a) => a.id === target.accountId))
+      throw new OnboardingError(
+        "unauthorized",
+        "this Cloudflare authorization cannot reach the installation's account",
+        "Continue with Cloudflare as a member of that account",
+      );
+    const refreshed = await this.fresh(current.id);
+
+    if (refreshed.credentials === null)
+      throw new OnboardingError(
+        "unauthorized",
+        "Cloudflare is not connected",
+        "Connect Cloudflare",
+      );
+    const grant = open<StoredCredentials>(this.deps.keys, refreshed.credentials, current.id);
+
+    const previous =
+      target.credentials === null
+        ? null
+        : open<StoredCredentials>(this.deps.keys, target.credentials, target.id);
+
+    await this.deps.store.putInstallation({
+      ...(await this.fresh(target.id)),
+      operatorId,
+      // Sealed again: the installation ID is the additional authenticated data.
+      credentials: seal(this.deps.keys, grant, target.id),
+      authorization: refreshed.authorization,
+    });
+    await this.deps.store.deleteInstallation(current.id);
+    await this.event(
+      target.id,
+      "installation.reattached",
+      `a new operator session took over with a fresh Cloudflare grant to ${target.accountName ?? target.accountId}`,
+    );
+
+    // The replaced grant must not outlive the session that held it.
+    if (previous && previous.accessToken !== grant.accessToken) {
+      if (previous.refreshToken)
+        await revokeToken(this.deps.oauth, previous.refreshToken, "refresh_token", this.deps.fetch);
+      await revokeToken(this.deps.oauth, previous.accessToken, "access_token", this.deps.fetch);
+    }
+
+    return this.status(operatorId);
+  }
+
   private async activeZones(token: string, accountId: string): Promise<ReadonlyArray<Zone>> {
     return (await this.deps.cloudflare.zones(token, accountId))
       .filter((z) => z.status === "active")
@@ -827,6 +954,7 @@ export class OnboardingService {
       const movable =
         !!inst.appHostname &&
         inst.firstWriteAt === null &&
+        !inst.provisionedAt &&
         !inst.recoveryKitIssuedAt &&
         (await this.activeOperation(inst.id)) === null;
 
@@ -994,6 +1122,20 @@ export class OnboardingService {
 
     if (qualified) config.NEWSLETTER_QUALIFIED = qualified;
 
+    // A release with pinned images deploys them from the account's own registry (the deployer
+    // copies them there; nothing is built). Part of the configuration digest, like the release.
+    const images = resolved.ok ? resolved.release.ref.images : undefined;
+
+    if (images) {
+      const ref = (name: keyof typeof images) =>
+        accountImageRef(inst.accountId!, INSTALL_IMAGES[name], images[name]);
+
+      config.SCANNER_SIGNATURES = "baked";
+      config.SCANNER_IMAGE = ref("scanner");
+      config.MIME_IMAGE = ref("mime");
+      config.SIGMIRROR_IMAGE = ref("sigmirror");
+    }
+
     // Outbound personal mail through Cloudflare Email Sending, DKIM-signed with the generated
     // key (installations bound before key generation keep transactional mail only).
     if (secrets.MAIL_DKIM_PRIVATE_KEY) {
@@ -1062,9 +1204,10 @@ export class OnboardingService {
   }
 
   private requiredConfigGaps(releaseDir: string, config: Readonly<Record<string, string>>) {
-    return requiredConfig(join(releaseDir, "infra/resources"))
-      .filter((c) => !(c.name in config))
-      .map((c) => `required stack configuration ${c.name} has no onboarding value`);
+    return this.deps.release
+      .requiredConfig(releaseDir)
+      .filter((name) => !(name in config))
+      .map((name) => `required stack configuration ${name} has no onboarding value`);
   }
 
   // ── Review and approval ──────────────────────────────────────────────────────────────────
@@ -1079,12 +1222,40 @@ export class OnboardingService {
 
     if (!resolved.ok)
       throw new OnboardingError("blocked", resolved.reason, "Contact the Bye release owner");
-    const active = await this.activeOperation(inst.id);
-    const blockers: Array<string> = [...(await this.prerequisites(inst, token))];
 
-    if (active) blockers.push("a deployment is already in progress for this installation");
+    // A plan now would race the running apply (the hosted deployer runs one job at a time), and
+    // its result would be stale when the apply finishes anyway.
+    if (await this.activeOperation(inst.id))
+      throw new OnboardingError(
+        "conflict",
+        "a deployment is already in progress for this installation",
+        "Wait for it to finish, then review again",
+      );
+    const blockers: Array<string> = [...(await this.prerequisites(inst, token))];
     const config = this.config(inst);
     blockers.push(...this.requiredConfigGaps(resolved.release.dir, config));
+
+    // A hosted plan first provisions the deployer in the account: that is a write. It happens
+    // only for a target that passes its prerequisites, is recorded before it starts, and fixes
+    // the target from then on (the deployer and images live in that account).
+    if (this.deps.executor.provisionsOnPlan && !inst.provisionedAt) {
+      if (blockers.length > 0)
+        throw new OnboardingError(
+          "blocked",
+          blockers.join("; "),
+          "Resolve these first; nothing has been created in your Cloudflare account yet",
+        );
+      await this.deps.store.putInstallation({
+        ...(await this.fresh(inst.id)),
+        provisionedAt: this.iso(),
+      });
+      await this.event(
+        inst.id,
+        "deployer.provisioning",
+        `deployer for ${inst.accountName ?? inst.accountId}`,
+      );
+    }
+
     const controller = new AbortController();
     let exported: ExportedPlan;
 
@@ -1235,18 +1406,23 @@ export class OnboardingService {
 
     await this.deps.store.putOperation(op);
     await this.event(inst.id, "operation.queued", `deploy with approval ${approvalId}`, op.id);
-    const controller = new AbortController();
-    this.active.set(inst.id, { opId: op.id, controller });
+    this.launch(op, approval, "revalidate");
 
-    const run = this.execute(op, approval, controller.signal).finally(async () => {
-      this.active.delete(inst.id);
+    return op;
+  }
+
+  /** Runs an operation that holds the writer lock in the background; the lock is released after. */
+  private launch(op: Operation, approval: Approval, from: ResumePoint) {
+    const controller = new AbortController();
+    this.active.set(op.installationId, { opId: op.id, controller });
+
+    const run = this.execute(op, approval, controller.signal, from).finally(async () => {
+      this.active.delete(op.installationId);
       this.running.delete(op.id);
-      await this.deps.store.releaseWriter(inst.id, op.id);
+      await this.deps.store.releaseWriter(op.installationId, op.id);
     });
 
     this.running.set(op.id, run);
-
-    return op;
   }
 
   /** One of this operator's operations (progress polling). */
@@ -1269,6 +1445,7 @@ export class OnboardingService {
     initial: Operation,
     approval: Approval,
     signal: AbortSignal,
+    from: ResumePoint = "revalidate",
   ): Promise<void> {
     let op = initial;
     const instId = op.installationId;
@@ -1302,111 +1479,161 @@ export class OnboardingService {
     const stopped = async () =>
       signal.aborted || (await this.fresh(instId)).authorization.status !== "connected";
 
+    /**
+     * Records apply output as progress events (the first 400 lines) and, for a detached job, how
+     * far it has been read, so a resumed follow continues close to where this one stopped.
+     */
+    const recorder = (start: number) => {
+      let n = start;
+
+      return (line: string) => {
+        if (n < 400) void this.event(instId, "apply.progress", line, op.id);
+        n++;
+
+        if (op.job && n % 20 === 0) void save({ job: { ...op.job, next: n } });
+      };
+    };
+
     const STOPPED_NEXT =
       "Reconnect Cloudflare, review again and retry: completed resources are kept and nothing is replayed blindly";
 
     try {
-      await step("revalidate");
       let inst = await this.fresh(instId);
-      let token: string;
-
-      try {
-        token = await this.accessToken(inst, true);
-      } catch (e) {
-        return await fail(
-          "revalidate",
-          e instanceof Error ? e.message : "authorization unavailable",
-          "Reconnect Cloudflare",
-        );
-      }
-
       const resolved = this.deps.release.resolve();
+      const dir = resolved.ok ? resolved.release.dir : "";
+      let token = "";
+      const ctx = () => this.context(inst, dir, token, signal);
+      let planned: ReadonlyArray<PlannedAction>;
+      let applied: ApplyResult | null = null;
 
-      if (!resolved.ok)
-        return await fail(
-          "revalidate",
-          resolved.reason,
-          "Review again once the pinned release is available",
+      if (from === "revalidate") {
+        await step("revalidate");
+
+        try {
+          token = await this.accessToken(inst, true);
+        } catch (e) {
+          return await fail(
+            "revalidate",
+            e instanceof Error ? e.message : "authorization unavailable",
+            "Reconnect Cloudflare",
+          );
+        }
+
+        if (!resolved.ok)
+          return await fail(
+            "revalidate",
+            resolved.reason,
+            "Review again once the pinned release is available",
+          );
+
+        if (JSON.stringify(resolved.release.ref) !== JSON.stringify(approval.subject.release))
+          return await fail(
+            "revalidate",
+            `the pinned release is now ${resolved.release.ref.version}, not the approved ${approval.subject.release.version}`,
+            "Review and approve the new release; retries never deploy a newer release silently",
+          );
+        const prereq = await this.prerequisites(inst, token);
+        let exported: ExportedPlan;
+
+        try {
+          exported = await this.deps.executor.plan(ctx());
+        } catch (e) {
+          return await fail(
+            "revalidate",
+            e instanceof Error ? e.message : "planning failed",
+            'If Alchemy state cannot be read, follow infra/RUNBOOK.md "Interrupted deploy"; do not start over with fresh state',
+          );
+        }
+
+        const fresh = buildReview({
+          installation: inst,
+          release: resolved.release.ref,
+          exported,
+          configHash: configHash(this.config(inst), SECRET_NAMES),
+          releaseMigrations: await this.deps.release.migrations(resolved.release.dir),
+          prerequisiteBlockers: [
+            ...prereq,
+            ...this.requiredConfigGaps(resolved.release.dir, this.config(inst)),
+          ],
+          grantedScopes: inst.authorization.scopes,
+          scopeMatrix: this.deps.scopeMatrix,
+        });
+
+        // A retry after a partial apply is not a first deployment: existing rows are its own.
+        const blockers = fresh.blockers.filter(
+          (b) => !(inst.firstWriteAt !== null && b.startsWith("Alchemy state already holds")),
         );
 
-      if (JSON.stringify(resolved.release.ref) !== JSON.stringify(approval.subject.release))
-        return await fail(
-          "revalidate",
-          `the pinned release is now ${resolved.release.ref.version}, not the approved ${approval.subject.release.version}`,
-          "Review and approve the new release; retries never deploy a newer release silently",
-        );
-      const prereq = await this.prerequisites(inst, token);
-      const ctx = () => this.context(inst, resolved.release.dir, token, signal);
-      let exported: ExportedPlan;
+        if (blockers.length > 0)
+          return await fail(
+            "revalidate",
+            blockers.join("; "),
+            "Resolve the blockers, then review again",
+          );
+        const drift = approvalCovers(approval.subject, fresh.subject);
 
-      try {
-        exported = await this.deps.executor.plan(ctx());
-      } catch (e) {
-        return await fail(
-          "revalidate",
-          e instanceof Error ? e.message : "planning failed",
-          'If Alchemy state cannot be read, follow infra/RUNBOOK.md "Interrupted deploy"; do not start over with fresh state',
-        );
+        if (drift.length > 0)
+          return await fail(
+            "revalidate",
+            `the approval no longer covers the plan: ${drift.join("; ")}`,
+            "Review the new plan and approve it; the old approval cannot authorize new effects",
+          );
+
+        planned = fresh.subject.actions;
+        // Persisted before any write, so a resumed operation reconciles exactly these actions.
+        await save({ planned });
+
+        if (planned.length > 0) {
+          if (await stopped())
+            return await fail(
+              "apply",
+              "deployment stopped before any write",
+              STOPPED_NEXT,
+              "cancelled",
+            );
+
+          if (inst.firstWriteAt === null) {
+            inst = { ...(await this.fresh(instId)), firstWriteAt: this.iso() };
+            await this.deps.store.putInstallation(inst);
+          }
+
+          await step("apply");
+
+          applied = await this.deps.executor.apply(ctx(), recorder(0), async (job) => {
+            await save({ job: { ...job, next: 0 } });
+          });
+        }
+      } else {
+        // Resumed after a restart: the approval was already checked against a fresh plan before
+        // the first write. Following a job or reconciling needs no management write.
+        planned = op.planned ?? [];
+
+        try {
+          token = await this.accessToken(inst);
+        } catch {
+          token = "";
+        }
+
+        if (from === "follow" && op.job && this.deps.executor.resume) {
+          applied = await this.deps.executor.resume(
+            ctx(),
+            { id: op.job.id, endpoint: op.job.endpoint },
+            op.job.next,
+            recorder(op.job.next),
+          );
+        } else applied = op.applied ?? null;
       }
-
-      const fresh = buildReview({
-        installation: inst,
-        release: resolved.release.ref,
-        exported,
-        configHash: configHash(this.config(inst), SECRET_NAMES),
-        releaseMigrations: await this.deps.release.migrations(resolved.release.dir),
-        prerequisiteBlockers: [
-          ...prereq,
-          ...this.requiredConfigGaps(resolved.release.dir, this.config(inst)),
-        ],
-        grantedScopes: inst.authorization.scopes,
-        scopeMatrix: this.deps.scopeMatrix,
-      });
-
-      // A retry after a partial apply is not a first deployment: existing rows are its own.
-      const blockers = fresh.blockers.filter(
-        (b) => !(inst.firstWriteAt !== null && b.startsWith("Alchemy state already holds")),
-      );
-
-      if (blockers.length > 0)
-        return await fail(
-          "revalidate",
-          blockers.join("; "),
-          "Resolve the blockers, then review again",
-        );
-      const drift = approvalCovers(approval.subject, fresh.subject);
-
-      if (drift.length > 0)
-        return await fail(
-          "revalidate",
-          `the approval no longer covers the plan: ${drift.join("; ")}`,
-          "Review the new plan and approve it; the old approval cannot authorize new effects",
-        );
 
       let outcomes: Array<ResourceOutcome> = [];
 
-      if (fresh.subject.actions.length > 0) {
-        if (await stopped())
+      if (planned.length > 0) {
+        if (applied === null)
           return await fail(
             "apply",
-            "deployment stopped before any write",
-            STOPPED_NEXT,
-            "cancelled",
+            "the result of the apply was not recorded",
+            "Review again: the fresh plan shows what exists",
           );
-
-        if (inst.firstWriteAt === null) {
-          inst = { ...(await this.fresh(instId)), firstWriteAt: this.iso() };
-          await this.deps.store.putInstallation(inst);
-        }
-
-        await step("apply");
-        let lines = 0;
-
-        const applied = await this.deps.executor.apply(ctx(), (line) => {
-          if (lines++ < 400) void this.event(instId, "apply.progress", line, op.id);
-        });
-
-        const planned = fresh.subject.actions;
+        await save({ applied });
 
         if (applied.aborted || (await stopped())) {
           // No further API calls after a stop: outcomes stay uncertain until a reviewed reconcile.
@@ -1536,9 +1763,12 @@ export class OnboardingService {
   }
 
   /**
-   * After process loss: operations left queued or running are marked interrupted (their outcome
-   * is uncertain) and their writer locks released. Recovery is a fresh review whose plan
-   * reconciles against Alchemy state, never a blind replay.
+   * After process loss. With an executor that runs applies as detached jobs (hosted), operations
+   * are continued where that is safe: before any write (revalidate again), while the apply job may
+   * still be running (follow it), or after it (reconcile and health, both read-only). Everything
+   * else, and every operation without a connected authorization, is marked interrupted (outcome
+   * uncertain) and its writer lock released; recovery is then a fresh review whose plan reconciles
+   * against Alchemy state, never a blind replay.
    */
   async recover(installationIds: ReadonlyArray<string>): Promise<number> {
     let n = 0;
@@ -1548,6 +1778,15 @@ export class OnboardingService {
         if (op.status !== "queued" && op.status !== "running") continue;
 
         if (this.running.has(op.id)) continue;
+        const from = await this.resumePoint(op);
+        const approval = from ? await this.deps.store.getApproval(op.approvalId) : null;
+
+        if (from && approval && (await this.deps.store.acquireWriter(id, op.id)) === null) {
+          await this.event(id, "operation.resumed", `resumed at ${from} after a restart`, op.id);
+          this.launch(op, approval, from);
+          continue;
+        }
+
         await this.deps.store.putOperation({
           ...op,
           status: "interrupted",
@@ -1567,6 +1806,21 @@ export class OnboardingService {
     }
 
     return n;
+  }
+
+  /** Where an operation left by a lost process can safely continue, or null (interrupted). */
+  private async resumePoint(op: Operation): Promise<ResumePoint | null> {
+    if (!this.deps.executor.resume) return null;
+    const inst = await this.deps.store.getInstallation(op.installationId);
+
+    if (inst?.authorization.status !== "connected") return null;
+
+    if (op.status === "queued" || op.step === "revalidate") return "revalidate";
+
+    if (op.applied || op.step === "reconcile" || op.step === "health")
+      return op.planned && (op.applied || op.planned.length === 0) ? "reconcile" : null;
+
+    return op.step === "apply" && op.job ? "follow" : null;
   }
 
   // ── Disconnect ───────────────────────────────────────────────────────────────────────────
@@ -1666,7 +1920,6 @@ export class OnboardingService {
   async status(operatorId: string): Promise<StatusView> {
     const inst = await this.installation(operatorId);
     const operation = (await this.deps.store.operations(inst.id))[0] ?? null;
-    const events = await this.deps.store.events(inst.id);
     const resolved = this.deps.release.resolve();
 
     return {
@@ -1694,7 +1947,7 @@ export class OnboardingService {
       releaseProblem: resolved.ok ? null : resolved.reason,
       authorization: inst.authorization,
       operation,
-      progress: operation ? events.filter((e) => e.operationId === operation.id).slice(-50) : [],
+      progress: operation ? await this.deps.store.recentEvents(inst.id, operation.id, 50) : [],
       prerequisites: PREREQUISITES,
       manualSteps: MANUAL_STEPS,
       whatByeCreates: WHAT_BYE_CREATES,

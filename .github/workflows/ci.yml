@@ -7,6 +7,7 @@
 #   steady          → two clean deploys: the second plan must be a no-op (§15.10)
 #   release-plan    → plan export + gate + release manifest (artifact)
 #   release-deploy  → approval, manifest re-verified against a fresh plan, canary, probes, promote
+#   onboarding      → the hosted onboarding service from main, when vars.BYE_ONBOARDING == 'true'
 # Every Alchemy invocation runs behind the egress inspection proxy (§13), and state goes through
 # the self-hosted HTTP backend (STATE_BACKEND=http) whose Worker hash is checked first.
 #
@@ -602,6 +603,53 @@ jobs:
             plan-out/plan-export.json
             probe-report.json
             lease-heartbeat.log
+
+  # Hosted onboarding service (infra/onboarding/README.md "Hosted"). Its own stack, never part of a
+  # stage deploy; this job runs only when the repo sets vars.BYE_ONBOARDING to 'true', on pushes to
+  # main, in Bye's (prod) account. Required
+  # reviewers and its secrets live on the `onboarding` environment.
+  onboarding:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.BYE_ONBOARDING == 'true'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: onboarding
+    concurrency:
+      group: deploy-onboarding
+      cancel-in-progress: false
+    env:
+      DOMAIN: ${{ vars.DOMAIN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PROD_CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.PROD_CLOUDFLARE_API_TOKEN }}
+      STATE_BACKEND: http
+      BYE_STATE_URL: ${{ vars.PROD_BYE_STATE_URL }}
+      BYE_STATE_TOKEN: ${{ secrets.PROD_BYE_STATE_TOKEN }}
+      BYE_ONBOARDING_KEYS: ${{ secrets.BYE_ONBOARDING_KEYS }}
+      BYE_ONBOARDING_SESSION_KEY: ${{ secrets.BYE_ONBOARDING_SESSION_KEY }}
+      BYE_ONBOARDING_DEPLOYER_KEY: ${{ secrets.BYE_ONBOARDING_DEPLOYER_KEY }}
+      CLOUDFLARE_OAUTH_CLIENT_ID: ${{ vars.CLOUDFLARE_OAUTH_CLIENT_ID }}
+      CLOUDFLARE_OAUTH_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_OAUTH_CLIENT_SECRET }}
+      BYE_ONBOARDING_ACCESS_TEAM_DOMAIN: ${{ vars.BYE_ONBOARDING_ACCESS_TEAM_DOMAIN }}
+      BYE_ONBOARDING_ACCESS_AUD: ${{ vars.BYE_ONBOARDING_ACCESS_AUD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Prerequisites
+        run: |
+          for v in DOMAIN BYE_ONBOARDING_KEYS BYE_ONBOARDING_SESSION_KEY BYE_ONBOARDING_DEPLOYER_KEY CLOUDFLARE_OAUTH_CLIENT_ID; do
+            [ -n "${!v}" ] || { echo "::error::$v is not set on the onboarding environment"; exit 1; }
+          done
+      - run: node --experimental-strip-types infra/state/verify-worker.ts
+      - name: Deploy
+        run: $EGRESS pnpm deploy:onboarding
 
   # ---- Native clients (X01). React Native hosts install with npm outside the pnpm workspace. ----
   native-ios:

@@ -10,6 +10,7 @@ import { Predicate } from "effect";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { domainDefaults, parseDomain } from "../resources/domain.ts";
+import { PREBUILT_IMAGE_ENV, prebuiltImage } from "../resources/container-images.ts";
 import { SCANNER_DEPLOY_ENV, scannerSignatureSource } from "../resources/scanner-source.ts";
 import { classifyStage } from "../resources/stage.ts";
 
@@ -65,7 +66,7 @@ export const declaredConfig = (
   }
 
   // Deploy-time names the stack reads from process.env rather than a Config declaration.
-  for (const name of SCANNER_DEPLOY_ENV)
+  for (const name of [...SCANNER_DEPLOY_ENV, ...PREBUILT_IMAGE_ENV])
     if (!found.has(name)) found.set(name, { name, secret: false, optional: true });
 
   return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -92,6 +93,8 @@ export const CI_UNMAPPED: ReadonlyArray<string> = [
   "INSTALL_ZONE_NAME",
   "NEWSLETTER_CONFIG_SEAL_KEY",
   "ZONE_TOKEN_SEAL_KEY",
+  // Prebuilt MIME/SigMirror images: onboarding deploys from hosts without Docker (§45); CI builds.
+  ...PREBUILT_IMAGE_ENV,
 ];
 
 /**
@@ -243,18 +246,25 @@ export const webhookSecretProblems = (
       : [];
   });
 
-/** SCANNER_SIGNATURES/SCANNER_IMAGE, validated with the stack's own rule before any plan. */
+/**
+ * SCANNER_SIGNATURES/SCANNER_IMAGE and the prebuilt MIME/SigMirror images, validated with the
+ * stack's own rules before any plan.
+ */
 export const scannerProblems = (
   env: Readonly<Record<string, string | undefined>>,
-): ReadonlyArray<string> => {
-  try {
-    scannerSignatureSource(env);
+): ReadonlyArray<string> =>
+  [
+    () => scannerSignatureSource(env),
+    ...PREBUILT_IMAGE_ENV.map((n) => () => prebuiltImage(env, n)),
+  ].flatMap((check) => {
+    try {
+      check();
 
-    return [];
-  } catch (e) {
-    return [e instanceof Error ? e.message : String(e)];
-  }
-};
+      return [];
+    } catch (e) {
+      return [e instanceof Error ? e.message : String(e)];
+    }
+  });
 
 /** Test/fault switches that must never reach shared stages (EVIDENCE.md §14.2, preview mail sandbox). */
 export const FORBIDDEN_ON_PROD: ReadonlyArray<string> = [

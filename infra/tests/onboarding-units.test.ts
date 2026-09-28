@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { accessVerifier } from "../onboarding/access.ts";
+import { lineSplitter, redactor } from "../onboarding/executor.ts";
 import { runHealthChecks, withTimeout } from "../onboarding/health.ts";
 import type { Fetch } from "../onboarding/oauth.ts";
 import { releaseMigrations, resolveRelease } from "../onboarding/release.ts";
@@ -317,6 +318,34 @@ describe("onboarding server: host check and local-operator mode", () => {
     expect((await run(h, "GET", `/login?code=${local.loginCode}`)).status).toBe(401);
   });
 
+  it("a client that aborts its upload gets a 400; the process does not crash", async () => {
+    const h = make(false);
+
+    const req = Object.assign(
+      new Readable({
+        read() {
+          this.destroy(Object.assign(new Error("aborted"), { code: "ECONNRESET" }));
+        },
+      }),
+      { method: "POST", url: "/api/recovery-kit", headers: { host: "onboard.test", ...jsonPost } },
+    ) as IncomingMessage;
+
+    const out = { status: 0 };
+
+    const res = {
+      headersSent: false,
+      writeHead: (status: number) => {
+        out.status = status;
+      },
+      end: () => {},
+    } as ServerResponse;
+
+    service.recoveryKit.mockClear();
+    await expect(h(req, res)).resolves.toBeUndefined();
+    expect(out.status).toBe(400);
+    expect(service.recoveryKit).not.toHaveBeenCalled();
+  });
+
   it("local mode binds loopback only", () => {
     for (const host of ["127.0.0.1", "localhost", "::1", "[::1]", "127.1.2.3"])
       expect(isLoopbackHost(host)).toBe(true);
@@ -560,5 +589,22 @@ describe("Cloudflare Access JWT verification (operator identity)", () => {
     });
 
     expect(await verify(jwt({}))).toBeNull();
+  });
+});
+
+describe("executor output", () => {
+  it("redacts secrets split across output chunks: lines are whole before redaction", () => {
+    const secret = "cf-access-token-" + "Z".repeat(30);
+    const redact = redactor([secret]);
+    const lines: Array<string> = [];
+    const split = lineSplitter((l) => lines.push(redact(l)));
+    const text = `deploying with ${secret}\nnext line\npartial`;
+
+    for (const piece of [text.slice(0, 30), text.slice(30, 41), text.slice(41)])
+      split.push(new TextEncoder().encode(piece));
+
+    split.flush();
+    expect(lines).toEqual(["deploying with [redacted]", "next line", "partial"]);
+    expect(lines.join(" ")).not.toContain("ZZZZ");
   });
 });

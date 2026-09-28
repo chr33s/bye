@@ -28,6 +28,13 @@ export const ONBOARDING_PAGE = `<!doctype html>
     </details>
   </section>
 
+  <section id="s-resume" aria-labelledby="h-resume" hidden>
+    <h1 id="h-resume">Resume your Bye</h1>
+    <p>This Cloudflare account already has a Bye set up through onboarding. Continue managing it here; the previous browser session loses access.</p>
+    <ul id="resume-list" class="plain"></ul>
+    <button id="resume-skip" class="secondary">Set up a new Bye instead</button>
+  </section>
+
   <section id="s-account" aria-labelledby="h-account" hidden>
     <h1 id="h-account">Choose a Cloudflare account</h1>
     <div class="row">
@@ -154,12 +161,14 @@ code, strong { overflow-wrap: anywhere; }
 details { margin-top: 12px; }
 #qr img { width: 200px; height: 200px; background: #fff; }
 ol, ul { padding-left: 20px; }
+ul.plain { list-style: none; padding-left: 0; }
+ul.plain li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
 [hidden] { display: none !important; }
 `;
 
 export const ONBOARDING_SCRIPT = `const $ = (id) => document.getElementById(id);
-const SECTIONS = ["s-connect", "s-account", "s-domain", "s-progress", "s-review", "s-done"];
-const ui = { accounts: null, accountId: null, zones: null, review: null, approvalId: null, reasons: [], target: null, sawProgress: false };
+const SECTIONS = ["s-connect", "s-resume", "s-account", "s-domain", "s-progress", "s-review", "s-done"];
+const ui = { accounts: null, accountId: null, zones: null, review: null, approvalId: null, reasons: [], target: null, sawProgress: false, resumable: null, skipResume: false };
 const el = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
 const fill = (node, items) => { node.replaceChildren(...items); };
 const showError = (msg) => { $("error").textContent = msg || ""; };
@@ -290,6 +299,20 @@ async function refresh() {
     return;
   }
   try {
+    // A connected session without its own installation: offer the account's existing one (a lost
+    // session cookie), once, before starting a new setup.
+    if (ui.resumable === null) ui.resumable = (await api("/api/reattach")).installations;
+    if (ui.resumable.length > 0 && !ui.skipResume) {
+      show("s-resume");
+      fill($("resume-list"), ui.resumable.map((c) => {
+        const li = el("li");
+        const b = el("button", "Resume");
+        b.onclick = async () => { b.disabled = true; try { await api("/api/reattach", { installationId: c.installationId }); ui.sawProgress = true; showError(""); } catch (e) { showError(e.message); } b.disabled = false; refresh(); };
+        li.append(el("span", (c.appUrl || "Bye") + " · " + c.accountName + (c.ready ? "" : " · not finished")), b);
+        return li;
+      }));
+      return;
+    }
     const accounts = await loadAccounts();
     if (accounts.length === 0) { showError("This Cloudflare authorization has no accounts. Reconnect with an account you administer."); show("s-connect"); return; }
     if (ui.accountId === null && accounts.length === 1) ui.accountId = accounts[0].id;
@@ -320,6 +343,7 @@ $("manage-connect").onclick = () => $("reconnect-btn").onclick();
 $("reconnect-btn").onclick = async () => { try { const { url } = await api("/api/authorize", {}); location.href = url; } catch (e) { showError(e.message); } };
 $("review-again-btn").onclick = () => { ui.reasons = ["The last deployment stopped at a step that needs a fresh review of the plan."]; show("s-review"); fill($("review-reasons"), ui.reasons.map((r) => el("li", r))); $("review-btn").click(); };
 $("connect").onclick = async () => { try { const { url } = await api("/api/authorize", {}); location.href = url; } catch (e) { showError(e.message); } };
+$("resume-skip").onclick = () => { ui.skipResume = true; refresh(); };
 $("account-btn").onclick = () => { ui.accountId = $("account").value; ui.zones = null; refresh(); };
 $("zone").onchange = updatePreview;
 $("label").oninput = updatePreview;
