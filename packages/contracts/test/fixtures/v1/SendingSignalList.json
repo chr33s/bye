@@ -1,0 +1,80 @@
+[
+  {
+    "items": [
+      {
+        "id": "😀",
+        "scope": "\udc00",
+        "key": "",
+        "signal": "",
+        "detail": [],
+        "createdAt": -6.99101947934639e237
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": "r",
+        "scope": "0",
+        "key": "",
+        "signal": "Wm,M",
+        "detail": "6Gp4",
+        "createdAt": -7.4e-323
+      },
+      {
+        "id": "p",
+        "scope": "ayU_",
+        "key": "\u0000",
+        "signal": "VtV",
+        "detail": [],
+        "createdAt": -1.9842136544923965e-117
+      },
+      {
+        "id": "",
+        "scope": "spI$",
+        "key": "",
+        "signal": "\t",
+        "detail": {
+          "-1": 2.5e-323
+        },
+        "createdAt": 1.797693134862315e308
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": " ",
+        "scope": "/#z",
+        "key": "\udc00",
+        "signal": " ",
+        "detail": false,
+        "createdAt": -2.108577721694127e-242
+      },
+      {
+        "id": "😀",
+        "scope": "}t=H",
+        "key": "@;I",
+        "signal": "\ud800",
+        "detail": true,
+        "createdAt": 7.4e-323
+      },
+      {
+        "id": " ",
+        "scope": "\t",
+        "key": "",
+        "signal": "bc)&",
+        "detail": false,
+        "createdAt": -1.591621089796886e-120
+      },
+      {
+        "id": "blU",
+        "scope": "0",
+        "key": "=mzi",
+        "signal": "",
+        "detail": " ",
+        "createdAt": -1.7976931348623133e308
+      }
+    ]
+  }
+]

@@ -1,0 +1,67 @@
+[
+  {
+    "items": [
+      {
+        "id": "]4e?",
+        "kind": "",
+        "label": "\ud800",
+        "scopes": [],
+        "createdAt": -5.059429215634188e96,
+        "lastUsedAt": null,
+        "expiresAt": -1.929416264299816e-54
+      },
+      {
+        "id": "",
+        "kind": "",
+        "label": "",
+        "scopes": [],
+        "createdAt": -1.797693134862314e308,
+        "lastUsedAt": -6.511154332753878e55,
+        "expiresAt": null
+      },
+      {
+        "id": "\u0000",
+        "kind": "\t",
+        "label": "\udc00",
+        "scopes": ["calendar", "calendar", "send", "publish"],
+        "createdAt": 1e-323,
+        "lastUsedAt": -1.7976931348623137e308,
+        "expiresAt": -1.417305122582319e-68
+      },
+      {
+        "id": "M",
+        "kind": "'",
+        "label": "Cmy,",
+        "scopes": ["admin", "read"],
+        "createdAt": 1.7976931348623125e308,
+        "lastUsedAt": -2e-323,
+        "expiresAt": -1.1824449006315758e-187
+      }
+    ]
+  },
+  {
+    "items": []
+  },
+  {
+    "items": [
+      {
+        "id": "\u0000",
+        "kind": "br",
+        "label": "",
+        "scopes": [],
+        "createdAt": -5e-323,
+        "lastUsedAt": null,
+        "expiresAt": 2.5634632385469062e-261
+      },
+      {
+        "id": "0[:o",
+        "kind": " ",
+        "label": "",
+        "scopes": ["screen", "calendar", "publish", "send"],
+        "createdAt": 1e-323,
+        "lastUsedAt": null,
+        "expiresAt": null
+      }
+    ]
+  }
+]

@@ -1,65 +1,199 @@
 import { publicError, REJECTION_CODES, type RejectionCode } from "@bye/platform-cloudflare";
+import { Unauthenticated } from "@bye/application";
 import { typeNameOf } from "./typename.ts";
-import { Cause, Effect, Exit, Predicate, Schema } from "effect";
+import type { CoreEnv } from "./env.ts";
+import { Cause, Context, Effect, Exit, Layer, Predicate, Schema, Scope } from "effect";
+import {
+  FindMyWay,
+  HttpMethod,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
 import { ErrorCode, HTTP_STATUS } from "@bye/contracts";
 
-// HTTP boundary helpers: typed routing, JSON envelopes, and mapping of expected tagged failures
-// to public error codes. Defects are logged with an opaque request ID and returned as `internal`
-// without details (§7.4 Errors).
+// HTTP boundary helpers: routing (effect/unstable/http HttpRouter), JSON envelopes, and mapping of
+// expected tagged failures to public error codes. Defects are logged with an opaque request ID and
+// returned as `internal` without details (§7.4 Errors).
 
 export type Params = Readonly<Record<string, string>>;
 
-export interface Route<Env> {
-  readonly method: string;
-  readonly pattern: RegExp;
-  readonly keys: ReadonlyArray<string>;
-  readonly handler: (
-    request: Request,
-    params: Params,
-    env: Env,
-    ctx: ExecutionContext,
-  ) => Promise<Response>;
-}
+/** The native invocation a route runs in: the original request (body unread) and Worker bindings. */
+export class Invocation extends Context.Service<
+  Invocation,
+  { readonly request: Request; readonly env: CoreEnv; readonly ctx: ExecutionContext }
+>()("bye/core/Invocation") {}
 
-export const route = <Env>(
-  method: string,
-  path: string,
-  handler: Route<Env>["handler"],
-): Route<Env> => {
-  const keys: Array<string> = [];
+export type Route = HttpRouter.Route<never, Invocation>;
 
-  const pattern = new RegExp(
-    `^${path.replace(/\/:([a-zA-Z]+)/g, (_, key: string) => {
-      keys.push(key);
+export type RouteHandler = (
+  request: Request,
+  params: Params,
+  env: CoreEnv,
+  ctx: ExecutionContext,
+) => Promise<Response>;
 
-      return "/([^/]+)";
-    })}$`,
+/**
+ * A handler that throws instead of returning an envelope: auth and body-read failures map to their
+ * public codes, anything else is logged (redacted) and answered as `internal`.
+ */
+const thrownResponse =
+  (path: string) =>
+  <E>(error: E): Response => {
+    if (error instanceof Unauthenticated)
+      return errorResponse("unauthenticated", "unauthenticated");
+
+    if (Predicate.isTagged(error, "PayloadTooLarge"))
+      return errorResponse("payload_too_large", "payload too large");
+
+    if (Predicate.isTagged(error, "BadRequest"))
+      return errorResponse("bad_request", "invalid JSON");
+    console.error(
+      JSON.stringify({ level: "error", op: "http", path, error: describeError(error) }),
+    );
+
+    return errorResponse("internal", "internal error");
+  };
+
+/**
+ * A router entry for a native handler. It runs uninterruptibly: a client disconnect never abandons
+ * a handler midway, matching the Worker's own request lifetime.
+ */
+export const route = (
+  method: HttpMethod.HttpMethod,
+  path: HttpRouter.PathInput,
+  handler: RouteHandler,
+): Route =>
+  HttpRouter.route(
+    method,
+    path,
+    Effect.gen(function* () {
+      const { request, env, ctx } = yield* Invocation;
+      const params: Record<string, string> = {};
+
+      for (const [key, value] of Object.entries(yield* HttpRouter.params))
+        if (value !== undefined) params[key] = value;
+
+      const response = yield* Effect.promise(() =>
+        handler(request, params, env, ctx).catch(thrownResponse(path)),
+      );
+
+      return HttpServerResponse.raw(response);
+    }),
+    { uninterruptible: true },
   );
 
-  return { method, pattern, keys, handler };
+/** Paths are exact: case-sensitive, no trailing-slash folding, no parameter length cap. */
+const ROUTER_CONFIG = {
+  ignoreTrailingSlash: false,
+  caseSensitive: true,
+  maxParamLength: Number.MAX_SAFE_INTEGER,
+} satisfies Partial<FindMyWay.RouterConfig>;
+
+const decodesAsUri = (pathname: string): boolean => {
+  try {
+    decodeURI(pathname);
+
+    return true;
+  } catch {
+    return false;
+  }
 };
 
-export const matchRoute = <Env>(
-  routes: ReadonlyArray<Route<Env>>,
-  method: string,
-  pathname: string,
+/**
+ * The URL the router matches, with the lookup rules the pathname-regex router had:
+ * - a `;` is part of a path segment (FindMyWay would start a query string at it, answering
+ *   `/v1/me;x` as `/v1/me`), so it is escaped and matches no static segment;
+ * - a repeated query key keeps its first value, as `URLSearchParams.get` did (the router would
+ *   parse it as an array that no query schema accepts).
+ */
+export const routingUrl = (url: URL): string => {
+  const seen = new Set<string>();
+
+  const pairs = url.search
+    .slice(1)
+    .split("&")
+    .flatMap((pair) => {
+      if (!pair) return [];
+
+      const key = pair.split("=", 1)[0]!;
+
+      if (seen.has(key)) return [];
+      seen.add(key);
+
+      return [pair];
+    });
+
+  return `${url.pathname.replaceAll(";", "%3B")}${pairs.length ? `?${pairs.join("&")}` : ""}`;
+};
+
+/** A method and path the router answers; with `fetchHandler`'s surface, a wrong method is a 400. */
+export interface Endpoint {
+  readonly method: string;
+  readonly path: HttpRouter.PathInput;
+}
+
+/**
+ * Build the router once per isolate from a layer that registers routes (native `route`s and the
+ * HttpApi). A request no route answers is `bad_request` when its path is malformed or another
+ * method of `surface` would match it, else `not_found`. Anything that escapes a route as a failure
+ * or defect is answered through `publicFailure`.
+ */
+export const fetchHandler = (
+  app: Layer.Layer<
+    never,
+    never,
+    HttpRouter.HttpRouter | HttpRouter.Request<"Requires", Invocation>
+  >,
+  surface: ReadonlyArray<Endpoint>,
 ) => {
-  let pathMatched = false;
+  const handler = Effect.runSync(
+    HttpRouter.toHttpEffect(app).pipe(
+      Effect.provideService(HttpRouter.RouterConfig, ROUTER_CONFIG),
+      Scope.provide(Scope.makeUnsafe()),
+    ),
+  );
 
-  for (const r of routes) {
-    const m = r.pattern.exec(pathname);
+  const methodsByPath = FindMyWay.make<true>(ROUTER_CONFIG);
 
-    if (!m) continue;
-    pathMatched = true;
+  for (const e of surface) methodsByPath.on(e.method, e.path, true);
 
-    if (r.method !== method) continue;
-    const params: Record<string, string> = {};
-    r.keys.forEach((k, i) => (params[k] = decodeURIComponent(m[i + 1]!)));
+  const unmatched = (method: string, url: URL): Response =>
+    !decodesAsUri(url.pathname)
+      ? errorResponse("bad_request", "malformed path")
+      : [...HttpMethod.all].some((m) => m !== method && methodsByPath.find(m, routingUrl(url)))
+        ? errorResponse("bad_request", "method not allowed")
+        : errorResponse("not_found", "not found");
 
-    return { route: r, params };
-  }
+  return (request: Request, env: CoreEnv, ctx: ExecutionContext): Promise<Response> => {
+    const url = new URL(request.url);
 
-  return pathMatched ? "method-not-allowed" : undefined;
+    // No route answers HEAD: the router would run the GET handler (a download, a rate-limit token)
+    // only to drop its body.
+    if (request.method === "HEAD") return Promise.resolve(unmatched(request.method, url));
+
+    return Effect.runPromise(
+      handler.pipe(
+        Effect.map((response) => HttpServerResponse.toWeb(response)),
+        Effect.catchReason("HttpServerError", "RouteNotFound", () =>
+          Effect.succeed(unmatched(request.method, url)),
+        ),
+        Effect.catchCause((cause) => {
+          const failure = publicFailure(cause, crypto.randomUUID());
+
+          return Effect.succeed(
+            errorResponse(failure.code, failure.message, failure.requestId, failure.details),
+          );
+        }),
+        Effect.provideService(
+          HttpServerRequest.HttpServerRequest,
+          HttpServerRequest.fromWeb(request).modify({ url: routingUrl(url) }),
+        ),
+        Effect.provideService(Invocation, { request, env, ctx }),
+        Effect.scoped,
+      ),
+    );
+  };
 };
 
 const SECURITY_HEADERS = {
@@ -81,8 +215,8 @@ const htmlCsp = (frameAncestors: string) =>
 
 /**
  * Baseline response headers for everything MailCore serves itself (static assets get theirs from
- * the web build's `_headers`): HSTS, nosniff, no-referrer, and a Content-Security-Policy when the
- * handler set none. Handler-set values win — the consent page's `same-origin` referrer policy and
+ * the web build's `_headers`): HSTS, nosniff, no-referrer, `no-store` for JSON, and a
+ * Content-Security-Policy when the handler set none. Handler-set values win — the consent page's `same-origin` referrer policy and
  * the render origin's `frame-ancestors <APP_ORIGIN>` document policies are never overridden.
  * `frameAncestors` is the default for responses without a policy: `'none'` on the app host, the
  * app origin on the render origin (whose error pages show inside the app's sandboxed frame).
@@ -100,6 +234,10 @@ export const withSecurityHeaders = (response: Response, frameAncestors = "'none'
   setDefault("strict-transport-security", HSTS);
   setDefault("x-content-type-options", "nosniff");
   setDefault("referrer-policy", "no-referrer");
+
+  // API answers are per-principal: never cached unless the handler chose a policy.
+  if ((headers.get("content-type") ?? "").toLowerCase().startsWith("application/json"))
+    setDefault("cache-control", "no-store");
 
   if (!headers.has("content-security-policy")) {
     const type = (headers.get("content-type") ?? "").toLowerCase();
@@ -188,6 +326,90 @@ export const codeForTag = (tag: string): ErrorCode => {
   }
 };
 
+/** The public envelope body for a failed request: expected failures keep their code, defects are `internal`. */
+export interface PublicFailure {
+  readonly code: ErrorCode;
+  readonly message: string;
+  readonly requestId: string;
+  readonly details?: ErrorDetails;
+}
+
+/**
+ * Map a failure cause to its public envelope (§7.4). Expected tagged failures keep their code;
+ * defects and interruptions are logged with the request ID and redacted to `internal`.
+ */
+export const publicFailure = <E>(cause: Cause.Cause<E>, requestId: string): PublicFailure => {
+  const failure = Cause.findErrorOption(cause);
+
+  const withDetails = (code: ErrorCode, message: string, details?: ErrorDetails): PublicFailure =>
+    details ? { code, message, requestId, details } : { code, message, requestId };
+
+  if (Predicate.isTagged(failure, "Some")) {
+    const error = failure.value as {
+      _tag?: string;
+      code?: ErrorCode;
+      message?: string;
+      reason?: string;
+      details?: ErrorDetails;
+    };
+
+    if (Predicate.isTagged(failure.value, "ApiError") && error.code)
+      return withDetails(error.code, error.message ?? error.code, error.details);
+    // Structured domain rejections (Rejection, MailboxRejected, CalendarFailure, …) carry their own
+    // code; `publicError` is the one mapping to the public vocabulary.
+    const domainCode = rejectionCode(error.code);
+
+    if (domainCode) {
+      const pub = publicError(domainCode, error.details);
+
+      return withDetails(
+        pub.code,
+        error.message ?? pub.code,
+        pub.details ? { ...pub.details } : undefined,
+      );
+    }
+
+    // Step-up is a 403 like any refusal, but machine-readable so clients prompt for a passkey only
+    // when a fresh confirmation would actually help.
+    if (Predicate.isTagged(failure.value, "StepUpRequired")) {
+      const action = (error as { action?: string }).action;
+
+      return withDetails(
+        "forbidden",
+        "recent passkey confirmation required",
+        action ? { stepUp: true, action } : { stepUp: true },
+      );
+    }
+
+    const code = codeForTag(error._tag ?? "");
+
+    if (code !== "internal")
+      return withDetails(
+        code,
+        code === "bad_request" ? "invalid request" : (error.reason ?? error.message ?? code),
+      );
+  }
+
+  const interrupted = Cause.hasInterrupts(cause);
+
+  console.error(
+    JSON.stringify(
+      interrupted
+        ? { level: "error", requestId, kind: "interrupted" }
+        : {
+            level: "error",
+            requestId,
+            kind: "defect",
+            error: describeError(Cause.squash(cause)),
+          },
+    ),
+  );
+
+  if ((globalThis as { __BYE_DEBUG__?: boolean }).__BYE_DEBUG__) console.error(Cause.pretty(cause));
+
+  return withDetails("internal", "internal error");
+};
+
 /**
  * Run an Effect at a native invocation boundary (§7.4). All dependencies must already be provided.
  * Expected failures become envelopes; defects and interruptions are redacted.
@@ -202,76 +424,9 @@ export const runHttp = async (
   const exit = await Effect.runPromiseExit(effect, signal ? { signal } : undefined);
 
   if (Exit.isSuccess(exit)) return exit.value;
-  const failure = Cause.findErrorOption(exit.cause);
+  const failure = publicFailure(exit.cause, requestId);
 
-  if (Predicate.isTagged(failure, "Some")) {
-    const error = failure.value as {
-      _tag?: string;
-      code?: ErrorCode;
-      message?: string;
-      reason?: string;
-      details?: ErrorDetails;
-    };
-
-    if (Predicate.isTagged(failure.value, "ApiError") && error.code)
-      return errorResponse(error.code, error.message ?? error.code, requestId, error.details);
-    // Structured domain rejections (Rejection, MailboxRejected, CalendarFailure, …) carry their own
-    // code; `publicError` is the one mapping to the public vocabulary.
-    const domainCode = rejectionCode(error.code);
-
-    if (domainCode) {
-      const pub = publicError(domainCode, error.details);
-
-      return errorResponse(
-        pub.code,
-        error.message ?? pub.code,
-        requestId,
-        pub.details ? { ...pub.details } : undefined,
-      );
-    }
-
-    // Step-up is a 403 like any refusal, but machine-readable so clients prompt for a passkey only
-    // when a fresh confirmation would actually help.
-    if (Predicate.isTagged(failure.value, "StepUpRequired")) {
-      const action = (error as { action?: string }).action;
-
-      return errorResponse(
-        "forbidden",
-        "recent passkey confirmation required",
-        requestId,
-        action ? { stepUp: true, action } : { stepUp: true },
-      );
-    }
-
-    const code = codeForTag(error._tag ?? "");
-
-    if (code !== "internal") {
-      const message =
-        code === "bad_request" ? "invalid request" : (error.reason ?? error.message ?? code);
-
-      return errorResponse(code, message, requestId);
-    }
-  }
-
-  const interrupted = Cause.hasInterrupts(exit.cause);
-
-  console.error(
-    JSON.stringify(
-      interrupted
-        ? { level: "error", requestId, kind: "interrupted" }
-        : {
-            level: "error",
-            requestId,
-            kind: "defect",
-            error: describeError(Cause.squash(exit.cause)),
-          },
-    ),
-  );
-
-  if ((globalThis as { __BYE_DEBUG__?: boolean }).__BYE_DEBUG__)
-    console.error(Cause.pretty(exit.cause));
-
-  return errorResponse("internal", "internal error", requestId);
+  return errorResponse(failure.code, failure.message, failure.requestId, failure.details);
 };
 
 /**

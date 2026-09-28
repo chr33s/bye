@@ -1,0 +1,56 @@
+[
+  {
+    "items": [
+      {
+        "userId": "0",
+        "address": "#@6.p",
+        "role": "member",
+        "status": "suspended"
+      },
+      {
+        "userId": " ",
+        "address": "@.~",
+        "role": "owner",
+        "status": "active"
+      },
+      {
+        "userId": "-1",
+        "address": "Ω@3.V",
+        "role": "member",
+        "status": "removed"
+      },
+      {
+        "userId": "f",
+        "address": "x@ꓸ.궵",
+        "role": "owner",
+        "status": "removed"
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "userId": "yeB",
+        "address": "l@䓙.입",
+        "role": "member",
+        "status": "suspended"
+      },
+      {
+        "userId": "\t",
+        "address": "b@僭.x",
+        "role": "owner",
+        "status": "suspended"
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "userId": "\ud800",
+        "address": "Z@풇.i",
+        "role": "owner",
+        "status": "removed"
+      }
+    ]
+  }
+]

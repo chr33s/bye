@@ -1,0 +1,23 @@
+[
+  {
+    "id": "",
+    "reason": "",
+    "grantedAt": 9e-323,
+    "expiresAt": -5.471334627386854e-113,
+    "active": false
+  },
+  {
+    "id": " ",
+    "reason": "-1",
+    "grantedAt": -5.883993862752527e161,
+    "expiresAt": 4.16670397166928e-160,
+    "active": false
+  },
+  {
+    "id": "😀",
+    "reason": "-1",
+    "grantedAt": -4e-323,
+    "expiresAt": -8.4e-323,
+    "active": true
+  }
+]

@@ -1,0 +1,20 @@
+[
+  {
+    "provider": "resend",
+    "status": "ready",
+    "qualified": false,
+    "canConfigure": true
+  },
+  {
+    "provider": "resend",
+    "status": "blocked",
+    "qualified": true,
+    "canConfigure": false
+  },
+  {
+    "provider": "resend",
+    "status": "ready",
+    "qualified": true,
+    "canConfigure": false
+  }
+]

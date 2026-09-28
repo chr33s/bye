@@ -1,0 +1,242 @@
+[
+  {
+    "upcoming": [
+      {
+        "eventId": "^m#r",
+        "calendarId": "\n",
+        "uid": "",
+        "key": "😀",
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": -9,
+            "month": -3,
+            "day": 12
+          }
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": 4,
+            "month": -1,
+            "day": -2,
+            "hour": 16,
+            "minute": 8,
+            "second": 2
+          },
+          "tzid": "\ud800"
+        },
+        "startMs": -5.361861359269435e37,
+        "endMs": 5e-324,
+        "allDay": false,
+        "recurring": false,
+        "isException": true,
+        "highlight": true,
+        "countdown": true,
+        "data": {
+          "summary": "\n",
+          "transparent": false,
+          "status": "tentative"
+        }
+      },
+      {
+        "eventId": " ",
+        "calendarId": "y<.d",
+        "uid": "\ud800",
+        "key": "\ud800",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": -4,
+            "month": 14,
+            "day": 7,
+            "hour": 3,
+            "minute": -12,
+            "second": 14
+          },
+          "tzid": "😀"
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": -7,
+            "month": -16,
+            "day": 16,
+            "hour": -16,
+            "minute": 16,
+            "second": -14
+          },
+          "tzid": ""
+        },
+        "startMs": 7.810667905838716e-245,
+        "endMs": -6.621031405322349e56,
+        "allDay": false,
+        "recurring": true,
+        "isException": false,
+        "highlight": false,
+        "countdown": true,
+        "data": {
+          "summary": "0",
+          "status": "cancelled"
+        }
+      },
+      {
+        "eventId": "\t",
+        "calendarId": "Ct",
+        "uid": " ",
+        "key": "",
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": 1,
+            "month": -4,
+            "day": 13
+          }
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": 1,
+            "month": 5,
+            "day": 2,
+            "hour": 12,
+            "minute": 1,
+            "second": -15
+          },
+          "tzid": "*z"
+        },
+        "startMs": 2e-323,
+        "endMs": -1.7976931348623141e308,
+        "allDay": true,
+        "recurring": true,
+        "isException": false,
+        "highlight": false,
+        "countdown": false,
+        "data": {
+          "summary": "X",
+          "location": ""
+        }
+      },
+      {
+        "eventId": "\ud800",
+        "calendarId": "4O",
+        "uid": "j{8",
+        "key": "\u0000",
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": 11,
+            "month": 4,
+            "day": 14
+          }
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": 14,
+            "month": -12,
+            "day": -5,
+            "hour": -1,
+            "minute": -14,
+            "second": -11
+          },
+          "tzid": ""
+        },
+        "startMs": -2.2849401101366624e-51,
+        "endMs": 4.4e-323,
+        "allDay": false,
+        "recurring": false,
+        "isException": true,
+        "highlight": false,
+        "countdown": true,
+        "data": {
+          "summary": "\ud800"
+        }
+      }
+    ],
+    "activeTimer": {
+      "id": "",
+      "label": "\ud800",
+      "startedAt": 1e-323,
+      "source": "timer"
+    },
+    "weekTasks": [
+      {
+        "id": "qQz",
+        "anchor": "RP][",
+        "title": "\ud800",
+        "orderKey": "HA9S",
+        "revision": 3.6633783481106314e89
+      }
+    ],
+    "today": ""
+  },
+  {
+    "upcoming": [],
+    "weekTasks": [
+      {
+        "id": "0",
+        "anchor": "",
+        "title": "X|",
+        "orderKey": "\ud800",
+        "revision": 3.5e-323
+      },
+      {
+        "id": "",
+        "anchor": "gwD7",
+        "title": "\u0000",
+        "orderKey": "\t",
+        "revision": 1.7976931348623135e308
+      },
+      {
+        "id": "\ud800",
+        "anchor": "\ud800",
+        "title": ".YHw",
+        "orderKey": "\n",
+        "revision": -5.3001182019920824e268
+      },
+      {
+        "id": "\ud800",
+        "anchor": "\udc00",
+        "title": "]<nl",
+        "orderKey": "#1QS",
+        "revision": -4.9130571029371145e-43
+      }
+    ],
+    "today": "\t"
+  },
+  {
+    "upcoming": [],
+    "weekTasks": [
+      {
+        "id": "9Q",
+        "anchor": "\t",
+        "title": "A;7_",
+        "orderKey": "J",
+        "revision": -1.5331017619936698e221
+      },
+      {
+        "id": "\ud800",
+        "anchor": "hdg$",
+        "title": "M 6",
+        "orderKey": "\t",
+        "revision": -1.7976931348623121e308
+      },
+      {
+        "id": "\ud800",
+        "anchor": "\udc00",
+        "title": "",
+        "orderKey": "\t",
+        "revision": 1.7976931348623143e308
+      },
+      {
+        "id": "",
+        "anchor": "",
+        "title": "g}\"n",
+        "orderKey": "#67.",
+        "revision": 1.7976931348623147e308
+      }
+    ],
+    "today": " "
+  }
+]

@@ -1,0 +1,287 @@
+[
+  {
+    "date": "33*g",
+    "freeTime": [
+      {
+        "startMs": -1.53384458507186e29,
+        "endMs": -2.1846765833163216e-215
+      },
+      {
+        "startMs": 1.1773683061321477e285,
+        "endMs": -3.8740283105208133e-17
+      }
+    ],
+    "highlights": []
+  },
+  {
+    "date": "",
+    "freeTime": [],
+    "highlights": [
+      {
+        "eventId": "Yz",
+        "calendarId": "\udc00",
+        "uid": "-1",
+        "key": "0",
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": 15,
+            "month": -1,
+            "day": -3
+          }
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": 4,
+            "month": -2,
+            "day": -7,
+            "hour": 4,
+            "minute": -2,
+            "second": 6
+          },
+          "tzid": "\u0000"
+        },
+        "startMs": -4.462929190882574e202,
+        "endMs": -1.0171639802505522e100,
+        "allDay": true,
+        "recurring": false,
+        "isException": true,
+        "highlight": false,
+        "countdown": true,
+        "data": {
+          "summary": "\u0000"
+        }
+      },
+      {
+        "eventId": "?kg]",
+        "calendarId": "-fcY",
+        "uid": "T",
+        "key": "\ud800",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 5,
+            "month": 8,
+            "day": -3,
+            "hour": -2,
+            "minute": 2,
+            "second": -1
+          },
+          "tzid": "|*+"
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 3,
+            "month": 12,
+            "day": 12
+          }
+        },
+        "startMs": 2.3929764441708176e-97,
+        "endMs": -6e-323,
+        "allDay": false,
+        "recurring": false,
+        "isException": false,
+        "highlight": true,
+        "countdown": true,
+        "data": {
+          "summary": "\u0000"
+        }
+      },
+      {
+        "eventId": "\udc00",
+        "calendarId": "3)E2",
+        "uid": "C@SN",
+        "key": ":jU_",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 2,
+            "month": 0,
+            "day": -1,
+            "hour": -16,
+            "minute": -8,
+            "second": -13
+          },
+          "tzid": ""
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 3,
+            "month": -16,
+            "day": 3
+          }
+        },
+        "startMs": -8e-323,
+        "endMs": -3e-323,
+        "allDay": true,
+        "recurring": true,
+        "isException": false,
+        "highlight": false,
+        "countdown": true,
+        "data": {
+          "summary": ""
+        }
+      },
+      {
+        "eventId": " ",
+        "calendarId": "\t",
+        "uid": "t",
+        "key": "fxNY",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 13,
+            "month": 1,
+            "day": 11,
+            "hour": 13,
+            "minute": -10,
+            "second": -11
+          },
+          "tzid": "0"
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 2,
+            "month": -7,
+            "day": 0
+          }
+        },
+        "startMs": -2.454531734256338e-43,
+        "endMs": -2.8765799006949588e-214,
+        "allDay": true,
+        "recurring": true,
+        "isException": false,
+        "highlight": true,
+        "countdown": true,
+        "data": {
+          "summary": "]K8$",
+          "transparent": false
+        }
+      }
+    ]
+  },
+  {
+    "date": "h-8)",
+    "freeTime": [],
+    "highlights": [
+      {
+        "eventId": "`qJY",
+        "calendarId": "\ud800",
+        "uid": "J V",
+        "key": "{",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": -13,
+            "month": 16,
+            "day": -16,
+            "hour": -15,
+            "minute": 0,
+            "second": -3
+          },
+          "tzid": "\t"
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": -12,
+            "month": -2,
+            "day": 4,
+            "hour": 2,
+            "minute": -4,
+            "second": 2
+          },
+          "tzid": "vI"
+        },
+        "startMs": 1.4957401556887806e205,
+        "endMs": -1.268474582649235e78,
+        "allDay": true,
+        "recurring": true,
+        "isException": false,
+        "highlight": false,
+        "countdown": true,
+        "data": {
+          "summary": "😀"
+        }
+      },
+      {
+        "eventId": "",
+        "calendarId": "0",
+        "uid": "",
+        "key": "😀",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": -3,
+            "month": -2,
+            "day": -14,
+            "hour": 13,
+            "minute": -5,
+            "second": -3
+          },
+          "tzid": "😀"
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": -5,
+            "month": 16,
+            "day": 7
+          }
+        },
+        "startMs": 4.954018284230882e174,
+        "endMs": -7.24651453671904e30,
+        "allDay": false,
+        "recurring": false,
+        "isException": true,
+        "highlight": false,
+        "countdown": true,
+        "data": {
+          "summary": ""
+        }
+      },
+      {
+        "eventId": "",
+        "calendarId": " ",
+        "uid": "/ng{",
+        "key": "UQ|X",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 2,
+            "month": 2,
+            "day": -1,
+            "hour": 0,
+            "minute": -12,
+            "second": 4
+          },
+          "tzid": "😀"
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 0,
+            "month": -9,
+            "day": -10
+          }
+        },
+        "startMs": 1.2248864917538677e289,
+        "endMs": 2.5895743857287433e-286,
+        "allDay": true,
+        "recurring": true,
+        "isException": true,
+        "highlight": false,
+        "countdown": false,
+        "data": {
+          "summary": "\n",
+          "description": "\udc00",
+          "location": "\ud800"
+        }
+      }
+    ]
+  }
+]

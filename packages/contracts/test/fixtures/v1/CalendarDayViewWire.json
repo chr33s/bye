@@ -1,0 +1,366 @@
+[
+  {
+    "date": "-1",
+    "zone": " ",
+    "occurrences": [
+      {
+        "eventId": "\u0000",
+        "calendarId": "/)._",
+        "uid": "😀",
+        "key": "\t",
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": 16,
+            "month": 8,
+            "day": -1
+          }
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 15,
+            "month": 5,
+            "day": -3
+          }
+        },
+        "startMs": -1.7976931348623125e308,
+        "endMs": 1.2008456262560204e-105,
+        "allDay": false,
+        "recurring": false,
+        "isException": true,
+        "highlight": true,
+        "countdown": false,
+        "data": {
+          "summary": "\u0000",
+          "description": "\ud800"
+        }
+      },
+      {
+        "eventId": "6\"",
+        "calendarId": "",
+        "uid": "YSQi",
+        "key": "\ud800",
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": -1,
+            "month": -3,
+            "day": -7
+          }
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": 3,
+            "month": -4,
+            "day": 8,
+            "hour": 12,
+            "minute": 1,
+            "second": 5
+          },
+          "tzid": " "
+        },
+        "startMs": -6.204472860166949e240,
+        "endMs": 1.5e-323,
+        "allDay": true,
+        "recurring": false,
+        "isException": true,
+        "highlight": false,
+        "countdown": false,
+        "data": {
+          "summary": ""
+        }
+      }
+    ],
+    "nightHoursBusy": true,
+    "nightHoursCollapsed": true,
+    "waking": {
+      "startMinute": -1.9932806390868213e25,
+      "endMinute": 2.5823949398361442e234
+    }
+  },
+  {
+    "date": "-1",
+    "zone": "\udc00",
+    "occurrences": [
+      {
+        "eventId": "E-$\\",
+        "calendarId": "\udc00",
+        "uid": "lZF",
+        "key": "\udc00",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": -9,
+            "month": 3,
+            "day": 2,
+            "hour": -12,
+            "minute": 4,
+            "second": -1
+          },
+          "tzid": ""
+        },
+        "end": {
+          "kind": "timed",
+          "local": {
+            "year": -8,
+            "month": -1,
+            "day": 4,
+            "hour": 0,
+            "minute": -1,
+            "second": -2
+          },
+          "tzid": "\u0000"
+        },
+        "startMs": -1.015110870827937e266,
+        "endMs": 2.1074091279356506e-15,
+        "allDay": true,
+        "recurring": false,
+        "isException": true,
+        "highlight": true,
+        "countdown": true,
+        "data": {
+          "summary": "-1",
+          "location": "😀",
+          "transparent": false
+        }
+      },
+      {
+        "eventId": "-1",
+        "calendarId": "scV}",
+        "uid": "",
+        "key": "\u0000",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": -6,
+            "month": 2,
+            "day": 12,
+            "hour": 8,
+            "minute": -3,
+            "second": -13
+          },
+          "tzid": "\t"
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 16,
+            "month": -15,
+            "day": 5
+          }
+        },
+        "startMs": 6.2111353547693414e41,
+        "endMs": -1.7976931348623143e308,
+        "allDay": true,
+        "recurring": false,
+        "isException": true,
+        "highlight": false,
+        "countdown": true,
+        "data": {
+          "summary": "0",
+          "description": "~pXm",
+          "status": "cancelled"
+        }
+      },
+      {
+        "eventId": "\t",
+        "calendarId": "$V",
+        "uid": "Q cx",
+        "key": "_q",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 16,
+            "month": 4,
+            "day": -9,
+            "hour": 9,
+            "minute": -2,
+            "second": 1
+          },
+          "tzid": " "
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 11,
+            "month": 2,
+            "day": 15
+          }
+        },
+        "startMs": -6.4e-323,
+        "endMs": -2.597511370163885e-234,
+        "allDay": false,
+        "recurring": true,
+        "isException": false,
+        "highlight": false,
+        "countdown": true,
+        "data": {
+          "summary": ""
+        }
+      },
+      {
+        "eventId": "N$(?",
+        "calendarId": "&Q@",
+        "uid": "!eL",
+        "key": "\u0000",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 16,
+            "month": 15,
+            "day": -4,
+            "hour": 13,
+            "minute": 0,
+            "second": -15
+          },
+          "tzid": "\n"
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": 4,
+            "month": -13,
+            "day": 5
+          }
+        },
+        "startMs": 3.5e-323,
+        "endMs": -4.225760247178286e248,
+        "allDay": true,
+        "recurring": false,
+        "isException": true,
+        "highlight": false,
+        "countdown": true,
+        "data": {
+          "summary": ""
+        }
+      }
+    ],
+    "nightHoursBusy": false,
+    "nightHoursCollapsed": true,
+    "waking": {
+      "startMinute": -4.445272157563753e-255,
+      "endMinute": 1.7976931348623127e308
+    }
+  },
+  {
+    "date": "-1",
+    "zone": "😀",
+    "occurrences": [
+      {
+        "eventId": "",
+        "calendarId": "\u0000",
+        "uid": "",
+        "key": "-1",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 2,
+            "month": 14,
+            "day": -14,
+            "hour": -7,
+            "minute": 0,
+            "second": -13
+          },
+          "tzid": "\udc00"
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": -16,
+            "month": 15,
+            "day": -5
+          }
+        },
+        "startMs": -3.128127571555654e167,
+        "endMs": 6.298488275663978e-124,
+        "allDay": false,
+        "recurring": true,
+        "isException": false,
+        "highlight": true,
+        "countdown": true,
+        "data": {
+          "summary": "",
+          "url": ""
+        }
+      },
+      {
+        "eventId": "",
+        "calendarId": "\ud800",
+        "uid": "v.6",
+        "key": "",
+        "start": {
+          "kind": "date",
+          "date": {
+            "year": 16,
+            "month": 0,
+            "day": -14
+          }
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": -2,
+            "month": -2,
+            "day": 2
+          }
+        },
+        "startMs": 2.430437556415666e186,
+        "endMs": -5.733607497852457e75,
+        "allDay": false,
+        "recurring": false,
+        "isException": false,
+        "highlight": false,
+        "countdown": false,
+        "data": {
+          "summary": "1",
+          "description": "T+u"
+        }
+      },
+      {
+        "eventId": "",
+        "calendarId": "\udc00",
+        "uid": "yZR}",
+        "key": "E",
+        "start": {
+          "kind": "timed",
+          "local": {
+            "year": 12,
+            "month": 4,
+            "day": -11,
+            "hour": 4,
+            "minute": 10,
+            "second": -11
+          },
+          "tzid": "\n"
+        },
+        "end": {
+          "kind": "date",
+          "date": {
+            "year": -4,
+            "month": 2,
+            "day": 6
+          }
+        },
+        "startMs": -5e-323,
+        "endMs": 0,
+        "allDay": false,
+        "recurring": true,
+        "isException": true,
+        "highlight": true,
+        "countdown": true,
+        "data": {
+          "summary": "\t",
+          "url": "KTlr"
+        }
+      }
+    ],
+    "nightHoursBusy": false,
+    "nightHoursCollapsed": false,
+    "waking": {
+      "startMinute": 5e-324,
+      "endMinute": 2.5e-323
+    }
+  }
+]

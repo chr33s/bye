@@ -1,0 +1,135 @@
+[
+  {
+    "id": "%wUI",
+    "subject": "",
+    "includeFuture": true,
+    "messages": [
+      {
+        "messageRef": "07N",
+        "from": {
+          "name": "",
+          "address": "\\O"
+        },
+        "to": [
+          {
+            "address": "\ud800"
+          },
+          {
+            "address": "Uzo"
+          }
+        ],
+        "cc": [
+          {
+            "address": "\n"
+          },
+          {
+            "address": "-1"
+          },
+          {
+            "address": "\n"
+          },
+          {
+            "address": "😀"
+          }
+        ],
+        "subject": "",
+        "snippet": "",
+        "contentKey": "&zHq",
+        "sentAt": 13411.30515567789,
+        "addedAt": -9e-323
+      }
+    ],
+    "pendingPropagation": 5.4e-323
+  },
+  {
+    "id": "#`n4",
+    "subject": "\n",
+    "includeFuture": true,
+    "messages": [
+      {
+        "messageRef": "\n",
+        "from": {
+          "address": " "
+        },
+        "to": [
+          {
+            "address": "&i|("
+          },
+          {
+            "address": "-1"
+          },
+          {
+            "address": "0"
+          }
+        ],
+        "cc": [
+          {
+            "address": "\t"
+          },
+          {
+            "address": "\udc00"
+          },
+          {
+            "address": "Syn%"
+          }
+        ],
+        "subject": "y2'i",
+        "snippet": "iK>",
+        "contentKey": "",
+        "sentAt": -1.9111451073145249e-118,
+        "addedAt": -1.7976931348623125e308
+      },
+      {
+        "messageRef": "\t",
+        "from": {
+          "address": "vX^K"
+        },
+        "to": [
+          {
+            "address": "\udc00"
+          }
+        ],
+        "cc": [
+          {
+            "name": "😀",
+            "address": "\u0000"
+          },
+          {
+            "address": "#QC&"
+          },
+          {
+            "address": ""
+          }
+        ],
+        "subject": "😀",
+        "snippet": "!\\_",
+        "contentKey": "E/",
+        "sentAt": 3.8339834858148625e-146,
+        "addedAt": -1.225428539971674e241
+      }
+    ],
+    "pendingPropagation": 1.7976931348623147e308
+  },
+  {
+    "id": "0",
+    "subject": "F2eO",
+    "includeFuture": false,
+    "messages": [
+      {
+        "messageRef": "$",
+        "from": {
+          "name": "\u0000",
+          "address": " "
+        },
+        "to": [],
+        "cc": [],
+        "subject": ".BU*",
+        "snippet": "]A",
+        "contentKey": "😀",
+        "sentAt": 2.838799129728259e-219,
+        "addedAt": -1.6953655010478302e-157
+      }
+    ],
+    "pendingPropagation": 1.7976931348623131e308
+  }
+]

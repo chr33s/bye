@@ -16,37 +16,57 @@ import {
   requireMailbox,
 } from "@bye/application";
 import { calParseDate } from "@bye/calendar-engine";
-import { ApiError, CALENDAR_PHOTO_KEY, type OccurrencesQuery } from "@bye/contracts";
+import {
+  ApiError,
+  CALENDAR_PHOTO_KEY,
+  CalendarAgendaResponse,
+  CalendarChangesResponse,
+  type CalendarCommandOutcome,
+  CalendarDayContextWire,
+  CalendarDayViewWire,
+  CalendarFeedTokensResponse,
+  CalendarHabitsResponse,
+  CalendarImportResult,
+  CalendarListResponse,
+  CalendarMonthViewWire,
+  CalendarPreferencesWire,
+  CalendarTimeEntriesResponse,
+  CalendarTimerResponse,
+  CalendarWeekTasksResponse,
+  CalendarWidgetResponse,
+  CalendarYearViewWire,
+  MessageInvitationsResponse,
+  type OccurrencesQuery,
+} from "@bye/contracts";
 import { calendarLocationSearchLive, readBounded } from "@bye/platform-cloudflare";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { mint, verify } from "../capability.ts";
 import type { CoreEnv } from "../env.ts";
-import { route, type Route } from "../http.ts";
+import { Invocation, route, type Route } from "../http.ts";
+import { ok, publicly } from "../httpapi.ts";
 import { sniffRaster } from "../images.ts";
 import { calendarDiscoveryLayer, calendarRepositoryLayer } from "../services.ts";
-import { authed, authedBody } from "./common.ts";
+import { CoreApi } from "../spec/index.ts";
+import { authed } from "./common.ts";
 
-// Route bodies that are one command's fields; the command envelope schema validates the values.
-const CommandId = Schema.String.pipe(Schema.check(Schema.isMinLength(1), Schema.isMaxLength(200)));
-
-const PreferencesRequest = Schema.Struct({
-  commandId: CommandId,
-  preferences: Schema.optional(Schema.Unknown),
-});
-
-const ImportRequest = Schema.Struct({
-  commandId: CommandId,
-  calendarId: Schema.String,
-  ics: Schema.String,
-});
-
-const zoneOf = (url: URL) =>
-  url.searchParams.get("tz") ? { viewerZone: url.searchParams.get("tz")! } : {};
+const zoneOf = (tz: string | undefined) => (tz ? { viewerZone: tz } : {});
 
 const dateParam = (value: string | undefined | null) =>
   Effect.try({
     try: () => calParseDate(value ?? ""),
     catch: () => new ApiError({ code: "bad_request", message: "date must be YYYY-MM-DD" }),
   });
+
+/**
+ * The CalendarDO's read models cross its RPC untyped: read them as their contract. A result that
+ * doesn't match is a defect (logged, answered `internal`), never a guess.
+ */
+const wire =
+  <A, I>(schema: Schema.Codec<A, I>) =>
+  <V>(value: V) =>
+    Schema.decodeUnknownEffect(schema)(value).pipe(Effect.orDie);
+
+const csv = (value: string | undefined) => (value ? value.split(",").filter(Boolean) : undefined);
 
 // ---- day photos (C08): owner-only, private R2 key, magic-byte validated, short-lived signed reads ----
 
@@ -130,15 +150,6 @@ const withPhotoUrl = async <T extends { readonly photoKey?: string | undefined }
     ? { ...context, photoUrl: await signDayPhotoUrl(env, spaceId, context.photoKey, Date.now()) }
     : context;
 
-const decorateDay =
-  (env: CoreEnv, spaceId: string) =>
-  <V>(value: V) =>
-    Effect.promise(async () => {
-      const v = value as { context?: { photoKey?: string } };
-
-      return v.context ? { ...v, context: await withPhotoUrl(env, spaceId, v.context) } : value;
-    });
-
 /**
  * A SetDayDecoration that replaced or cleared a photo reports it as `released` (no day shows it
  * any more): delete the stored object so replaced photos don't accumulate outside any quota.
@@ -161,229 +172,8 @@ const executeCommand = (env: CoreEnv, spaceId: string, body: CommandBody) =>
     Effect.flatMap((result) => deleteReleasedPhoto(env, spaceId, result)),
   );
 
-export const calendarRoutes: ReadonlyArray<Route<CoreEnv>> = [
-  // ---- discovery: owned calendar spaces plus calendars shared with this account (C05) ----
-  route(
-    "GET",
-    "/v1/calendars",
-    authed(({ env }) =>
-      calendarListVisible.pipe(
-        Effect.provide(calendarDiscoveryLayer(env)),
-        Effect.map((items) => ({ items })),
-      ),
-    ),
-  ),
-
-  route(
-    "GET",
-    "/v1/calendars/:id/events",
-    authed(({ params, url }) => {
-      const query: Types.Mutable<OccurrencesQuery> = {
-        from: Date.parse(url.searchParams.get("from") ?? ""),
-        to: Date.parse(url.searchParams.get("to") ?? ""),
-        ...zoneOf(url),
-      };
-
-      const calendarIds = url.searchParams.get("calendarIds");
-
-      if (calendarIds) query.calendarIds = calendarIds.split(",").filter(Boolean);
-
-      if (url.searchParams.has("visibleOnly"))
-        query.visibleOnly = url.searchParams.get("visibleOnly") !== "false";
-
-      return calendarListOccurrences(params.id!, query).pipe(
-        Effect.map((occurrences) => ({ schemaVersion: 1, occurrences })),
-      );
-    }),
-  ),
-  route(
-    "POST",
-    "/v1/calendars/:id/events",
-    authed(({ params, body, env }) => executeCommand(env, params.id!, body)),
-  ),
-  route(
-    "POST",
-    "/v1/calendars/:id/commands",
-    authed(({ params, body, env }) => executeCommand(env, params.id!, body)),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/search",
-    authed(({ params, url }) =>
-      calendarSearch(
-        params.id!,
-        url.searchParams.get("q") ?? "",
-        Number(url.searchParams.get("limit") ?? "25"),
-      ).pipe(Effect.map((items) => ({ items }))),
-    ),
-  ),
-  // Invitations a delivered message carried (C09), with the owner's current answer and the
-  // occurrence key to answer a single occurrence. The caller must also be able to read the message.
-  route(
-    "GET",
-    "/v1/calendars/:id/invitations",
-    authed(({ params, url }) =>
-      Effect.gen(function* () {
-        const mailboxId = url.searchParams.get("mailboxId") ?? "";
-        const deliveryId = url.searchParams.get("deliveryId") ?? "";
-
-        if (!mailboxId || !deliveryId)
-          return yield* new ApiError({
-            code: "bad_request",
-            message: "mailboxId and deliveryId are required",
-          });
-        yield* requireMailbox(mailboxId, "read");
-
-        return yield* calendarReadQuery(params.id!, {
-          type: "Invitations",
-          mailboxId,
-          deliveryId,
-        });
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/calendars/:id/from-message",
-    authed(({ params, body }) => calendarCreateEventFromMessage(params.id!, body), { status: 201 }),
-  ),
-
-  // ---- views and navigation (C01) ----
-  route(
-    "GET",
-    "/v1/calendars/:id/calendars",
-    authed(({ params }) =>
-      calendarReadQuery(params.id!, { type: "Calendars" }).pipe(Effect.map((items) => ({ items }))),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/preferences",
-    authed(({ params }) => calendarReadQuery(params.id!, { type: "Preferences" })),
-  ),
-  route(
-    "PATCH",
-    "/v1/calendars/:id/preferences",
-    authedBody(PreferencesRequest, ({ params, body }) =>
-      calendarExecuteCommand(params.id!, {
-        schemaVersion: 1,
-        command: {
-          type: "SetPreferences",
-          commandId: body.commandId,
-          preferences: body.preferences ?? {},
-        },
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/agenda",
-    authed(({ params, url }) =>
-      Effect.flatMap(dateParam(url.searchParams.get("from")), (from) => {
-        const calendarIds = url.searchParams.get("calendarIds");
-
-        const agenda = {
-          type: "Agenda",
-          from,
-          days: Number(url.searchParams.get("days") ?? "14"),
-          ...zoneOf(url),
-        } as const;
-
-        return calendarReadQuery(
-          params.id!,
-          calendarIds ? { ...agenda, calendarIds: calendarIds.split(",").filter(Boolean) } : agenda,
-        );
-      }).pipe(Effect.map((days) => ({ days }))),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/day/:date",
-    authed(({ params, url, env }) =>
-      Effect.flatMap(dateParam(params.date), (date) =>
-        calendarReadQuery(params.id!, { type: "Day", date, ...zoneOf(url) }),
-      ).pipe(Effect.flatMap(decorateDay(env, params.id!))),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/month/:year/:month",
-    authed(({ params, url }) =>
-      calendarReadQuery(params.id!, {
-        type: "Month",
-        year: Number(params.year),
-        month: Number(params.month),
-        ...zoneOf(url),
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/year/:year",
-    authed(({ params, url }) =>
-      calendarReadQuery(params.id!, { type: "Year", year: Number(params.year), ...zoneOf(url) }),
-    ),
-  ),
-
-  // ---- weekly tasks, habits, time tracking, day context (C06–C08) ----
-  route(
-    "GET",
-    "/v1/calendars/:id/week-tasks",
-    authed(({ params, url }) =>
-      Effect.flatMap(dateParam(url.searchParams.get("date")), (date) => {
-        const firstWeekday = url.searchParams.get("firstWeekday");
-
-        return calendarReadQuery(
-          params.id!,
-          firstWeekday
-            ? { type: "WeekTasks", date, firstWeekday: Number(firstWeekday) }
-            : { type: "WeekTasks", date },
-        );
-      }).pipe(Effect.map((items) => ({ items }))),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/habits",
-    authed(({ params, url }) =>
-      Effect.all([
-        dateParam(url.searchParams.get("from")),
-        dateParam(url.searchParams.get("to")),
-      ]).pipe(
-        Effect.flatMap(([from, to]) => calendarReadQuery(params.id!, { type: "Habits", from, to })),
-        Effect.map((items) => ({ items })),
-      ),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/timer",
-    authed(({ params }) => calendarReadQuery(params.id!, { type: "Timer" })),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/time-entries",
-    authed(({ params, url }) =>
-      calendarReadQuery(params.id!, {
-        type: "TimeEntries",
-        from: Date.parse(url.searchParams.get("from") ?? ""),
-        to: Date.parse(url.searchParams.get("to") ?? ""),
-      }).pipe(Effect.map((items) => ({ items }))),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/days/:date/context",
-    authed(({ params, url, env }) =>
-      Effect.flatMap(dateParam(params.date), (date) =>
-        calendarReadQuery(params.id!, { type: "DayContext", date, ...zoneOf(url) }),
-      ).pipe(
-        Effect.flatMap((ctx) =>
-          Effect.promise(() => withPhotoUrl(env, params.id!, ctx as { photoKey?: string })),
-        ),
-      ),
-    ),
-  ),
+export const calendarRoutes: ReadonlyArray<Route> = [
+  // ---- day photo upload (C08): a raw image body, streamed with a hard cap ----
   route(
     "POST",
     "/v1/calendars/:id/days/:date/photo",
@@ -478,57 +268,7 @@ export const calendarRoutes: ReadonlyArray<Route<CoreEnv>> = [
     ),
   ),
 
-  // ---- device surfaces and interoperability (C05, C10) ----
-  route(
-    "GET",
-    "/v1/calendars/:id/widget",
-    authed(({ params, url }) => calendarReadQuery(params.id!, { type: "Widget", ...zoneOf(url) })),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/changes",
-    authed(({ params, url }) =>
-      calendarReadQuery(params.id!, {
-        type: "Changes",
-        cursor: Number(url.searchParams.get("cursor") ?? "0"),
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/calendars/:id/feed-tokens",
-    authed(({ params }) =>
-      calendarReadQuery(params.id!, { type: "FeedTokens" }).pipe(
-        Effect.map((items) => ({ items })),
-      ),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/calendars/:id/feed-tokens",
-    authed(
-      ({ params, body, env }) =>
-        Effect.map(calendarCreateFeedToken(params.id!, body), ({ token }) => ({
-          token,
-          url: `${env.APP_ORIGIN}/feeds/${params.id}/${token}.ics`,
-        })),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/calendars/:id/feed-tokens/:hash",
-    authed(({ params, url }) =>
-      calendarExecuteCommand(params.id!, {
-        schemaVersion: 1,
-        command: {
-          type: "RevokeFeedToken",
-          commandId: url.searchParams.get("commandId") ?? `revoke:${params.hash}`,
-          tokenHash: params.hash,
-        },
-      }),
-    ),
-  ),
+  // ---- ICS export (C05): a file download ----
   route(
     "GET",
     "/v1/calendars/:id/export.ics",
@@ -554,38 +294,6 @@ export const calendarRoutes: ReadonlyArray<Route<CoreEnv>> = [
             },
           }),
       },
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/calendars/:id/import",
-    authedBody(ImportRequest, ({ params, body }) =>
-      calendarExecuteCommand(params.id!, {
-        schemaVersion: 1,
-        command: { type: "ImportIcs", ...body },
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/locations",
-    authed(({ url, env }) =>
-      Effect.gen(function* () {
-        const lat = Number(url.searchParams.get("lat"));
-        const lng = Number(url.searchParams.get("lng"));
-
-        const near =
-          Number.isFinite(lat) && Number.isFinite(lng) && url.searchParams.has("lat")
-            ? { latitude: lat, longitude: lng }
-            : undefined;
-
-        const items = yield* calendarSearchLocations(url.searchParams.get("q") ?? "", near).pipe(
-          Effect.provide(calendarLocationSearchLive(env.LOCATION_API_KEY || undefined)),
-          Effect.catchTag("LocationSearchFailure", () => Effect.succeed([])),
-        );
-
-        return { items };
-      }),
     ),
   ),
 
@@ -657,3 +365,285 @@ export const calendarRoutes: ReadonlyArray<Route<CoreEnv>> = [
     });
   }),
 ];
+
+/** A command through the generic endpoints; a command with no result answers `{ ok: true }`. */
+const commandResult = (env: CoreEnv, spaceId: string, body: CommandBody) =>
+  executeCommand(env, spaceId, body).pipe(
+    Effect.map((result): CalendarCommandOutcome => result ?? ok),
+  );
+
+export const CalendarHandlers = HttpApiBuilder.group(CoreApi, "calendar", (handlers) =>
+  handlers
+    // ---- discovery: owned calendar spaces plus calendars shared with this account (C05) ----
+    .handle("listVisibleCalendars", () =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+
+        const items = yield* calendarListVisible.pipe(Effect.provide(calendarDiscoveryLayer(env)));
+
+        return { items };
+      }).pipe(publicly),
+    )
+    .handle("listOccurrences", ({ params, query: q }) =>
+      Effect.gen(function* () {
+        const query: Types.Mutable<OccurrencesQuery> = {
+          from: Date.parse(q.from ?? ""),
+          to: Date.parse(q.to ?? ""),
+          ...zoneOf(q.tz),
+        };
+
+        const calendarIds = csv(q.calendarIds);
+
+        if (calendarIds) query.calendarIds = calendarIds;
+
+        if (q.visibleOnly !== undefined) query.visibleOnly = q.visibleOnly !== "false";
+
+        const occurrences = yield* calendarListOccurrences(params.id, query);
+
+        return { schemaVersion: 1 as const, occurrences };
+      }).pipe(publicly),
+    )
+    .handle("createEvent", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+
+        return yield* commandResult(env, params.id, payload);
+      }).pipe(publicly),
+    )
+    .handle("executeCommand", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+
+        return yield* commandResult(env, params.id, payload);
+      }).pipe(publicly),
+    )
+    .handle("search", ({ params, query }) =>
+      calendarSearch(params.id, query.q ?? "", Number(query.limit ?? "25")).pipe(
+        Effect.map((items) => ({ items })),
+        publicly,
+      ),
+    )
+    .handle("messageInvitations", ({ params, query }) =>
+      Effect.gen(function* () {
+        const mailboxId = query.mailboxId ?? "";
+        const deliveryId = query.deliveryId ?? "";
+
+        if (!mailboxId || !deliveryId)
+          return yield* new ApiError({
+            code: "bad_request",
+            message: "mailboxId and deliveryId are required",
+          });
+        yield* requireMailbox(mailboxId, "read");
+
+        return yield* calendarReadQuery(params.id, {
+          type: "Invitations",
+          mailboxId,
+          deliveryId,
+        }).pipe(Effect.flatMap(wire(MessageInvitationsResponse)));
+      }).pipe(publicly),
+    )
+    .handle("createEventFromMessage", ({ params, payload }) =>
+      calendarCreateEventFromMessage(params.id, payload).pipe(publicly),
+    )
+
+    // ---- views and navigation (C01) ----
+    .handle("listCalendars", ({ params }) =>
+      calendarReadQuery(params.id, { type: "Calendars" }).pipe(
+        Effect.map((items) => ({ items })),
+        Effect.flatMap(wire(CalendarListResponse)),
+        publicly,
+      ),
+    )
+    .handle("preferences", ({ params }) =>
+      calendarReadQuery(params.id, { type: "Preferences" }).pipe(
+        Effect.flatMap(wire(CalendarPreferencesWire)),
+        publicly,
+      ),
+    )
+    .handle("setPreferences", ({ params, payload }) =>
+      calendarExecuteCommand(params.id, {
+        schemaVersion: 1,
+        command: {
+          type: "SetPreferences",
+          commandId: payload.commandId,
+          preferences: payload.preferences ?? {},
+        },
+      }).pipe(Effect.flatMap(wire(CalendarPreferencesWire)), publicly),
+    )
+    .handle("agenda", ({ params, query }) =>
+      Effect.gen(function* () {
+        const from = yield* dateParam(query.from);
+        const calendarIds = csv(query.calendarIds);
+
+        const agenda = {
+          type: "Agenda",
+          from,
+          days: Number(query.days ?? "14"),
+          ...zoneOf(query.tz),
+        } as const;
+
+        const days = yield* calendarReadQuery(
+          params.id,
+          calendarIds ? { ...agenda, calendarIds } : agenda,
+        );
+
+        return yield* wire(CalendarAgendaResponse)({ days });
+      }).pipe(publicly),
+    )
+    .handle("day", ({ params, query }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const date = yield* dateParam(params.date);
+
+        const day = yield* calendarReadQuery(params.id, {
+          type: "Day",
+          date,
+          ...zoneOf(query.tz),
+        }).pipe(Effect.flatMap(wire(CalendarDayViewWire)));
+
+        if (!day.context) return day;
+        const context = day.context;
+
+        return {
+          ...day,
+          context: yield* Effect.promise(() => withPhotoUrl(env, params.id, context)),
+        };
+      }).pipe(publicly),
+    )
+    .handle("month", ({ params, query }) =>
+      calendarReadQuery(params.id, {
+        type: "Month",
+        year: Number(params.year),
+        month: Number(params.month),
+        ...zoneOf(query.tz),
+      }).pipe(Effect.flatMap(wire(CalendarMonthViewWire)), publicly),
+    )
+    .handle("year", ({ params, query }) =>
+      calendarReadQuery(params.id, {
+        type: "Year",
+        year: Number(params.year),
+        ...zoneOf(query.tz),
+      }).pipe(Effect.flatMap(wire(CalendarYearViewWire)), publicly),
+    )
+
+    // ---- weekly tasks, habits, time tracking, day context (C06–C08) ----
+    .handle("weekTasks", ({ params, query }) =>
+      Effect.gen(function* () {
+        const date = yield* dateParam(query.date);
+
+        const items = yield* calendarReadQuery(
+          params.id,
+          query.firstWeekday
+            ? { type: "WeekTasks", date, firstWeekday: Number(query.firstWeekday) }
+            : { type: "WeekTasks", date },
+        );
+
+        return yield* wire(CalendarWeekTasksResponse)({ items });
+      }).pipe(publicly),
+    )
+    .handle("habits", ({ params, query }) =>
+      Effect.gen(function* () {
+        const [from, to] = yield* Effect.all([dateParam(query.from), dateParam(query.to)]);
+        const items = yield* calendarReadQuery(params.id, { type: "Habits", from, to });
+
+        return yield* wire(CalendarHabitsResponse)({ items });
+      }).pipe(publicly),
+    )
+    .handle("timer", ({ params }) =>
+      calendarReadQuery(params.id, { type: "Timer" }).pipe(
+        Effect.flatMap(wire(CalendarTimerResponse)),
+        publicly,
+      ),
+    )
+    .handle("timeEntries", ({ params, query }) =>
+      calendarReadQuery(params.id, {
+        type: "TimeEntries",
+        from: Date.parse(query.from ?? ""),
+        to: Date.parse(query.to ?? ""),
+      }).pipe(
+        Effect.map((items) => ({ items })),
+        Effect.flatMap(wire(CalendarTimeEntriesResponse)),
+        publicly,
+      ),
+    )
+    .handle("dayContext", ({ params, query }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const date = yield* dateParam(params.date);
+
+        const context = yield* calendarReadQuery(params.id, {
+          type: "DayContext",
+          date,
+          ...zoneOf(query.tz),
+        }).pipe(Effect.flatMap(wire(CalendarDayContextWire)));
+
+        // The authority always answers a day context; `withPhotoUrl` only adds the signed link.
+        return (yield* Effect.promise(() => withPhotoUrl(env, params.id, context))) ?? context;
+      }).pipe(publicly),
+    )
+
+    // ---- device surfaces and interoperability (C05, C10) ----
+    .handle("widget", ({ params, query }) =>
+      calendarReadQuery(params.id, { type: "Widget", ...zoneOf(query.tz) }).pipe(
+        Effect.flatMap(wire(CalendarWidgetResponse)),
+        publicly,
+      ),
+    )
+    .handle("changes", ({ params, query }) =>
+      calendarReadQuery(params.id, {
+        type: "Changes",
+        cursor: Number(query.cursor ?? "0"),
+      }).pipe(Effect.flatMap(wire(CalendarChangesResponse)), publicly),
+    )
+    .handle("listFeedTokens", ({ params }) =>
+      calendarReadQuery(params.id, { type: "FeedTokens" }).pipe(
+        Effect.map((items) => ({ items })),
+        Effect.flatMap(wire(CalendarFeedTokensResponse)),
+        publicly,
+      ),
+    )
+    .handle("createFeedToken", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { token } = yield* calendarCreateFeedToken(params.id, payload);
+
+        return { token, url: `${env.APP_ORIGIN}/feeds/${params.id}/${token}.ics` };
+      }).pipe(publicly),
+    )
+    .handle("revokeFeedToken", ({ params, query }) =>
+      calendarExecuteCommand(params.id, {
+        schemaVersion: 1,
+        command: {
+          type: "RevokeFeedToken",
+          commandId: query.commandId ?? `revoke:${params.hash}`,
+          tokenHash: params.hash,
+        },
+      }).pipe(Effect.as(ok), publicly),
+    )
+    .handle("importIcs", ({ params, payload }) =>
+      calendarExecuteCommand(params.id, {
+        schemaVersion: 1,
+        command: { type: "ImportIcs", ...payload },
+      }).pipe(Effect.flatMap(wire(CalendarImportResult)), publicly),
+    )
+    .handle("searchLocations", ({ query }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        // `Number(null)` is 0, as the old `searchParams.get` read: presence is decided by `lat`.
+        const lat = Number(query.lat ?? null);
+        const lng = Number(query.lng ?? null);
+
+        const near =
+          Number.isFinite(lat) && Number.isFinite(lng) && query.lat !== undefined
+            ? { latitude: lat, longitude: lng }
+            : undefined;
+
+        const items = yield* calendarSearchLocations(query.q ?? "", near).pipe(
+          Effect.provide(calendarLocationSearchLive(env.LOCATION_API_KEY || undefined)),
+          Effect.catchTag("LocationSearchFailure", () => Effect.succeed([])),
+        );
+
+        return { items };
+      }).pipe(publicly),
+    ),
+);

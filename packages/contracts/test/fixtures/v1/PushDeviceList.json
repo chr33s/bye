@@ -1,0 +1,48 @@
+[
+  {
+    "items": []
+  },
+  {
+    "items": [
+      {
+        "id": "_`zs",
+        "kind": ",zn%",
+        "label": "-1",
+        "enabled": true,
+        "createdAt": 4.3465753855564605e189,
+        "lastSuccessAt": 5e-324,
+        "disabledAt": 1.797693134862314e308
+      },
+      {
+        "id": "7N",
+        "kind": "//",
+        "label": "",
+        "enabled": true,
+        "createdAt": 1.7976931348623155e308,
+        "lastSuccessAt": null,
+        "disabledAt": -1.7976931348623151e308
+      },
+      {
+        "id": "rn",
+        "kind": "",
+        "label": "WpwD",
+        "enabled": true,
+        "createdAt": -3.195608114811042e218,
+        "lastSuccessAt": 1.7976931348623137e308,
+        "disabledAt": -5e-324
+      },
+      {
+        "id": "\n",
+        "kind": "-1",
+        "label": "~Mu4",
+        "enabled": true,
+        "createdAt": -1.7976931348623157e308,
+        "lastSuccessAt": -1.691556243243112e297,
+        "disabledAt": 1.476018122690137e-57
+      }
+    ]
+  },
+  {
+    "items": []
+  }
+]

@@ -28,7 +28,7 @@ export const WEBHOOK_MAX_BYTES = 256 * 1024;
 
 const tooLarge = () => errorResponse("payload_too_large", "webhook body too large");
 
-export const webhookRoutes: ReadonlyArray<Route<CoreEnv>> = [
+export const webhookRoutes: ReadonlyArray<Route> = [
   route("POST", "/webhooks/billing", async (request, _p, env) => {
     const body = await readTextCapped(request, WEBHOOK_MAX_BYTES);
 

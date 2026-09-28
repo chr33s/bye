@@ -1,0 +1,82 @@
+[
+  {
+    "orgId": " ",
+    "entitlement": {
+      "plan": "+$",
+      "interval": "annual",
+      "status": "trialing",
+      "state": "entitled",
+      "seats": -2.524809487183387e185,
+      "trialEndsAt": 1.7499720540641604e304,
+      "periodEnd": null,
+      "creditsCents": 2.5e-323,
+      "shortAddress": false
+    },
+    "ledger": [],
+    "plans": []
+  },
+  {
+    "orgId": "-1",
+    "entitlement": {
+      "plan": "\n",
+      "interval": "monthly",
+      "status": "past_due",
+      "state": "grace",
+      "seats": -1.3501335221042652e-225,
+      "trialEndsAt": null,
+      "periodEnd": null,
+      "creditsCents": 8.4e-323,
+      "shortAddress": true
+    },
+    "ledger": [
+      {
+        "kind": "0",
+        "amountCents": 6.153707142823726e102,
+        "reason": "UB{&",
+        "createdAt": -1.7976931348623123e308
+      }
+    ],
+    "plans": []
+  },
+  {
+    "orgId": "",
+    "entitlement": {
+      "plan": "0",
+      "interval": "monthly",
+      "status": "cancelled",
+      "state": "lapsed",
+      "seats": -7.4e-323,
+      "trialEndsAt": 2.2936640597363326e-213,
+      "periodEnd": 1.757589287258695e-279,
+      "creditsCents": 4.835724282237568e80,
+      "shortAddress": true
+    },
+    "ledger": [
+      {
+        "kind": "\t",
+        "amountCents": -6e-323,
+        "reason": "z<",
+        "createdAt": -4.3876228492217155e146
+      },
+      {
+        "kind": "",
+        "amountCents": -2e-323,
+        "reason": "UREm",
+        "createdAt": 2.5e-323
+      },
+      {
+        "kind": "\ud800",
+        "amountCents": 6e-323,
+        "reason": "Q<#j",
+        "createdAt": 1.9072673327544212e-234
+      },
+      {
+        "kind": "\n",
+        "amountCents": -1.7976931348623141e308,
+        "reason": "-1",
+        "createdAt": -6e-323
+      }
+    ],
+    "plans": []
+  }
+]

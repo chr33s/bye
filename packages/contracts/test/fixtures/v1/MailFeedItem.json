@@ -1,0 +1,119 @@
+[
+  {
+    "thread": {
+      "threadId": "S",
+      "subject": "",
+      "originalSubject": "",
+      "sender": "\ud800",
+      "destination": "imbox",
+      "disposition": "screening",
+      "quarantined": false,
+      "bundleKey": null,
+      "bundleCount": 1,
+      "newForYou": false,
+      "revision": 9,
+      "seenRevision": 4,
+      "lastActivityAt": 3.5e-323,
+      "messageCount": 1,
+      "attention": {
+        "replyLater": false,
+        "setAside": true,
+        "unfollowed": true,
+        "bubble": {
+          "_tag": "Scheduled",
+          "at": 5e-324,
+          "generation": 2
+        }
+      },
+      "labels": [],
+      "mergedInto": null,
+      "newSinceVisit": true
+    },
+    "latest": {
+      "deliveryId": "",
+      "from": {
+        "": true
+      },
+      "date": 1.7976931348623145e308,
+      "subject": "&",
+      "renderUrl": ""
+    }
+  },
+  {
+    "thread": {
+      "threadId": "XBR",
+      "subject": "",
+      "originalSubject": "p2VP",
+      "sender": "\n",
+      "destination": "feed",
+      "disposition": "trash",
+      "quarantined": false,
+      "bundleKey": "\u0000",
+      "bundleCount": 4,
+      "newForYou": false,
+      "revision": 0,
+      "seenRevision": 13,
+      "lastActivityAt": 4.121233191299745e-91,
+      "messageCount": 15,
+      "attention": {
+        "replyLater": true,
+        "setAside": false,
+        "unfollowed": false,
+        "bubble": {
+          "_tag": "Scheduled",
+          "at": 6.4e-323,
+          "generation": 13,
+          "condition": "always"
+        }
+      },
+      "labels": [],
+      "mergedInto": "PV1",
+      "newSinceVisit": true
+    },
+    "latest": {
+      "deliveryId": "😀",
+      "from": "K!t1",
+      "date": 6e-323,
+      "subject": "",
+      "renderUrl": "\udc00"
+    }
+  },
+  {
+    "thread": {
+      "threadId": "8",
+      "subject": "\n",
+      "originalSubject": "0",
+      "sender": "G",
+      "destination": "feed",
+      "disposition": "active",
+      "quarantined": true,
+      "bundleKey": null,
+      "bundleCount": 16,
+      "newForYou": true,
+      "revision": 1,
+      "seenRevision": 0,
+      "lastActivityAt": 1.6277589684408464e-292,
+      "messageCount": 1,
+      "attention": {
+        "replyLater": true,
+        "setAside": true,
+        "unfollowed": false,
+        "bubble": {
+          "_tag": "Scheduled",
+          "at": 6.4e-323,
+          "generation": 15
+        }
+      },
+      "labels": ["", "pz0", "-1"],
+      "mergedInto": null,
+      "newSinceVisit": true
+    },
+    "latest": {
+      "deliveryId": "",
+      "from": false,
+      "date": 1.5e-323,
+      "subject": "R3.P",
+      "renderUrl": "%O[Z"
+    }
+  }
+]

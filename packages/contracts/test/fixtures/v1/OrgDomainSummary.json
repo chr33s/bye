@@ -1,0 +1,26 @@
+[
+  {
+    "id": "0",
+    "name": "",
+    "state": "outbound-tested",
+    "plus_addressing": -1.3977212026225649e-202,
+    "catch_all_mailbox_id": null,
+    "updated_at": -4e-323
+  },
+  {
+    "id": "\udc00",
+    "name": "😀",
+    "state": "zone-authorized",
+    "plus_addressing": 8.458270525810198e231,
+    "catch_all_mailbox_id": "0",
+    "updated_at": -6e-323
+  },
+  {
+    "id": "\udc00",
+    "name": "\u0000",
+    "state": "ownership-proven",
+    "plus_addressing": -9e-323,
+    "catch_all_mailbox_id": null,
+    "updated_at": -1.7976931348623135e308
+  }
+]

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "",
+    "org_id": "(%L]",
+    "name": "",
+    "state": "dns-configured",
+    "verification_token": "$@>M",
+    "plus_addressing": -7.4e-323,
+    "catch_all_mailbox_id": "",
+    "verificationRecord": {
+      "type": "\ud800",
+      "name": "\udc00",
+      "content": "-1"
+    }
+  },
+  {
+    "id": "SteR",
+    "org_id": "\t",
+    "name": "😀",
+    "state": "zone-authorized",
+    "verification_token": "0",
+    "plus_addressing": -9.940953554597629e-278,
+    "catch_all_mailbox_id": null,
+    "verificationRecord": {
+      "type": "kk",
+      "name": "H",
+      "content": "\t"
+    }
+  },
+  {
+    "id": "\ud800",
+    "org_id": "",
+    "name": "\ud800",
+    "state": "outbound-tested",
+    "verification_token": "\u0000",
+    "plus_addressing": 4e-323,
+    "catch_all_mailbox_id": "\udc00",
+    "verificationRecord": {
+      "type": "_Nh",
+      "name": "4\"",
+      "content": "\ud800"
+    }
+  }
+]

@@ -32,7 +32,7 @@ import {
 } from "@bye/platform-cloudflare";
 import { kernelClock } from "../durable-host.ts";
 import type { CoreEnv } from "../env.ts";
-import { errorResponse, json, type Params, readJson, runHttp } from "../http.ts";
+import { errorResponse, json, type Params, readJson, type RouteHandler, runHttp } from "../http.ts";
 import {
   calendarRepositoryLayer,
   controlAdapters,
@@ -56,12 +56,7 @@ export type AppServices =
   | SharedSpaces
   | MailboxSelection;
 
-export type Handler = (
-  request: Request,
-  params: Params,
-  env: CoreEnv,
-  ctx: ExecutionContext,
-) => Promise<Response>;
+export type Handler = RouteHandler;
 
 export const requestId = () => crypto.randomUUID();
 
@@ -71,7 +66,7 @@ export const bearer = (request: Request): string | undefined => {
   return h?.startsWith("Bearer ") ? h.slice(7).trim() : undefined;
 };
 
-const credentialsOf = (request: Request) => ({
+export const credentialsOf = (request: Request) => ({
   method: request.method,
   cookieToken: readCookie(request.headers.get("cookie"), SESSION_COOKIE),
   bearerToken: bearer(request),
@@ -88,6 +83,16 @@ export const authenticate = (request: Request, env: CoreEnv) =>
     Effect.promise(() => controlLayer(env)),
     (control) =>
       authenticateRequest(credentialsOf(request), env.APP_ORIGIN).pipe(Effect.provide(control)),
+  );
+
+/** The per-request application services every authenticated handler runs with (§7.4). */
+export const appLayers = (env: CoreEnv, control: Awaited<ReturnType<typeof controlLayer>>) =>
+  Layer.mergeAll(
+    control,
+    mailboxRepositoryLayer(env),
+    mailboxFactsLayer(env),
+    calendarRepositoryLayer(env),
+    sharedLayers(env),
   );
 
 /** Authenticate, then run an application Effect with request-scoped layers. */
@@ -146,17 +151,7 @@ export const authed =
       );
 
       return options.raw ? options.raw(value) : json(value ?? { ok: true }, options.status ?? 200);
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          control,
-          mailboxRepositoryLayer(env),
-          mailboxFactsLayer(env),
-          calendarRepositoryLayer(env),
-          sharedLayers(env),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(appLayers(env, control)));
 
     return runHttp(effect as Effect.Effect<Response, unknown>, id);
   };

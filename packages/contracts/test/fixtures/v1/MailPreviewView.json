@@ -1,0 +1,414 @@
+[
+  {
+    "domain": {
+      "id": " ",
+      "org_id": "\udc00",
+      "name": "~07s",
+      "state": "dns-configured",
+      "verification_token": "-1",
+      "plus_addressing": -1.069347702557339e305,
+      "catch_all_mailbox_id": ""
+    },
+    "plan": [
+      {
+        "op": "conflict",
+        "existing": {
+          "type": "\udc00",
+          "name": "\\R}?",
+          "content": ")I`"
+        },
+        "desired": {
+          "type": "\ud800",
+          "name": "0",
+          "content": "0"
+        },
+        "purpose": ""
+      },
+      {
+        "op": "create",
+        "record": {
+          "type": "\udc00",
+          "name": "B",
+          "content": "-k`]"
+        },
+        "purpose": "\\gzU"
+      },
+      {
+        "op": "keep",
+        "record": {
+          "type": "]?Yz",
+          "name": "😀",
+          "content": "\udc00"
+        },
+        "purpose": " "
+      },
+      {
+        "op": "update",
+        "from": {
+          "type": "\u0000",
+          "name": "\t",
+          "content": "^}C3"
+        },
+        "to": {
+          "type": "-1",
+          "name": "",
+          "content": "\u0000",
+          "id": "-1"
+        },
+        "purpose": "\u0000"
+      }
+    ],
+    "diagnostics": 1.7976931348623137e308,
+    "classification": {
+      "kind": "new",
+      "provider": "k7n",
+      "currentMx": [],
+      "conflicts": [
+        {
+          "op": "keep",
+          "record": {
+            "type": "",
+            "name": " ",
+            "content": "BUj",
+            "priority": -8.07239011924521e93
+          },
+          "purpose": "-"
+        },
+        {
+          "op": "conflict",
+          "existing": {
+            "type": "Z'j^",
+            "name": "😀",
+            "content": "\t",
+            "id": "=pK"
+          },
+          "desired": {
+            "type": "",
+            "name": "H",
+            "content": "!)D0"
+          },
+          "purpose": ":"
+        }
+      ],
+      "requiresCutover": false
+    },
+    "source": "zone-api",
+    "cutoverPending": true,
+    "link": {
+      "installAccountId": null,
+      "installZoneId": null,
+      "cutoverConfirmedAt": null,
+      "zoneAuthMethod": null,
+      "writeMode": null,
+      "restorePending": null,
+      "inboundProbe": null,
+      "hasSnapshot": true
+    }
+  },
+  {
+    "domain": {
+      "id": "6cYi",
+      "org_id": " ",
+      "name": "zj(",
+      "state": "removed",
+      "verification_token": "\n",
+      "plus_addressing": -2.1328164006494543e214,
+      "catch_all_mailbox_id": null
+    },
+    "plan": [
+      {
+        "op": "keep",
+        "record": {
+          "type": "\udc00",
+          "name": "MLiq",
+          "content": "\n"
+        },
+        "purpose": "=ImB"
+      }
+    ],
+    "diagnostics": 1.5e-323,
+    "classification": {
+      "kind": "existing-provider",
+      "provider": null,
+      "currentMx": [
+        {
+          "type": "😀",
+          "name": "\ud800",
+          "content": ""
+        },
+        {
+          "type": "",
+          "name": "0",
+          "content": " "
+        },
+        {
+          "type": "\t",
+          "name": "😀",
+          "content": "\ud800"
+        },
+        {
+          "type": "p0\"7",
+          "name": "\ud800",
+          "content": "",
+          "id": "\t"
+        }
+      ],
+      "conflicts": [
+        {
+          "op": "create",
+          "record": {
+            "type": "",
+            "name": "",
+            "content": "😀"
+          },
+          "purpose": " "
+        },
+        {
+          "op": "conflict",
+          "existing": {
+            "type": " ",
+            "name": "<\\",
+            "content": "-1"
+          },
+          "desired": {
+            "type": " ",
+            "name": "0",
+            "content": ">Y:j"
+          },
+          "purpose": "|Jk>"
+        }
+      ],
+      "requiresCutover": true
+    },
+    "source": "public-dns",
+    "cutoverPending": false,
+    "link": {
+      "installAccountId": " ",
+      "installZoneId": null,
+      "cutoverConfirmedAt": 1.7976931348623137e308,
+      "zoneAuthMethod": null,
+      "writeMode": null,
+      "restorePending": null,
+      "inboundProbe": {
+        "address": "0",
+        "receivedAt": null
+      },
+      "hasSnapshot": true
+    }
+  },
+  {
+    "domain": {
+      "id": " ",
+      "org_id": "\n",
+      "name": "F.nN",
+      "state": "dns-configured",
+      "verification_token": " ",
+      "plus_addressing": -6.4e-323,
+      "catch_all_mailbox_id": null
+    },
+    "plan": [
+      {
+        "op": "conflict",
+        "existing": {
+          "type": "0]",
+          "name": "\u0000",
+          "content": ""
+        },
+        "desired": {
+          "type": "\u0000",
+          "name": "\udc00",
+          "content": "😀"
+        },
+        "purpose": ""
+      },
+      {
+        "op": "keep",
+        "record": {
+          "type": " ",
+          "name": "\n",
+          "content": "😀"
+        },
+        "purpose": "-1"
+      },
+      {
+        "op": "keep",
+        "record": {
+          "type": "😀",
+          "name": "",
+          "content": "\ud800",
+          "id": "\ud800"
+        },
+        "purpose": "C/"
+      },
+      {
+        "op": "keep",
+        "record": {
+          "type": "",
+          "name": "",
+          "content": "\n",
+          "id": "W:"
+        },
+        "purpose": "R n%"
+      }
+    ],
+    "diagnostics": -2e-323,
+    "classification": {
+      "kind": "existing-provider",
+      "provider": null,
+      "currentMx": [],
+      "conflicts": [
+        {
+          "op": "create",
+          "record": {
+            "type": "U",
+            "name": "(-=",
+            "content": "wm4<"
+          },
+          "purpose": ""
+        },
+        {
+          "op": "create",
+          "record": {
+            "type": "",
+            "name": "%",
+            "content": "\udc00"
+          },
+          "purpose": "\" SY"
+        },
+        {
+          "op": "conflict",
+          "existing": {
+            "type": "",
+            "name": "\n",
+            "content": "<@q{"
+          },
+          "desired": {
+            "type": "J",
+            "name": "",
+            "content": "\ud800"
+          },
+          "purpose": "\udc00"
+        },
+        {
+          "op": "keep",
+          "record": {
+            "type": "😀",
+            "name": "",
+            "content": "\udc00"
+          },
+          "purpose": "\u0000"
+        }
+      ],
+      "requiresCutover": true
+    },
+    "source": "public-dns",
+    "cutoverPending": true,
+    "link": {
+      "installAccountId": " v",
+      "installZoneId": "",
+      "cutoverConfirmedAt": null,
+      "zoneAuthMethod": "",
+      "writeMode": "\udc00",
+      "restorePending": {
+        "capturedAt": -5.57300067552916e185,
+        "mx": [],
+        "spf": [
+          {
+            "type": "",
+            "name": "LXBd",
+            "content": "\ud800"
+          }
+        ],
+        "dkim": [],
+        "dmarc": [
+          {
+            "type": "Oud\"",
+            "name": "\udc00",
+            "content": "\n",
+            "priority": 2.5e-323
+          },
+          {
+            "type": "😀",
+            "name": "-1",
+            "content": "\u0000"
+          },
+          {
+            "type": "\n",
+            "name": "xJ]X",
+            "content": "#)<e",
+            "priority": 8e-323
+          },
+          {
+            "type": "_",
+            "name": "😀",
+            "content": "\udc00"
+          }
+        ],
+        "routing": {
+          "enabled": true,
+          "catchAll": null,
+          "rules": [
+            {
+              "enabled": true,
+              "name": "S)e<",
+              "matchers": [
+                {
+                  "type": ""
+                },
+                {
+                  "type": "\t",
+                  "value": "d&m]"
+                },
+                {
+                  "type": "\t",
+                  "field": "Q9a6"
+                },
+                {
+                  "type": ""
+                }
+              ],
+              "actions": []
+            },
+            {
+              "enabled": false,
+              "matchers": [
+                {
+                  "type": " "
+                },
+                {
+                  "type": "fS",
+                  "field": "",
+                  "value": ""
+                },
+                {
+                  "type": "v#=",
+                  "field": "0"
+                },
+                {
+                  "type": "\udc00"
+                }
+              ],
+              "actions": [
+                {
+                  "type": ""
+                },
+                {
+                  "type": ""
+                },
+                {
+                  "type": "",
+                  "value": ["\u0000", ":", "\udc00", "0"]
+                },
+                {
+                  "type": "\t"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "inboundProbe": null,
+      "hasSnapshot": false
+    }
+  }
+]

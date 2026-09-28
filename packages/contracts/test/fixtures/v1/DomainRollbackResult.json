@@ -1,0 +1,211 @@
+[
+  {
+    "domain": {
+      "id": "",
+      "org_id": "0",
+      "name": "",
+      "state": "dns-configured",
+      "verification_token": "-1",
+      "plus_addressing": -4.218489790761093e159,
+      "catch_all_mailbox_id": null
+    },
+    "restored": ["😀", "\udc00", "CXO"],
+    "manual": null
+  },
+  {
+    "domain": {
+      "id": "PpmU",
+      "org_id": "",
+      "name": "",
+      "state": "removed",
+      "verification_token": "\udc00",
+      "plus_addressing": -3e-323,
+      "catch_all_mailbox_id": ""
+    },
+    "restored": ["", "\u0000", "99F"],
+    "manual": {
+      "capturedAt": 1.8992690198001548e142,
+      "mx": [
+        {
+          "type": "\"n`f",
+          "name": "URb$",
+          "content": ",mHN",
+          "id": "\u0000"
+        },
+        {
+          "type": "",
+          "name": " ",
+          "content": "3M>~",
+          "priority": -1.7976931348623141e308
+        }
+      ],
+      "spf": [
+        {
+          "type": "'",
+          "name": "\udc00",
+          "content": "&30N"
+        },
+        {
+          "type": "U",
+          "name": "",
+          "content": " "
+        },
+        {
+          "type": "",
+          "name": "\udc00",
+          "content": "\n",
+          "id": " "
+        },
+        {
+          "type": "",
+          "name": "",
+          "content": "Eb"
+        }
+      ],
+      "dkim": [
+        {
+          "type": "",
+          "name": "|",
+          "content": "-1"
+        }
+      ],
+      "dmarc": [
+        {
+          "type": "",
+          "name": "y",
+          "content": ""
+        },
+        {
+          "type": "\u0000",
+          "name": "kWMR",
+          "content": "\u0000"
+        },
+        {
+          "type": "",
+          "name": "n`W",
+          "content": "0",
+          "priority": 4.774293672479625e-135
+        },
+        {
+          "type": "0",
+          "name": "\n",
+          "content": " ",
+          "priority": -2.2768668696573194e-276
+        }
+      ],
+      "routing": null
+    }
+  },
+  {
+    "domain": {
+      "id": "0",
+      "org_id": "S",
+      "name": "",
+      "state": "active",
+      "verification_token": "",
+      "plus_addressing": 8.942897639091844e-304,
+      "catch_all_mailbox_id": null
+    },
+    "restored": [],
+    "manual": {
+      "capturedAt": -1.7976931348623157e308,
+      "mx": [],
+      "spf": [],
+      "dkim": [],
+      "dmarc": [
+        {
+          "type": "",
+          "name": "\n",
+          "content": ""
+        },
+        {
+          "type": "\u0000",
+          "name": "FDW",
+          "content": " "
+        }
+      ],
+      "routing": {
+        "enabled": true,
+        "catchAll": {
+          "enabled": false,
+          "matchers": [
+            {
+              "type": "",
+              "field": ""
+            },
+            {
+              "type": "",
+              "field": "sl",
+              "value": "-1"
+            },
+            {
+              "type": ""
+            },
+            {
+              "type": "lX/:",
+              "field": "%do0"
+            }
+          ],
+          "actions": []
+        },
+        "rules": [
+          {
+            "enabled": true,
+            "matchers": [],
+            "actions": []
+          },
+          {
+            "enabled": true,
+            "matchers": [
+              {
+                "type": "",
+                "field": ""
+              },
+              {
+                "type": ""
+              },
+              {
+                "type": ""
+              },
+              {
+                "type": "\ud800"
+              }
+            ],
+            "actions": [
+              {
+                "type": ""
+              },
+              {
+                "type": "ilR"
+              },
+              {
+                "type": "\t",
+                "value": ["?ZQg", "\u0000", "", "0"]
+              },
+              {
+                "type": "F3)U",
+                "value": []
+              }
+            ]
+          },
+          {
+            "enabled": false,
+            "matchers": [],
+            "actions": [
+              {
+                "type": "\udc00",
+                "value": ["kC"]
+              },
+              {
+                "type": "\n"
+              },
+              {
+                "type": "\ud800"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+]

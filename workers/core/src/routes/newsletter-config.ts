@@ -3,52 +3,52 @@
 // operator with a recent step-up may perform: once, or again to repair a stored configuration that
 // can no longer be used. A usable configuration is never replaced here. The API key is write-only.
 import { Authorization, requireOperatorAccess, requireStepUp } from "@bye/application";
-import { ApiError, NewsletterConfigRequest } from "@bye/contracts";
+import { ApiError } from "@bye/contracts";
 import { Effect, Match } from "effect";
-import type { CoreEnv } from "../env.ts";
-import { route, type Route } from "../http.ts";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { Invocation } from "../http.ts";
+import { publicly } from "../httpapi.ts";
 import { configureNewsletterProvider, newsletterConfigView } from "../newsletter-config.ts";
-import { authed, authedBody, requireUser } from "./common.ts";
+import { CoreApi } from "../spec/index.ts";
+import { requireUser } from "./common.ts";
 
-export const newsletterConfigRoutes: ReadonlyArray<Route<CoreEnv>> = [
-  route(
-    "GET",
-    "/v1/newsletter/config",
-    authed(({ env }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireUser("read");
-        const isOperator = (yield* Authorization).isOperator(principal.userId);
+export const NewsletterConfigHandlers = HttpApiBuilder.group(
+  CoreApi,
+  "newsletterConfig",
+  (handlers) =>
+    handlers
+      .handle("status", () =>
+        Effect.gen(function* () {
+          const { env } = yield* Invocation;
+          const principal = yield* requireUser("read");
+          const isOperator = (yield* Authorization).isOperator(principal.userId);
 
-        return yield* Effect.promise(() => newsletterConfigView(env, isOperator));
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/newsletter/config",
-    authedBody(NewsletterConfigRequest, ({ env, body }) =>
-      Effect.gen(function* () {
-        const operator = yield* requireOperatorAccess();
-        yield* requireStepUp("admin");
+          return yield* Effect.promise(() => newsletterConfigView(env, isOperator));
+        }).pipe(publicly),
+      )
+      .handle("configure", ({ payload }) =>
+        Effect.gen(function* () {
+          const { env } = yield* Invocation;
+          const operator = yield* requireOperatorAccess();
+          yield* requireStepUp("admin");
 
-        const result = yield* Effect.promise(() =>
-          configureNewsletterProvider(env, {
-            provider: body.provider,
-            apiKey: body.apiKey.trim(),
-            actorId: operator.userId,
-          }),
-        );
+          const result = yield* Effect.promise(() =>
+            configureNewsletterProvider(env, {
+              provider: payload.provider,
+              apiKey: payload.apiKey.trim(),
+              actorId: operator.userId,
+            }),
+          );
 
-        return yield* Match.value(result).pipe(
-          Match.tagsExhaustive({
-            Rejected: (rejected) =>
-              new ApiError({ code: rejected.code, message: rejected.message }),
-            NeedsAttention: (attention) =>
-              new ApiError({ code: "unavailable", message: attention.message }),
-            Ready: () => Effect.promise(() => newsletterConfigView(env, true)),
-          }),
-        );
-      }),
-    ),
-  ),
-];
+          return yield* Match.value(result).pipe(
+            Match.tagsExhaustive({
+              Rejected: (rejected) =>
+                new ApiError({ code: rejected.code, message: rejected.message }),
+              NeedsAttention: (attention) =>
+                new ApiError({ code: "unavailable", message: attention.message }),
+              Ready: () => Effect.promise(() => newsletterConfigView(env, true)),
+            }),
+          );
+        }).pipe(publicly),
+      ),
+);

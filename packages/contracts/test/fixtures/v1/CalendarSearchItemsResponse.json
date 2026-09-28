@@ -1,0 +1,56 @@
+[
+  {
+    "items": [
+      {
+        "docId": "\u0000",
+        "kind": "journal",
+        "ref": "6",
+        "snippet": " "
+      },
+      {
+        "docId": "-1",
+        "kind": "task",
+        "ref": "-1",
+        "snippet": "v("
+      },
+      {
+        "docId": "\n",
+        "kind": "habit",
+        "ref": "rF,8",
+        "snippet": "\t"
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "docId": "\n",
+        "kind": "event",
+        "ref": "\t",
+        "snippet": "\udc00"
+      },
+      {
+        "docId": "",
+        "kind": "event",
+        "ref": "😀",
+        "snippet": "9JjR"
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "docId": "",
+        "kind": "journal",
+        "ref": "0",
+        "snippet": "\n"
+      },
+      {
+        "docId": "\ud800",
+        "kind": "journal",
+        "ref": " ",
+        "snippet": ";X*v"
+      }
+    ]
+  }
+]

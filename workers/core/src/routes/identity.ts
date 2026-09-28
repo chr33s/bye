@@ -1,23 +1,18 @@
-// Identity, credential and security-settings routes (A03, X02).
+// Identity, credential and security-settings routes (A03, X02). All are conventional JSON
+// endpoints (../spec/identity.ts); none remain native routes.
 import { Effect, type Types } from "effect";
 import { issueApiToken, NotFound, Principal, requireStepUp } from "@bye/application";
 import { AuthService, CommerceService, SupportService } from "@bye/platform-cloudflare";
-import type { CoreEnv } from "../env.ts";
-import { route, type Route } from "../http.ts";
-import {
-  AddPasskeyRequest,
-  CreateApiTokenRequest,
-  SupportGrantRequest,
-  TotpCodeRequest,
-} from "@bye/contracts";
-import { authed, authedBody, closeLiveSockets, ctl, requireUser } from "./common.ts";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { Invocation } from "../http.ts";
+import { publicly } from "../httpapi.ts";
+import { CoreApi } from "../spec/index.ts";
+import { closeLiveSockets, ctl, requireUser } from "./common.ts";
 
-export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
-  // ---- identity ----
-  route(
-    "GET",
-    "/v1/me",
-    authed(() =>
+export const IdentityHandlers = HttpApiBuilder.group(CoreApi, "identity", (handlers) =>
+  handlers
+    // ---- identity ----
+    .handle("me", () =>
       Effect.gen(function* () {
         const p = yield* Principal;
 
@@ -29,209 +24,145 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
           calendarIds: p.calendarIds,
           organizationIds: p.organizationIds,
         };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/tokens",
-    authedBody(
-      CreateApiTokenRequest,
-      ({ body }) => {
-        const input: Types.Mutable<Parameters<typeof issueApiToken>[0]> = {
-          kind: body.kind ?? "agent",
-          label: body.label,
-        };
+      }).pipe(publicly),
+    )
+    .handle("createToken", ({ payload }) => {
+      const input: Types.Mutable<Parameters<typeof issueApiToken>[0]> = {
+        kind: payload.kind ?? "agent",
+        label: payload.label,
+      };
 
-        if (body.scopes) input.scopes = body.scopes;
+      if (payload.scopes) input.scopes = payload.scopes;
 
-        if (body.expiresAt !== undefined) input.expiresAt = body.expiresAt;
+      if (payload.expiresAt !== undefined) input.expiresAt = payload.expiresAt;
 
-        return issueApiToken(input);
-      },
-      { status: 201 },
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/tokens",
-    authed(() =>
+      return issueApiToken(input).pipe(publicly);
+    })
+    .handle("listTokens", () =>
       Effect.gen(function* () {
         const p = yield* requireUser();
         const auth = yield* AuthService;
 
         return { items: yield* auth.listApiTokens(p.userId) };
-      }),
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/tokens/:id",
-    authed(({ env, params }) =>
+      }).pipe(publicly),
+    )
+    .handle("revokeToken", ({ params }) =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
         const p = yield* requireUser();
         const auth = yield* AuthService;
 
-        if (!(yield* auth.revokeApiToken(p.userId, params.id!)))
+        if (!(yield* auth.revokeApiToken(p.userId, params.id)))
           return yield* new NotFound({ resource: "token" });
-        yield* Effect.promise(() => closeLiveSockets(env, p.userId, params.id!));
+        yield* Effect.promise(() => closeLiveSockets(env, p.userId, params.id));
 
         return { revoked: true };
-      }),
-    ),
-  ),
+      }).pipe(publicly),
+    )
 
-  // ---- security settings (A03) ----
-  route(
-    "GET",
-    "/v1/security",
-    authed(() =>
+    // ---- security settings (A03) ----
+    .handle("securityStatus", () =>
       Effect.gen(function* () {
         const p = yield* requireUser();
         const auth = yield* AuthService;
 
         return yield* auth.securityStatus(p.userId);
-      }),
-    ),
-  ),
-  // Recovery codes are shown exactly once; generating a new set invalidates the old set.
-  route(
-    "POST",
-    "/v1/security/recovery-codes",
-    authed(
-      () =>
-        Effect.gen(function* () {
-          const p = yield* requireUser();
-          yield* requireStepUp("recovery");
-          const auth = yield* AuthService;
+      }).pipe(publicly),
+    )
+    .handle("generateRecoveryCodes", () =>
+      Effect.gen(function* () {
+        const p = yield* requireUser();
+        yield* requireStepUp("recovery");
+        const auth = yield* AuthService;
 
-          return { codes: yield* auth.generateRecoveryCodes(p.userId) };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/security/totp",
-    authed(
-      ({ env }) =>
-        Effect.gen(function* () {
-          const p = yield* requireUser();
-          yield* requireStepUp("credentials");
-          const auth = yield* AuthService;
-          const { secret } = yield* auth.enrollTotp(p.userId);
+        return { codes: yield* auth.generateRecoveryCodes(p.userId) };
+      }).pipe(publicly),
+    )
+    .handle("enrollTotp", () =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const p = yield* requireUser();
+        yield* requireStepUp("credentials");
+        const auth = yield* AuthService;
+        const { secret } = yield* auth.enrollTotp(p.userId);
 
-          const { address } = yield* ctl(() =>
-            env.DIRECTORY.prepare("SELECT primary_address AS address FROM users WHERE id = ?")
-              .bind(p.userId)
-              .first<{ address: string }>()
-              .then((r) => r ?? { address: p.userId }),
-          );
+        const { address } = yield* ctl(() =>
+          env.DIRECTORY.prepare("SELECT primary_address AS address FROM users WHERE id = ?")
+            .bind(p.userId)
+            .first<{ address: string }>()
+            .then((r) => r ?? { address: p.userId }),
+        );
 
-          const issuer = new URL(env.APP_ORIGIN).hostname;
+        const issuer = new URL(env.APP_ORIGIN).hostname;
 
-          return {
-            secret,
-            otpauthUri: `otpauth://totp/${encodeURIComponent(`${issuer}:${address}`)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`,
-          };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/security/totp/confirm",
-    authedBody(TotpCodeRequest, ({ body }) =>
+        return {
+          secret,
+          otpauthUri: `otpauth://totp/${encodeURIComponent(`${issuer}:${address}`)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`,
+        };
+      }).pipe(publicly),
+    )
+    .handle("confirmTotp", ({ payload }) =>
       Effect.gen(function* () {
         const p = yield* requireUser();
         const auth = yield* AuthService;
-        yield* auth.confirmTotp(p.userId, body.code);
+        yield* auth.confirmTotp(p.userId, payload.code);
 
         return { enabled: true };
-      }),
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/security/totp",
-    authed(() =>
+      }).pipe(publicly),
+    )
+    .handle("disableTotp", () =>
       Effect.gen(function* () {
         const p = yield* requireUser();
         yield* requireStepUp("credentials");
         const auth = yield* AuthService;
 
         return { disabled: yield* auth.disableTotp(p.userId) };
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/security/passkeys",
-    authed(() =>
+      }).pipe(publicly),
+    )
+    .handle("listPasskeys", () =>
       Effect.gen(function* () {
         const p = yield* requireUser();
         const auth = yield* AuthService;
 
         return { items: yield* auth.listPasskeys(p.userId) };
-      }),
-    ),
-  ),
-  // Adding a passkey: step-up, then a registration ceremony bound to this user.
-  route(
-    "POST",
-    "/v1/security/passkeys/challenge",
-    authed(() =>
+      }).pipe(publicly),
+    )
+    .handle("passkeyChallenge", () =>
       Effect.gen(function* () {
         const p = yield* requireUser();
         yield* requireStepUp("credentials");
         const auth = yield* AuthService;
 
         return yield* auth.beginChallenge("register", p.userId);
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/security/passkeys",
-    authedBody(
-      AddPasskeyRequest,
-      ({ body }) =>
-        Effect.gen(function* () {
-          const p = yield* requireUser();
-          yield* requireStepUp("credentials");
-          const auth = yield* AuthService;
-
-          const id = yield* auth.registerPasskey(
-            p.userId,
-            body.challengeId,
-            body.response,
-            body.label ?? "",
-          );
-
-          return { id };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/security/passkeys/:id",
-    authed(({ params }) =>
+      }).pipe(publicly),
+    )
+    .handle("addPasskey", ({ payload }) =>
       Effect.gen(function* () {
         const p = yield* requireUser();
         yield* requireStepUp("credentials");
         const auth = yield* AuthService;
-        yield* auth.removePasskey(p.userId, params.id!);
+
+        const id = yield* auth.registerPasskey(
+          p.userId,
+          payload.challengeId,
+          payload.response,
+          payload.label ?? "",
+        );
+
+        return { id };
+      }).pipe(publicly),
+    )
+    .handle("removePasskey", ({ params }) =>
+      Effect.gen(function* () {
+        const p = yield* requireUser();
+        yield* requireStepUp("credentials");
+        const auth = yield* AuthService;
+        yield* auth.removePasskey(p.userId, params.id);
 
         return { removed: true };
-      }),
-    ),
-  ),
-  // Browser sessions (desktop/mobile OAuth devices are under /v1/devices).
-  route(
-    "GET",
-    "/v1/security/sessions",
-    authed(() =>
+      }).pipe(publicly),
+    )
+    .handle("listSessions", () =>
       Effect.gen(function* () {
         const p = yield* requireUser();
         const auth = yield* AuthService;
@@ -247,83 +178,61 @@ export const identityRoutes: ReadonlyArray<Route<CoreEnv>> = [
             current: s.id === p.sessionId,
           })),
         };
-      }),
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/security/sessions/:id",
-    authed(({ env, params }) =>
+      }).pipe(publicly),
+    )
+    .handle("revokeSession", ({ params }) =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
         const p = yield* requireUser();
         const auth = yield* AuthService;
 
-        if (!(yield* auth.revokeSession(p.userId, params.id!)))
+        if (!(yield* auth.revokeSession(p.userId, params.id)))
           return yield* new NotFound({ resource: "session" });
-        yield* Effect.promise(() => closeLiveSockets(env, p.userId, params.id!));
+        yield* Effect.promise(() => closeLiveSockets(env, p.userId, params.id));
 
         return { revoked: true };
-      }),
-    ),
-  ),
+      }).pipe(publicly),
+    )
 
-  // ---- support access: time-limited user consent, audited (§10) ----
-  route(
-    "GET",
-    "/v1/support-access",
-    authed(() =>
+    // ---- support access: time-limited user consent, audited (§10) ----
+    .handle("listSupportGrants", () =>
       Effect.gen(function* () {
         const p = yield* requireUser();
         const support = yield* SupportService;
 
         return { items: yield* support.list(p.userId) };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/support-access",
-    authedBody(
-      SupportGrantRequest,
-      ({ body }) =>
-        Effect.gen(function* () {
-          const p = yield* requireUser();
-          yield* requireStepUp("sharing");
-          const support = yield* SupportService;
+      }).pipe(publicly),
+    )
+    .handle("grantSupportAccess", ({ payload }) =>
+      Effect.gen(function* () {
+        const p = yield* requireUser();
+        yield* requireStepUp("sharing");
+        const support = yield* SupportService;
 
-          return yield* support.grant(p.userId, body.reason, body.hours ?? 24);
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/support-access/:id",
-    authed(({ params }) =>
+        return yield* support.grant(p.userId, payload.reason, payload.hours ?? 24);
+      }).pipe(publicly),
+    )
+    .handle("revokeSupportGrant", ({ params }) =>
       Effect.gen(function* () {
         const p = yield* requireUser();
         const support = yield* SupportService;
 
-        if (!(yield* support.revoke(p.userId, params.id!)))
+        if (!(yield* support.revoke(p.userId, params.id)))
           return yield* new NotFound({ resource: "support grant" });
 
         return { revoked: true };
-      }),
-    ),
-  ),
+      }).pipe(publicly),
+    )
 
-  // ---- referrals (A02) ----
-  route(
-    "GET",
-    "/v1/referral",
-    authed(({ env }) =>
+    // ---- referrals (A02) ----
+    .handle("referral", () =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
         const p = yield* requireUser();
         const commerce = yield* CommerceService;
         const code = yield* commerce.referralCode(p.userId);
 
         return { code, url: `${env.APP_ORIGIN}/signup?ref=${code}` };
-      }),
+      }).pipe(publicly),
     ),
-  ),
-];
+);

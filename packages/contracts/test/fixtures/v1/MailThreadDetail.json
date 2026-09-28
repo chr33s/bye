@@ -1,0 +1,45 @@
+[
+  {
+    "thread": -2.389235408750574e83,
+    "deliveries": [],
+    "mergeHistory": null
+  },
+  {
+    "thread": false,
+    "deliveries": [],
+    "mergeHistory": {
+      "D": false,
+      "-8W[": {},
+      "-1": {},
+      "Y": -1.7976931348623153e308
+    }
+  },
+  {
+    "thread": {},
+    "deliveries": [
+      {
+        "6": [],
+        "deliveryId": "-1",
+        "renderToken": "",
+        "renderUrl": "\ud800"
+      },
+      {
+        "0": [true],
+        "deliveryId": "0",
+        "renderToken": "\\Cv",
+        "renderUrl": "😀"
+      },
+      {
+        "deliveryId": "0",
+        "renderToken": "\n",
+        "renderUrl": "l/_-",
+        "": {
+          " ": null,
+          "\ud800": "",
+          "SqY:": false
+        }
+      }
+    ],
+    "mergeHistory": []
+  }
+]

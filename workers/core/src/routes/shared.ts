@@ -11,23 +11,11 @@ import {
   requireStepUp,
   shareThread,
 } from "@bye/application";
-import {
-  ApiError,
-  CommentRequest,
-  CollectionItemRequest,
-  CreateCollectionRequest,
-  CreateSpaceRequest,
-  GrantRequest,
-  NewsletterResolveRequest,
-  PublicLinkRequest,
-  ShareThreadRequest,
-  SpaceMemberRequest,
-  WorldDraftRequest,
-  WorldPostRequest,
-} from "@bye/contracts";
+import { ApiError, type WorldDraftRequest } from "@bye/contracts";
 import { call, space, world } from "../authorities.ts";
 import type { CoreEnv } from "../env.ts";
-import { PayloadTooLargeError, readBodyCapped, route, type Route } from "../http.ts";
+import { Invocation, PayloadTooLargeError, readBodyCapped, route, type Route } from "../http.ts";
+import { publicly } from "../httpapi.ts";
 import { sniffRaster } from "../images.ts";
 import { ledgerOf, runNewsletter } from "../newsletter.ts";
 import { publicOrigin, serviceDomain } from "../origins.ts";
@@ -39,8 +27,15 @@ import {
   worldPublishingLayer,
 } from "../publishing.ts";
 import { pendingPropagation } from "../topics/shared.ts";
-import { authed, authedBody, readTextCapped } from "./common.ts";
-import { OrgsService, RegistryService } from "@bye/platform-cloudflare";
+import { authed, readTextCapped } from "./common.ts";
+import {
+  type ChangeFeed,
+  OrgsService,
+  RegistryService,
+  type RpcResult,
+} from "@bye/platform-cloudflare";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { CoreApi } from "../spec/index.ts";
 
 const MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 
@@ -156,590 +151,8 @@ const sharingSpace = (env: CoreEnv, spaceId: string) =>
     ),
   );
 
-export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
-  // ---- shared spaces (O03/O04) ----
-  route(
-    "POST",
-    "/v1/spaces",
-    authedBody(
-      CreateSpaceRequest,
-      ({ body, env }) =>
-        Effect.gen(function* () {
-          const principal = yield* requireScope("admin");
-
-          if (!principal.organizationIds.includes(body.organizationId))
-            return yield* new Forbidden({ reason: "not a member of organization" });
-          const spaceId = `spc_${crypto.randomUUID().replace(/-/g, "")}`;
-          // Extension spaces are created with their mailbox (POST /v1/orgs/:orgId/extensions).
-          yield* call(() =>
-            space(env, spaceId).initSpace({
-              spaceId,
-              kind: "team",
-              organizationId: body.organizationId,
-              ownerId: principal.userId,
-            }),
-          );
-          yield* (yield* RegistryService).registerSpace(
-            spaceId,
-            body.organizationId,
-            "team",
-            principal.userId,
-          );
-
-          return { spaceId };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/spaces",
-    authed(({ env }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireScope("read");
-        const all = yield* (yield* RegistryService).spacesForOrgs(principal.organizationIds);
-
-        const member = yield* Effect.forEach(
-          all,
-          (s) => call(() => space(env, s.id).isMember(principal.userId)),
-          { concurrency: 4 },
-        );
-
-        return { items: all.filter((_, i) => member[i] === true) };
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/spaces/:id/members",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!);
-
-        return { items: yield* call(() => stub.listMembers(principal.userId)) };
-      }),
-    ),
-  ),
-  route(
-    "PUT",
-    "/v1/spaces/:id/members/:userId",
-    authedBody(SpaceMemberRequest, ({ env, params, body }) =>
-      Effect.gen(function* () {
-        const { principal, orgId, stub } = yield* orgSpace(env, params.id!, "admin");
-        // Only active organization members can join the organization's spaces.
-        const m = yield* (yield* OrgsService).membership(orgId, params.userId!);
-
-        if (!m || m.status !== "active")
-          return yield* badRequest("user is not an active organization member");
-        yield* call(() => stub.setMember(principal.userId, params.userId!, body.role));
-
-        return { userId: params.userId, role: body.role };
-      }),
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/spaces/:id/members/:userId",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!, "admin");
-        yield* call(() => stub.setMember(principal.userId, params.userId!, null));
-
-        return { removed: true };
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/spaces/:id/threads",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!);
-        const items = yield* call(() => stub.listThreads(principal.userId));
-
-        // Deliveries still propagating into this space (§6 row 6): clients show "syncing".
-        return {
-          items,
-          pendingPropagation: yield* Effect.promise(() => pendingPropagation(env, params.id!)),
-        };
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/spaces/:id/threads/:threadId",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!);
-        const thread = yield* call(() => stub.readThread(principal.userId, params.threadId!));
-
-        return {
-          ...thread,
-          pendingPropagation: yield* Effect.promise(() =>
-            pendingPropagation(env, params.id!, params.threadId!),
-          ),
-        };
-      }),
-    ),
-  ),
-  // Member-only change feed (§8); pair with `/v1/live?space=<id>` for change hints.
-  route(
-    "GET",
-    "/v1/spaces/:id/changes",
-    authed(({ env, params, url }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!);
-        const cursor = Number(url.searchParams.get("cursor") ?? "0");
-
-        if (!Number.isInteger(cursor) || cursor < 0) return yield* badRequest("invalid cursor");
-
-        return yield* call(() => stub.changes(principal.userId, cursor));
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/spaces/:id/threads/:threadId/comments",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!);
-
-        return { items: yield* call(() => stub.comments(principal.userId, params.threadId!)) };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/spaces/:id/threads/:threadId/comments",
-    authedBody(
-      CommentRequest,
-      ({ env, params, body }) =>
-        Effect.gen(function* () {
-          const { principal, stub } = yield* orgSpace(env, params.id!, "draft");
-          const text = body.body.trim();
-
-          if (!text) return yield* badRequest("comment body required");
-
-          return {
-            commentId: yield* call(() => stub.addComment(principal.userId, params.threadId!, text)),
-          };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/spaces/:id/collections",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!);
-
-        return { items: yield* call(() => stub.listCollections(principal.userId)) };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/spaces/:id/collections",
-    authedBody(
-      CreateCollectionRequest,
-      ({ env, params, body }) =>
-        Effect.gen(function* () {
-          const { principal, stub } = yield* orgSpace(env, params.id!, "draft");
-          const name = body.name.trim();
-
-          if (!name) return yield* badRequest("name required");
-
-          return {
-            collectionId: yield* call(() =>
-              stub.createCollection(principal.userId, name, body.shareWithMembers ?? false),
-            ),
-          };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/spaces/:id/collections/:collectionId",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!);
-
-        return {
-          items: yield* call(() => stub.collectionTimeline(principal.userId, params.collectionId!)),
-        };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/spaces/:id/collections/:collectionId/threads",
-    authedBody(
-      CollectionItemRequest,
-      ({ env, params, body }) =>
-        Effect.gen(function* () {
-          const { principal, stub } = yield* orgSpace(env, params.id!, "draft");
-          yield* call(() =>
-            stub.addToCollection(principal.userId, params.collectionId!, body.threadId),
-          );
-
-          return { added: true };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/spaces/:id/grants",
-    authed(({ env, params, url }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!);
-        const kind = url.searchParams.get("kind") === "collection" ? "collection" : "thread";
-
-        return {
-          items: yield* call(() =>
-            stub.grantsFor(principal.userId, kind, url.searchParams.get("resourceId") ?? ""),
-          ),
-        };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/spaces/:id/grants",
-    authedBody(
-      GrantRequest,
-      ({ env, params, body }) =>
-        Effect.gen(function* () {
-          const { principal, stub } = yield* orgSpace(env, params.id!, "draft");
-          yield* requireStepUp("sharing");
-          const kind = body.resourceKind ?? body.kind ?? "thread";
-
-          return {
-            grantId: yield* call(() =>
-              stub.grant(principal.userId, kind, body.resourceId, body.grantee),
-            ),
-          };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/spaces/:id/grants/:grantId",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!, "admin");
-        yield* call(() => stub.revoke(principal.userId, params.grantId!));
-
-        return { revoked: true };
-      }),
-    ),
-  ),
-  // Sharing a thread registers it so future replies can be appended (O04, "shared.delivery" topic).
-  route(
-    "POST",
-    "/v1/shared-threads",
-    authedBody(
-      ShareThreadRequest,
-      ({ body, env }) =>
-        Effect.gen(function* () {
-          // The same organization binding as every /v1/spaces/:id route: a member removed from or
-          // suspended in the space's organization can no longer share into it.
-          yield* sharingSpace(env, body.spaceId);
-
-          const input = {
-            spaceId: body.spaceId,
-            sourceMailboxId: body.mailboxId,
-            sourceThreadId: body.threadId,
-            messageRefs: body.messageRefs,
-            grantees: body.grantees ?? [],
-            includeFuture: body.includeFuture ?? false,
-          };
-
-          const sharedThreadId = yield* shareThread(input);
-          yield* (yield* RegistryService).registerSharedThread({
-            mailboxId: input.sourceMailboxId,
-            threadId: input.sourceThreadId,
-            spaceId: input.spaceId,
-            sharedThreadId,
-            includeFuture: input.includeFuture,
-          });
-
-          return sharedThreadId;
-        }),
-      { status: 201 },
-    ),
-  ),
-
-  // ---- public links (O05) ----
-  route(
-    "POST",
-    "/v1/public-links",
-    authedBody(
-      PublicLinkRequest,
-      ({ body, env }) =>
-        Effect.gen(function* () {
-          // Organization binding first (as `orgSpace` routes): the space authority only knows
-          // space membership, which org removal/suspension does not update.
-          yield* sharingSpace(env, body.spaceId);
-
-          const link = {
-            spaceId: body.spaceId,
-            threadId: body.threadId,
-            includeFuture: body.includeFuture ?? false,
-          };
-
-          return yield* createPublicThreadLink(
-            body.expiresAt !== undefined ? { ...link, expiresAt: body.expiresAt } : link,
-            publicOrigin(env),
-          );
-        }),
-      { status: 201 },
-    ),
-  ),
-  // Exactly what an anonymous viewer would see, before a link is created.
-  route(
-    "GET",
-    "/v1/spaces/:id/threads/:threadId/public-preview",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!);
-
-        return yield* call(() => stub.previewPublicLink(principal.userId, params.threadId!));
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/spaces/:id/threads/:threadId/public-links",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!);
-
-        return {
-          items: yield* call(() => stub.listPublicLinks(principal.userId, params.threadId!)),
-        };
-      }),
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/spaces/:id/public-links/:linkId",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const { principal, stub } = yield* orgSpace(env, params.id!, "admin");
-        yield* call(() => stub.revokePublicLink(principal.userId, params.linkId!));
-
-        return { revoked: true };
-      }),
-    ),
-  ),
-
-  // ---- World publishing (P01) and subscriptions (P02): one publish pipeline (publishing.ts) ----
-  route(
-    "POST",
-    "/v1/world/posts",
-    authedBody(
-      WorldPostRequest,
-      ({ body, env }) =>
-        publishWorldPost({
-          fromAddress: body.from,
-          title: body.title,
-          html: body.html,
-          text: body.text,
-          media: [],
-          publish: body.publish ?? true,
-        }).pipe(Effect.provide(worldPublishingLayer(env))),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/world",
-    authed(({ env }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireScope("read");
-        const { author } = yield* myWorld(env, principal.userId);
-
-        return {
-          handle: author.handle,
-          url: `${publicOrigin(env)}/@${author.handle}/`,
-          publishAddress: `world@${serviceDomain(env)}`,
-        };
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/world/posts",
-    authed(({ env }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireScope("read");
-        const { stub } = yield* myWorld(env, principal.userId);
-
-        return { items: yield* call(() => stub.listPosts(principal.userId)) };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/world/drafts",
-    authedBody(
-      WorldDraftRequest,
-      ({ env, body }) =>
-        Effect.gen(function* () {
-          const principal = yield* requireScope("publish");
-          const input = yield* postInput(principal.userId, body);
-          const { stub } = yield* myWorld(env, principal.userId);
-
-          return yield* call(() => stub.createDraft(principal.userId, input));
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "PUT",
-    "/v1/world/posts/:id",
-    authedBody(WorldDraftRequest, ({ env, params, body }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireScope("publish");
-        const input = yield* postInput(principal.userId, body);
-        const { stub } = yield* myWorld(env, principal.userId);
-
-        return { revision: yield* call(() => stub.editPost(principal.userId, params.id!, input)) };
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/world/posts/:id/preview",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireScope("read");
-        const { stub } = yield* myWorld(env, principal.userId);
-
-        return yield* call(() => stub.previewPost(principal.userId, params.id!));
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/world/posts/:id/publish",
-    authed(({ env, params }) =>
-      publishExistingPost(params.id!).pipe(Effect.provide(worldPublishingLayer(env))),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/world/posts/:id/unpublish",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireScope("publish");
-        const { author, stub } = yield* myWorld(env, principal.userId);
-        const post = yield* call(() => stub.previewPost(principal.userId, params.id!));
-        yield* call(() => stub.unpublish(principal.userId, params.id!));
-
-        const { purged } = yield* Effect.promise(() =>
-          refreshSite(env, author.handle, [post.slug]),
-        );
-
-        return { unpublished: true, purged };
-      }),
-    ),
-  ),
-  // Newsletter publication status: intent, provider-observed state, recipient outcomes (spec.md §5.5).
-  route(
-    "GET",
-    "/v1/world/posts/:id/newsletter",
-    authed(({ env, params, url }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireScope("read");
-        const { stub } = yield* myWorld(env, principal.userId);
-
-        return yield* call(() =>
-          stub.newsletterStatus(
-            principal.userId,
-            params.id!,
-            Number(url.searchParams.get("revision") ?? "1"),
-          ),
-        );
-      }),
-    ),
-  ),
-  // Cancel a publication. Reported as requested/confirmed/unsupported/uncertain; never a recall.
-  route(
-    "POST",
-    "/v1/world/posts/:id/newsletter/cancel",
-    authed(({ env, params, url }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireScope("publish");
-        const { author, stub } = yield* myWorld(env, principal.userId);
-
-        const publication = yield* call(() =>
-          stub.cancelNewsletter(
-            principal.userId,
-            params.id!,
-            Number(url.searchParams.get("revision") ?? "1"),
-          ),
-        );
-
-        // Try the provider step now; the cron reconciler finishes it otherwise.
-        yield* Effect.promise(() => runNewsletter(env, author.handle).catch(() => undefined));
-
-        return publication;
-      }),
-    ),
-  ),
-  // Operator review of newsletter work that is held or unknown (never auto-resolved or failed over).
-  route(
-    "GET",
-    "/v1/operator/newsletters/:handle",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        yield* requireOperatorAccess();
-        const L = ledgerOf(env, params.handle!);
-
-        const [health, held, publications] = yield* Effect.promise(() =>
-          Promise.all([L("health"), L("heldOps"), L("publications")]),
-        );
-
-        return { health, held, publications };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/operator/newsletters/:handle/resolve",
-    authedBody(NewsletterResolveRequest, ({ env, params, body }) =>
-      Effect.gen(function* () {
-        const operator = yield* requireOperatorAccess();
-        const L = ledgerOf(env, params.handle!);
-
-        const op = yield* Effect.tryPromise({
-          try: () =>
-            L(
-              "resolveHeldOp",
-              body.opId,
-              body.resolution,
-              `${operator.userId}: ${body.note}`,
-              body.providerRef,
-            ),
-          catch: () => new ApiError({ code: "conflict", message: "operation cannot be resolved" }),
-        });
-
-        const publication = op.publicationId
-          ? yield* Effect.tryPromise({
-              try: () => L("resumeHeld", op.publicationId!),
-              catch: () => new ApiError({ code: "conflict", message: "publication not resumable" }),
-            }).pipe(Effect.orElseSucceed(() => null))
-          : null;
-
-        return { op, publication };
-      }),
-    ),
-  ),
+// Raw bodies and a CSV download stay native routes; everything else is in `SharedHandlers`.
+export const sharedRoutes: ReadonlyArray<Route> = [
   // Raw image upload for drafts; stored privately and copied to the public bucket only on publish.
   route(
     "PUT",
@@ -867,3 +280,461 @@ export const sharedRoutes: ReadonlyArray<Route<CoreEnv>> = [
     ),
   ),
 ];
+
+export const SharedHandlers = HttpApiBuilder.group(CoreApi, "shared", (handlers) =>
+  handlers
+    // ---- shared spaces (O03/O04) ----
+    .handle("createSpace", ({ payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireScope("admin");
+
+        if (!principal.organizationIds.includes(payload.organizationId))
+          return yield* new Forbidden({ reason: "not a member of organization" });
+        const spaceId = `spc_${crypto.randomUUID().replace(/-/g, "")}`;
+        // Extension spaces are created with their mailbox (POST /v1/orgs/:orgId/extensions).
+        yield* call(() =>
+          space(env, spaceId).initSpace({
+            spaceId,
+            kind: "team",
+            organizationId: payload.organizationId,
+            ownerId: principal.userId,
+          }),
+        );
+        yield* (yield* RegistryService).registerSpace(
+          spaceId,
+          payload.organizationId,
+          "team",
+          principal.userId,
+        );
+
+        return { spaceId };
+      }).pipe(publicly),
+    )
+    .handle("listSpaces", () =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireScope("read");
+        const all = yield* (yield* RegistryService).spacesForOrgs(principal.organizationIds);
+
+        const member = yield* Effect.forEach(
+          all,
+          (s) => call(() => space(env, s.id).isMember(principal.userId)),
+          { concurrency: 4 },
+        );
+
+        return { items: all.filter((_, i) => member[i] === true) };
+      }).pipe(publicly),
+    )
+    .handle("listSpaceMembers", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id);
+
+        return { items: yield* call(() => stub.listMembers(principal.userId)) };
+      }).pipe(publicly),
+    )
+    .handle("setSpaceMember", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, orgId, stub } = yield* orgSpace(env, params.id, "admin");
+        // Only active organization members can join the organization's spaces.
+        const m = yield* (yield* OrgsService).membership(orgId, params.userId);
+
+        if (!m || m.status !== "active")
+          return yield* badRequest("user is not an active organization member");
+        yield* call(() => stub.setMember(principal.userId, params.userId, payload.role));
+
+        return { userId: params.userId, role: payload.role };
+      }).pipe(publicly),
+    )
+    .handle("removeSpaceMember", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id, "admin");
+        yield* call(() => stub.setMember(principal.userId, params.userId, null));
+
+        return { removed: true } as const;
+      }).pipe(publicly),
+    )
+    .handle("listSpaceThreads", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id);
+        const items = yield* call(() => stub.listThreads(principal.userId));
+
+        // Deliveries still propagating into this space (§6 row 6): clients show "syncing".
+        return {
+          items,
+          pendingPropagation: yield* Effect.promise(() => pendingPropagation(env, params.id)),
+        };
+      }).pipe(publicly),
+    )
+    .handle("getSpaceThread", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id);
+        const thread = yield* call(() => stub.readThread(principal.userId, params.threadId));
+
+        return {
+          ...thread,
+          pendingPropagation: yield* Effect.promise(() =>
+            pendingPropagation(env, params.id, params.threadId),
+          ),
+        };
+      }).pipe(publicly),
+    )
+    .handle("spaceChanges", ({ params, query }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id);
+        const cursor = Number(query.cursor ?? "0");
+
+        if (!Number.isInteger(cursor) || cursor < 0) return yield* badRequest("invalid cursor");
+
+        // The stub's RPC type erases the feed (its payloads are `unknown`); the store's type is it.
+        return yield* call((): Promise<RpcResult<ChangeFeed>> =>
+          stub.changes(principal.userId, cursor),
+        );
+      }).pipe(publicly),
+    )
+    .handle("listComments", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id);
+
+        return { items: yield* call(() => stub.comments(principal.userId, params.threadId)) };
+      }).pipe(publicly),
+    )
+    .handle("addComment", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id, "draft");
+        const text = payload.body.trim();
+
+        if (!text) return yield* badRequest("comment body required");
+
+        return {
+          commentId: yield* call(() => stub.addComment(principal.userId, params.threadId, text)),
+        };
+      }).pipe(publicly),
+    )
+    .handle("listCollections", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id);
+
+        return { items: yield* call(() => stub.listCollections(principal.userId)) };
+      }).pipe(publicly),
+    )
+    .handle("createCollection", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id, "draft");
+        const name = payload.name.trim();
+
+        if (!name) return yield* badRequest("name required");
+
+        return {
+          collectionId: yield* call(() =>
+            stub.createCollection(principal.userId, name, payload.shareWithMembers ?? false),
+          ),
+        };
+      }).pipe(publicly),
+    )
+    .handle("collectionTimeline", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id);
+
+        return {
+          items: yield* call(() => stub.collectionTimeline(principal.userId, params.collectionId)),
+        };
+      }).pipe(publicly),
+    )
+    .handle("addToCollection", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id, "draft");
+        yield* call(() =>
+          stub.addToCollection(principal.userId, params.collectionId, payload.threadId),
+        );
+
+        return { added: true } as const;
+      }).pipe(publicly),
+    )
+    .handle("listGrants", ({ params, query }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id);
+        const kind = query.kind === "collection" ? "collection" : "thread";
+
+        return {
+          items: yield* call(() => stub.grantsFor(principal.userId, kind, query.resourceId ?? "")),
+        };
+      }).pipe(publicly),
+    )
+    .handle("createGrant", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id, "draft");
+        yield* requireStepUp("sharing");
+        const kind = payload.resourceKind ?? payload.kind ?? "thread";
+
+        return {
+          grantId: yield* call(() =>
+            stub.grant(principal.userId, kind, payload.resourceId, payload.grantee),
+          ),
+        };
+      }).pipe(publicly),
+    )
+    .handle("revokeGrant", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id, "admin");
+        yield* call(() => stub.revoke(principal.userId, params.grantId));
+
+        return { revoked: true } as const;
+      }).pipe(publicly),
+    )
+    // Sharing a thread registers it so future replies can be appended (O04, "shared.delivery" topic).
+    .handle("shareThread", ({ payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        // The same organization binding as every /v1/spaces/:id route: a member removed from or
+        // suspended in the space's organization can no longer share into it.
+        yield* sharingSpace(env, payload.spaceId);
+
+        const input = {
+          spaceId: payload.spaceId,
+          sourceMailboxId: payload.mailboxId,
+          sourceThreadId: payload.threadId,
+          messageRefs: payload.messageRefs,
+          grantees: payload.grantees ?? [],
+          includeFuture: payload.includeFuture ?? false,
+        };
+
+        const sharedThreadId = yield* shareThread(input);
+        yield* (yield* RegistryService).registerSharedThread({
+          mailboxId: input.sourceMailboxId,
+          threadId: input.sourceThreadId,
+          spaceId: input.spaceId,
+          sharedThreadId,
+          includeFuture: input.includeFuture,
+        });
+
+        return sharedThreadId;
+      }).pipe(publicly),
+    )
+
+    // ---- public links (O05) ----
+    .handle("createPublicLink", ({ payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        // Organization binding first (as `orgSpace` routes): the space authority only knows
+        // space membership, which org removal/suspension does not update.
+        yield* sharingSpace(env, payload.spaceId);
+
+        const link = {
+          spaceId: payload.spaceId,
+          threadId: payload.threadId,
+          includeFuture: payload.includeFuture ?? false,
+        };
+
+        return yield* createPublicThreadLink(
+          payload.expiresAt !== undefined ? { ...link, expiresAt: payload.expiresAt } : link,
+          publicOrigin(env),
+        );
+      }).pipe(publicly),
+    )
+    // Exactly what an anonymous viewer would see, before a link is created.
+    .handle("publicPreview", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id);
+
+        return yield* call(() => stub.previewPublicLink(principal.userId, params.threadId));
+      }).pipe(publicly),
+    )
+    .handle("listPublicLinks", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id);
+
+        return {
+          items: yield* call(() => stub.listPublicLinks(principal.userId, params.threadId)),
+        };
+      }).pipe(publicly),
+    )
+    .handle("revokePublicLink", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { principal, stub } = yield* orgSpace(env, params.id, "admin");
+        yield* call(() => stub.revokePublicLink(principal.userId, params.linkId));
+
+        return { revoked: true } as const;
+      }).pipe(publicly),
+    )
+
+    // ---- World publishing (P01) and subscriptions (P02): one publish pipeline (publishing.ts) ----
+    .handle("createWorldPost", ({ payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+
+        return yield* publishWorldPost({
+          fromAddress: payload.from,
+          title: payload.title,
+          html: payload.html,
+          text: payload.text,
+          media: [],
+          publish: payload.publish ?? true,
+        }).pipe(Effect.provide(worldPublishingLayer(env)));
+      }).pipe(publicly),
+    )
+    .handle("getWorld", () =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireScope("read");
+        const { author } = yield* myWorld(env, principal.userId);
+
+        return {
+          handle: author.handle,
+          url: `${publicOrigin(env)}/@${author.handle}/`,
+          publishAddress: `world@${serviceDomain(env)}`,
+        };
+      }).pipe(publicly),
+    )
+    .handle("listWorldPosts", () =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireScope("read");
+        const { stub } = yield* myWorld(env, principal.userId);
+
+        return { items: yield* call(() => stub.listPosts(principal.userId)) };
+      }).pipe(publicly),
+    )
+    .handle("createWorldDraft", ({ payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireScope("publish");
+        const input = yield* postInput(principal.userId, payload);
+        const { stub } = yield* myWorld(env, principal.userId);
+
+        return yield* call(() => stub.createDraft(principal.userId, input));
+      }).pipe(publicly),
+    )
+    .handle("editWorldPost", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireScope("publish");
+        const input = yield* postInput(principal.userId, payload);
+        const { stub } = yield* myWorld(env, principal.userId);
+
+        return { revision: yield* call(() => stub.editPost(principal.userId, params.id, input)) };
+      }).pipe(publicly),
+    )
+    .handle("previewWorldPost", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireScope("read");
+        const { stub } = yield* myWorld(env, principal.userId);
+
+        return yield* call(() => stub.previewPost(principal.userId, params.id));
+      }).pipe(publicly),
+    )
+    .handle("publishWorldPost", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+
+        return yield* publishExistingPost(params.id).pipe(
+          Effect.provide(worldPublishingLayer(env)),
+        );
+      }).pipe(publicly),
+    )
+    .handle("unpublishWorldPost", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireScope("publish");
+        const { author, stub } = yield* myWorld(env, principal.userId);
+        const post = yield* call(() => stub.previewPost(principal.userId, params.id));
+        yield* call(() => stub.unpublish(principal.userId, params.id));
+
+        const { purged } = yield* Effect.promise(() =>
+          refreshSite(env, author.handle, [post.slug]),
+        );
+
+        return { unpublished: true, purged } as const;
+      }).pipe(publicly),
+    )
+    // Newsletter publication status: intent, provider-observed state, recipient outcomes (spec.md §5.5).
+    .handle("newsletterStatus", ({ params, query }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireScope("read");
+        const { stub } = yield* myWorld(env, principal.userId);
+
+        return yield* call(() =>
+          stub.newsletterStatus(principal.userId, params.id, Number(query.revision ?? "1")),
+        );
+      }).pipe(publicly),
+    )
+    // Cancel a publication. Reported as requested/confirmed/unsupported/uncertain; never a recall.
+    .handle("cancelNewsletter", ({ params, query }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireScope("publish");
+        const { author, stub } = yield* myWorld(env, principal.userId);
+
+        const publication = yield* call(() =>
+          stub.cancelNewsletter(principal.userId, params.id, Number(query.revision ?? "1")),
+        );
+
+        // Try the provider step now; the cron reconciler finishes it otherwise.
+        yield* Effect.promise(() => runNewsletter(env, author.handle).catch(() => undefined));
+
+        return publication;
+      }).pipe(publicly),
+    )
+    // Operator review of newsletter work that is held or unknown (never auto-resolved or failed over).
+    .handle("reviewNewsletters", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        yield* requireOperatorAccess();
+        const L = ledgerOf(env, params.handle);
+
+        const [health, held, publications] = yield* Effect.promise(() =>
+          Promise.all([L("health"), L("heldOps"), L("publications")]),
+        );
+
+        return { health, held, publications };
+      }).pipe(publicly),
+    )
+    .handle("resolveNewsletterOp", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const operator = yield* requireOperatorAccess();
+        const L = ledgerOf(env, params.handle);
+
+        const op = yield* Effect.tryPromise({
+          try: () =>
+            L(
+              "resolveHeldOp",
+              payload.opId,
+              payload.resolution,
+              `${operator.userId}: ${payload.note}`,
+              payload.providerRef,
+            ),
+          catch: () => new ApiError({ code: "conflict", message: "operation cannot be resolved" }),
+        });
+
+        const publication = op.publicationId
+          ? yield* Effect.tryPromise({
+              try: () => L("resumeHeld", op.publicationId!),
+              catch: () => new ApiError({ code: "conflict", message: "publication not resumable" }),
+            }).pipe(Effect.orElseSucceed(() => null))
+          : null;
+
+        return { op, publication };
+      }).pipe(publicly),
+    ),
+);

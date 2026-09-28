@@ -1,0 +1,56 @@
+[
+  {
+    "items": [
+      {
+        "tokenHash": "\t",
+        "label": "cVBY",
+        "calendarIds": ["0"],
+        "createdAt": 1.4965050154442826e-146
+      },
+      {
+        "tokenHash": "[\"",
+        "label": "\n",
+        "calendarIds": ["0"],
+        "createdAt": -1.7976931348623127e308
+      },
+      {
+        "tokenHash": "-1",
+        "label": "\u0000",
+        "calendarIds": [],
+        "createdAt": -3.5e-323
+      },
+      {
+        "tokenHash": "ysDs",
+        "label": " ",
+        "calendarIds": ["0"],
+        "createdAt": 3.762385812573267e210
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "tokenHash": "",
+        "label": "RO?3",
+        "calendarIds": ["\n"],
+        "createdAt": 1.3310472731967764e49
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "tokenHash": "😀",
+        "label": "",
+        "calendarIds": ["\udc00"],
+        "createdAt": 1.088260516593136e237
+      },
+      {
+        "tokenHash": "1,>W",
+        "label": "\u0000",
+        "calendarIds": [],
+        "createdAt": 8e-323
+      }
+    ]
+  }
+]

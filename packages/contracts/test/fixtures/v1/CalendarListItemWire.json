@@ -1,0 +1,29 @@
+[
+  {
+    "id": "\ud800",
+    "name": "0",
+    "color": "\n",
+    "kind": ";",
+    "visible": false,
+    "revision": 9e-323,
+    "role": "owner"
+  },
+  {
+    "id": "\t",
+    "name": "?WAO",
+    "color": "\u0000",
+    "kind": "\udc00",
+    "visible": false,
+    "revision": -8.4e-323,
+    "role": "owner"
+  },
+  {
+    "id": "0",
+    "name": "",
+    "color": "\ud800",
+    "kind": " ",
+    "visible": false,
+    "revision": 3.5e-323,
+    "role": "read"
+  }
+]

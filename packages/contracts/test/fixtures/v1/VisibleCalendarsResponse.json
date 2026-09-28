@@ -1,0 +1,34 @@
+[
+  {
+    "items": []
+  },
+  {
+    "items": []
+  },
+  {
+    "items": [
+      {
+        "spaceId": "\u0000",
+        "owned": true,
+        "id": "",
+        "name": "\t",
+        "color": "s<w4",
+        "kind": "dw",
+        "visible": false,
+        "revision": -1.7976931348623125e308,
+        "role": "write"
+      },
+      {
+        "spaceId": "Aoa",
+        "owned": true,
+        "id": "",
+        "name": "",
+        "color": " B/{",
+        "kind": "2",
+        "visible": true,
+        "revision": -6e-323,
+        "role": "read"
+      }
+    ]
+  }
+]

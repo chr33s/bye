@@ -1,0 +1,32 @@
+[
+  {
+    "opId": "",
+    "publicationId": null,
+    "kind": "audience",
+    "state": "rejected",
+    "attempts": -6.320917457294545e119,
+    "firstAttemptAt": 2.9298295236333897e-243,
+    "providerRef": null,
+    "detail": null
+  },
+  {
+    "opId": "",
+    "publicationId": "",
+    "kind": "create",
+    "state": "accepted",
+    "attempts": -1.7976931348623137e308,
+    "firstAttemptAt": null,
+    "providerRef": "VNv",
+    "detail": null
+  },
+  {
+    "opId": "k=ji",
+    "publicationId": "",
+    "kind": "send",
+    "state": "unknown",
+    "attempts": -2.9549071356992816e-52,
+    "firstAttemptAt": null,
+    "providerRef": " ",
+    "detail": null
+  }
+]

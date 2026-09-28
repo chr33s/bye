@@ -15,30 +15,7 @@ import {
   setTeamMemberRole,
   suspendTeamMember,
 } from "@bye/application";
-import {
-  AcceptInvitationRequest,
-  ApiError,
-  CancelSubscriptionRequest,
-  CheckoutRequest,
-  CloseAccountRequest,
-  CreateExtensionRequest,
-  CreateOrganizationRequest,
-  CreditRequest,
-  DomainAliasRequest,
-  DomainRequest,
-  DomainSettingsRequest,
-  InstallationDomainRequest,
-  InstallationZoneTokenRequest,
-  InviteMemberRequest,
-  MembershipSuspendRequest,
-  SetRoleRequest,
-  SetSeatLimitRequest,
-  SignalReviewRequest,
-  SupportSessionRequest,
-  SuppressionRequest,
-  SuspensionRequest,
-  ZoneAuthorizationRequest,
-} from "@bye/contracts";
+import { ApiError, type OrgDomainSummary } from "@bye/contracts";
 import {
   BillingService,
   CommerceService,
@@ -54,9 +31,11 @@ import {
   type SendingScope,
   SupportService,
 } from "@bye/platform-cloudflare";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { kernelClock } from "../durable-host.ts";
 import type { CoreEnv } from "../env.ts";
-import { errorResponse, route, type Route } from "../http.ts";
+import { errorResponse, Invocation, route, type Route } from "../http.ts";
+import { ok, publicly } from "../httpapi.ts";
 import { requestErasure } from "../erasure.ts";
 import { sendSystemEmail } from "../publishing.ts";
 import {
@@ -73,8 +52,6 @@ import {
   zoneTokenConfigured,
 } from "../zone-token.ts";
 import {
-  authed,
-  authedBody,
   closeLiveSockets,
   ctl,
   personalOrgOf,
@@ -83,6 +60,7 @@ import {
   signDownload,
   verifyDownload,
 } from "./common.ts";
+import { CoreApi } from "../spec/index.ts";
 
 // Authorization goes through the Authorization service (§7.1), provided by the request layer:
 // the D1 role and the operator allowlist are facts of the service, not of this module.
@@ -261,46 +239,67 @@ const restartDomainWorkflow = (env: CoreEnv, domainId: string, actorId: string) 
     return yield* ensureDomainWorkflow(env, domainId, actorId);
   });
 
-export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
-  // ---- organizations and team administration (A01, O02) ----
-  route(
-    "POST",
-    "/v1/orgs",
-    authedBody(
-      CreateOrganizationRequest,
-      ({ body }) =>
-        Effect.gen(function* () {
-          const principal = yield* requireUser("admin");
-          yield* requireStepUp("admin");
-          const kind = body.kind;
-          const name = body.name.trim().slice(0, 120);
+/** Native routes: the capability download answers a file, not JSON, and takes no session. */
+export const adminRoutes: ReadonlyArray<Route> = [
+  // Capability download: the signed, expiring token is the authorization (works for CLI and browsers).
+  route("GET", "/v1/downloads", async (request, _p, env) => {
+    const url = new URL(request.url);
+    const key = url.searchParams.get("key") ?? "";
 
-          if (!name) return yield* badRequest("name required");
-          const seatLimit = body.seatLimit ?? (kind === "family" ? 6 : 5);
-          const orgs = yield* OrgsService;
+    if (
+      !key.startsWith("t/") ||
+      !key.includes("/export/") ||
+      !(await verifyDownload(env, key, url.searchParams.get("token") ?? "", Date.now()))
+    ) {
+      return errorResponse("forbidden", "invalid or expired download link");
+    }
 
-          const id = yield* orgs.createOrganization(
-            principal.userId,
-            body.reassignmentPolicy
-              ? { name, kind, seatLimit, reassignmentPolicy: body.reassignmentPolicy }
-              : { name, kind, seatLimit },
-          );
+    const object = await env.EXPORTS.get(key);
 
-          return { id, kind, name, seatLimit };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/orgs/:orgId",
-    authed(({ params }) =>
+    if (!object) return errorResponse("not_found", "file");
+
+    return new Response(object.body, {
+      headers: {
+        "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
+        "content-disposition": `attachment; filename="${(key.split("/").pop() ?? "export").replace(/[^A-Za-z0-9._-]/g, "_")}"`,
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+      },
+    });
+  }),
+];
+
+export const AdminHandlers = HttpApiBuilder.group(CoreApi, "admin", (handlers) =>
+  handlers
+    // ---- organizations and team administration (A01, O02) ----
+    .handle("createOrganization", ({ payload }) =>
+      Effect.gen(function* () {
+        const principal = yield* requireUser("admin");
+        yield* requireStepUp("admin");
+        const kind = payload.kind;
+        const name = payload.name.trim().slice(0, 120);
+
+        if (!name) return yield* badRequest("name required");
+        const seatLimit = payload.seatLimit ?? (kind === "family" ? 6 : 5);
+        const orgs = yield* OrgsService;
+
+        const id = yield* orgs.createOrganization(
+          principal.userId,
+          payload.reassignmentPolicy
+            ? { name, kind, seatLimit, reassignmentPolicy: payload.reassignmentPolicy }
+            : { name, kind, seatLimit },
+        );
+
+        return { id, kind, name, seatLimit };
+      }).pipe(publicly),
+    )
+    .handle("organization", ({ params }) =>
       Effect.gen(function* () {
         const principal = yield* requireScope("read");
         const orgs = yield* OrgsService;
         const billing = yield* BillingService;
-        const org = yield* orgs.organization(params.orgId!, principal.userId);
-        const ent = yield* billing.entitlement(params.orgId!);
+        const org = yield* orgs.organization(params.orgId, principal.userId);
+        const ent = yield* billing.entitlement(params.orgId);
 
         return {
           ...org,
@@ -315,239 +314,171 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
               }
             : null,
         };
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/orgs/:orgId/members",
-    authed(({ params }) =>
+      }).pipe(publicly),
+    )
+    .handle("members", ({ params }) =>
       Effect.gen(function* () {
         const principal = yield* requireScope("read");
         const orgs = yield* OrgsService;
 
-        return { items: yield* orgs.members(params.orgId!, principal.userId) };
-      }),
-    ),
-  ),
-  route(
-    "PATCH",
-    "/v1/orgs/:orgId/members/:userId",
-    authedBody(SetRoleRequest, ({ params, body }) =>
+        return { items: yield* orgs.members(params.orgId, principal.userId) };
+      }).pipe(publicly),
+    )
+    .handle("setMemberRole", ({ params, payload }) =>
       Effect.gen(function* () {
-        const role = body.role;
-        yield* setTeamMemberRole(params.orgId!, params.userId!, role);
+        const role = payload.role;
+        yield* setTeamMemberRole(params.orgId, params.userId, role);
 
         return { userId: params.userId, role };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/orgs/:orgId/members/:userId/suspend",
-    authed(({ params }) => suspendTeamMember(params.orgId!, params.userId!)),
-  ),
-  route(
-    "POST",
-    "/v1/orgs/:orgId/members/:userId/reactivate",
-    authed(({ params }) =>
-      Effect.map(reactivateTeamMember(params.orgId!, params.userId!), () => ({
+      }).pipe(publicly),
+    )
+    .handle("suspendMember", ({ params }) =>
+      suspendTeamMember(params.orgId, params.userId).pipe(Effect.as(ok), publicly),
+    )
+    .handle("reactivateMember", ({ params }) =>
+      Effect.map(reactivateTeamMember(params.orgId, params.userId), () => ({
         userId: params.userId,
         status: "active",
-      })),
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/orgs/:orgId/members/:userId",
-    authed(({ params }) => removeTeamMember(params.orgId!, params.userId!)),
-  ),
-  route(
-    "GET",
-    "/v1/orgs/:orgId/seats",
-    authed(({ params }) =>
+      })).pipe(publicly),
+    )
+    .handle("removeMember", ({ params }) =>
+      removeTeamMember(params.orgId, params.userId).pipe(publicly),
+    )
+    .handle("seats", ({ params }) =>
       Effect.gen(function* () {
-        yield* requireOrgAdminAccess(params.orgId!);
+        yield* requireOrgAdminAccess(params.orgId);
         const orgs = yield* OrgsService;
 
-        return yield* orgs.seats(params.orgId!);
-      }),
-    ),
-  ),
-  route(
-    "PUT",
-    "/v1/orgs/:orgId/seats",
-    authedBody(SetSeatLimitRequest, ({ params, body }) =>
+        return yield* orgs.seats(params.orgId);
+      }).pipe(publicly),
+    )
+    .handle("setSeatLimit", ({ params, payload }) =>
       Effect.gen(function* () {
-        const principal = yield* requireOrgAdminAccess(params.orgId!);
+        const principal = yield* requireOrgAdminAccess(params.orgId);
         yield* requireStepUp("admin");
         const orgs = yield* OrgsService;
 
-        return yield* orgs.setSeatLimit(params.orgId!, actorOf(principal), body.limit);
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/orgs/:orgId/audit",
-    authed(({ params, url }) =>
+        return yield* orgs.setSeatLimit(params.orgId, actorOf(principal), payload.limit);
+      }).pipe(publicly),
+    )
+    .handle("auditLog", ({ params, query }) =>
       Effect.gen(function* () {
-        yield* requireOrgAdminAccess(params.orgId!);
+        yield* requireOrgAdminAccess(params.orgId);
         const orgs = yield* OrgsService;
+        const limit = Math.min(500, Math.max(1, Number(query.limit ?? 100) || 100));
 
-        const limit = Math.min(
-          500,
-          Math.max(1, Number(url.searchParams.get("limit") ?? 100) || 100),
+        return { items: yield* orgs.auditLog(params.orgId, limit) };
+      }).pipe(publicly),
+    )
+    // Invitations: the admin invites (step-up); the invitee accepts from their own account.
+    .handle("inviteMember", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const address = payload.address.trim().toLowerCase();
+        const result = yield* inviteTeamMember(params.orgId, address, payload.role ?? "member");
+        // `inviteTeamMember` verified the admin role and step-up; the actor is charged for the send.
+        const principal = yield* requireScope("read");
+        const link = `${env.APP_ORIGIN}/invite?token=${encodeURIComponent(result.token)}`;
+        yield* Effect.promise(() =>
+          sendSystemEmail(
+            env,
+            {
+              to: address,
+              subject: "You're invited to join an organization",
+              text: `Accept the invitation (valid 7 days):\n${link}\n`,
+            },
+            { actorUserId: principal.userId },
+          ).catch(() => undefined),
         );
 
-        return { items: yield* orgs.auditLog(params.orgId!, limit) };
-      }),
-    ),
-  ),
-  // Invitations: the admin invites (step-up); the invitee accepts from their own account.
-  route(
-    "POST",
-    "/v1/orgs/:orgId/invitations",
-    authedBody(
-      InviteMemberRequest,
-      ({ env, params, body }) =>
-        Effect.gen(function* () {
-          const address = body.address.trim().toLowerCase();
-          const result = yield* inviteTeamMember(params.orgId!, address, body.role ?? "member");
-          // `inviteTeamMember` verified the admin role and step-up; the actor is charged for the send.
-          const principal = yield* requireScope("read");
-          const link = `${env.APP_ORIGIN}/invite?token=${encodeURIComponent(result.token)}`;
-          yield* Effect.promise(() =>
-            sendSystemEmail(
-              env,
-              {
-                to: address,
-                subject: "You're invited to join an organization",
-                text: `Accept the invitation (valid 7 days):\n${link}\n`,
-              },
-              { actorUserId: principal.userId },
-            ).catch(() => undefined),
-          );
-
-          return result;
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/invitations/accept",
-    authedBody(AcceptInvitationRequest, ({ body }) =>
+        return result;
+      }).pipe(publicly),
+    )
+    .handle("acceptInvitation", ({ payload }) =>
       Effect.gen(function* () {
         const principal = yield* requireUser();
         const orgs = yield* OrgsService;
 
-        return yield* orgs.acceptInvitation(body.token, principal.userId);
-      }),
-    ),
-  ),
-  // Legacy paths kept for existing clients.
-  route(
-    "POST",
-    "/v1/memberships/:orgId/invite",
-    authedBody(
-      InviteMemberRequest,
-      ({ params, body }) => inviteTeamMember(params.orgId!, body.address, body.role ?? "member"),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/memberships/:orgId/suspend",
-    authedBody(MembershipSuspendRequest, ({ params, body }) =>
-      suspendTeamMember(params.orgId!, body.userId),
-    ),
-  ),
-
-  // Extension (shared-address) mailboxes backed by a shared space (O03).
-  route(
-    "POST",
-    "/v1/orgs/:orgId/extensions",
-    authedBody(
-      CreateExtensionRequest,
-      ({ env, params, body }) =>
-        Effect.gen(function* () {
-          const orgId = params.orgId!;
-          const principal = yield* requireOrgAdminAccess(orgId);
-          yield* requireStepUp("admin");
-          const orgs = yield* OrgsService;
-          const domains = yield* DomainsService;
-          const registry = yield* RegistryService;
-          const domain = yield* domains.get(body.domainId);
-
-          if (domain.org_id !== orgId)
-            return yield* new Forbidden({ reason: "domain belongs to another organization" });
-          const memberIds = body.memberIds ?? [];
-          const members = yield* orgs.members(orgId, principal.userId);
-
-          if (memberIds.some((m) => !members.some((x) => x.userId === m && x.status === "active")))
-            return yield* badRequest("extension members must be active organization members");
-
-          const mailboxId = yield* orgs.createExtensionMailbox(
-            orgId,
-            actorOf(principal),
-            memberIds,
-          );
-
-          const { address } = yield* domains.addAlias(domain.id, principal.userId, {
-            localPart: body.localPart,
-            mailboxId,
-            kind: "extension",
-          });
-
-          const spaceId = `ext_${mailboxId}`;
-          const space = env.SHARED_SPACES.getByName(`space:${spaceId}`);
-          yield* rpcResult(
-            () =>
-              space.initSpace({
-                spaceId,
-                kind: "extension",
-                organizationId: orgId,
-                ownerId: principal.userId,
-              }) as Promise<unknown>,
-          );
-
-          for (const m of memberIds)
-            if (m !== principal.userId)
-              yield* rpcResult(
-                () => space.setMember(principal.userId, m, "member") as Promise<unknown>,
-              );
-          const sendAs = body.sendAs ?? true;
-          yield* rpcResult(() => {
-            const extension: Types.Mutable<Parameters<typeof space.configureExtension>[1]> = {
-              address,
-              displayName: body.displayName || address,
-              sendAs,
-            };
-
-            if (body.workflowBoard) extension.workflowBoard = body.workflowBoard;
-
-            if (body.workflowStage) extension.workflowStage = body.workflowStage;
-
-            return space.configureExtension(principal.userId, extension) as Promise<unknown>;
-          });
-          yield* registry.registerSpace(spaceId, orgId, "extension", principal.userId);
-          yield* registry.registerExtension(mailboxId, spaceId, address);
-
-          return { mailboxId, spaceId, address };
-        }),
-      { status: 201 },
-    ),
-  ),
-
-  // ---- incoming email for the onboarding-selected zone (infra/onboarding/spec.md §10–§17) ----
-  // What the post-owner "Set up incoming email" card needs. Never claims mail is ready: only a
-  // domain in state `active` receives mail.
-  route(
-    "GET",
-    "/v1/installation/mail",
-    authed(({ env }) =>
+        return yield* orgs.acceptInvitation(payload.token, principal.userId);
+      }).pipe(publicly),
+    )
+    // Legacy paths kept for existing clients.
+    .handle("legacyInviteMember", ({ params, payload }) =>
+      inviteTeamMember(params.orgId, payload.address, payload.role ?? "member").pipe(publicly),
+    )
+    .handle("legacySuspendMember", ({ params, payload }) =>
+      suspendTeamMember(params.orgId, payload.userId).pipe(Effect.as(ok), publicly),
+    )
+    // Extension (shared-address) mailboxes backed by a shared space (O03).
+    .handle("createExtension", ({ params, payload }) =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const orgId = params.orgId;
+        const principal = yield* requireOrgAdminAccess(orgId);
+        yield* requireStepUp("admin");
+        const orgs = yield* OrgsService;
+        const domains = yield* DomainsService;
+        const registry = yield* RegistryService;
+        const domain = yield* domains.get(payload.domainId);
+
+        if (domain.org_id !== orgId)
+          return yield* new Forbidden({ reason: "domain belongs to another organization" });
+        const memberIds = payload.memberIds ?? [];
+        const members = yield* orgs.members(orgId, principal.userId);
+
+        if (memberIds.some((m) => !members.some((x) => x.userId === m && x.status === "active")))
+          return yield* badRequest("extension members must be active organization members");
+
+        const mailboxId = yield* orgs.createExtensionMailbox(orgId, actorOf(principal), memberIds);
+
+        const { address } = yield* domains.addAlias(domain.id, principal.userId, {
+          localPart: payload.localPart,
+          mailboxId,
+          kind: "extension",
+        });
+
+        const spaceId = `ext_${mailboxId}`;
+        const space = env.SHARED_SPACES.getByName(`space:${spaceId}`);
+        yield* rpcResult(
+          () =>
+            space.initSpace({
+              spaceId,
+              kind: "extension",
+              organizationId: orgId,
+              ownerId: principal.userId,
+            }) as Promise<unknown>,
+        );
+
+        for (const m of memberIds)
+          if (m !== principal.userId)
+            yield* rpcResult(
+              () => space.setMember(principal.userId, m, "member") as Promise<unknown>,
+            );
+        const sendAs = payload.sendAs ?? true;
+        yield* rpcResult(() => {
+          const extension: Types.Mutable<Parameters<typeof space.configureExtension>[1]> = {
+            address,
+            displayName: payload.displayName || address,
+            sendAs,
+          };
+
+          if (payload.workflowBoard) extension.workflowBoard = payload.workflowBoard;
+
+          if (payload.workflowStage) extension.workflowStage = payload.workflowStage;
+
+          return space.configureExtension(principal.userId, extension) as Promise<unknown>;
+        });
+        yield* registry.registerSpace(spaceId, orgId, "extension", principal.userId);
+        yield* registry.registerExtension(mailboxId, spaceId, address);
+
+        return { mailboxId, spaceId, address };
+      }).pipe(publicly),
+    )
+
+    // ---- incoming email for the onboarding-selected zone (infra/onboarding/spec.md §10–§17) ----
+    .handle("installationMail", () =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
         const principal = yield* requireScope("read");
         const zone = env.INSTALL_ZONE_NAME || null;
 
@@ -572,20 +503,14 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
           domain: visible ? { id: row.id, orgId: row.org_id, state: row.state } : null,
           incomingMail: visible && row.state === "active" ? "active" : "not-set-up",
         };
-      }),
-    ),
-  ),
-  // "Let Bye make the changes": the owner enters a Cloudflare API token limited to the installation's
-  // zone. It is validated against Cloudflare, sealed, and used only for that zone's incoming-email
-  // work (zone-token.ts). Neither it nor any part of it is ever returned or logged.
-  route(
-    "POST",
-    "/v1/installation/mail/token",
-    authedBody(InstallationZoneTokenRequest, ({ body, env }) =>
+      }).pipe(publicly),
+    )
+    .handle("storeInstallationZoneToken", ({ payload }) =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
         const principal = yield* installationMailAdmin(env);
         yield* requireStepUp("admin");
-        const token = body.token.trim();
+        const token = payload.token.trim();
 
         const refused = yield* Effect.promise(() =>
           storeZoneToken(env, token, principal.userId, Date.now()).then(
@@ -597,16 +522,11 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
         if (refused !== null) return yield* badRequest(refused);
 
         return { automation: "zone-api" as const, tokenConfigured: true };
-      }),
-    ),
-  ),
-  // Removing the token returns incoming email to manual records. Refused while setup is writing
-  // through the zone API, so a change is never left half made.
-  route(
-    "DELETE",
-    "/v1/installation/mail/token",
-    authed(({ env }) =>
+      }).pipe(publicly),
+    )
+    .handle("removeInstallationZoneToken", () =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
         yield* installationMailAdmin(env);
         yield* requireStepUp("admin");
         const zone = (env.INSTALL_ZONE_NAME ?? "").toLowerCase();
@@ -649,70 +569,54 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
           automation: yield* Effect.promise(() => installationAutomation(env)),
           tokenConfigured: false,
         };
-      }),
-    ),
-  ),
-  // "Review mail setup": create or reuse the customer domain for the installation's zone without
-  // re-entering it. Ownership is the onboarding account/zone link, so the domain starts at
-  // `ownership-proven`; nothing is written to DNS or Email Routing here.
-  route(
-    "POST",
-    "/v1/domains/from-installation",
-    authedBody(
-      InstallationDomainRequest,
-      ({ body, env }) =>
-        Effect.gen(function* () {
-          const operator = yield* requireOperatorAccess();
+      }).pipe(publicly),
+    )
+    .handle("domainFromInstallation", ({ payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const operator = yield* requireOperatorAccess();
 
-          // Default: the owner's personal organization, where their address on the zone lives.
-          const orgId =
-            body.orgId ??
-            ((yield* Effect.promise(() => personalOrgOf(env, operator.userId))) || "");
+        // Default: the owner's personal organization, where their address on the zone lives.
+        const orgId =
+          payload.orgId ??
+          ((yield* Effect.promise(() => personalOrgOf(env, operator.userId))) || "");
 
-          if (!orgId) return yield* badRequest("no organization to bind the domain to");
-          const principal = yield* requireOrgAdminAccess(orgId);
-          yield* requireStepUp("admin");
-          const zone = (env.INSTALL_ZONE_NAME ?? "").toLowerCase();
+        if (!orgId) return yield* badRequest("no organization to bind the domain to");
+        const principal = yield* requireOrgAdminAccess(orgId);
+        yield* requireStepUp("admin");
+        const zone = (env.INSTALL_ZONE_NAME ?? "").toLowerCase();
 
-          if (!zone || !env.INSTALL_ZONE_ID || !env.INSTALL_ACCOUNT_ID)
-            return yield* Effect.fail(
-              new ApiError({ code: "conflict", message: "this installation has no recorded zone" }),
-            );
-
-          if (body.name !== undefined && body.name.toLowerCase().replace(/\.$/, "") !== zone)
-            return yield* badRequest("name does not match the installation's zone");
-          const deps = yield* depsFor(env, zone, null);
-
-          const row = yield* ctl(() =>
-            new DomainOnboarding(env.DIRECTORY, kernelClock, deps).domains.requestFromInstallation(
-              orgId,
-              principal.userId,
-              {
-                name: zone,
-                accountId: env.INSTALL_ACCOUNT_ID!,
-                zoneId: env.INSTALL_ZONE_ID!,
-              },
-            ),
+        if (!zone || !env.INSTALL_ZONE_ID || !env.INSTALL_ACCOUNT_ID)
+          return yield* Effect.fail(
+            new ApiError({ code: "conflict", message: "this installation has no recorded zone" }),
           );
 
-          // Reuse the domain's live workflow; a missing or finished one is replaced.
-          yield* ensureDomainWorkflow(env, row.id, principal.userId);
+        if (payload.name !== undefined && payload.name.toLowerCase().replace(/\.$/, "") !== zone)
+          return yield* badRequest("name does not match the installation's zone");
+        const deps = yield* depsFor(env, zone, null);
 
-          return { domainId: row.id, name: row.name, state: row.state };
-        }),
-      { status: 202 },
-    ),
-  ),
-  // "Restore previous mail setup": puts the recorded MX/SPF/DKIM/DMARC/routing state back (or,
-  // for a manual-records setup, keeps it for the customer to restore by hand) and returns the
-  // domain to `ownership-proven`, from where setup can start again. The application deployment and
-  // mail already accepted are untouched.
-  route(
-    "POST",
-    "/v1/domains/:id/rollback",
-    authed(({ env, params }) =>
+        const row = yield* ctl(() =>
+          new DomainOnboarding(env.DIRECTORY, kernelClock, deps).domains.requestFromInstallation(
+            orgId,
+            principal.userId,
+            {
+              name: zone,
+              accountId: env.INSTALL_ACCOUNT_ID!,
+              zoneId: env.INSTALL_ZONE_ID!,
+            },
+          ),
+        );
+
+        // Reuse the domain's live workflow; a missing or finished one is replaced.
+        yield* ensureDomainWorkflow(env, row.id, principal.userId);
+
+        return { domainId: row.id, name: row.name, state: row.state };
+      }).pipe(publicly),
+    )
+    .handle("rollbackDomain", ({ params }) =>
       Effect.gen(function* () {
-        const { domain, principal } = yield* adminDomain(params.id!);
+        const { env } = yield* Invocation;
+        const { domain, principal } = yield* adminDomain(params.id);
         yield* requireStepUp("admin");
 
         const link = yield* ctl(() =>
@@ -746,16 +650,12 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
           );
 
         return yield* ctl(() => onboarding.rollback(domain.id, principal.userId));
-      }),
-    ),
-  ),
-  // After a manual-records rollback: the customer confirms they put their previous records back.
-  route(
-    "POST",
-    "/v1/domains/:id/restore-acknowledged",
-    authed(({ env, params }) =>
+      }).pipe(publicly),
+    )
+    .handle("acknowledgeDomainRestore", ({ params }) =>
       Effect.gen(function* () {
-        const { domain, principal } = yield* adminDomain(params.id!);
+        const { env } = yield* Invocation;
+        const { domain, principal } = yield* adminDomain(params.id);
         yield* requireStepUp("admin");
         yield* ctl(() =>
           new DomainOnboarding(
@@ -766,49 +666,40 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
         );
 
         return { domainId: domain.id, restorePending: null };
-      }),
-    ),
-  ),
+      }).pipe(publicly),
+    )
 
-  // ---- customer domains (O01) ----
-  route(
-    "POST",
-    "/v1/domains",
-    authedBody(
-      DomainRequest,
-      ({ body, env }) =>
-        Effect.gen(function* () {
-          const orgId = body.orgId;
-          // Only organization admins, with a recent step-up, may claim a domain (O01/O02).
-          const principal = yield* requireOrgAdminAccess(orgId);
-          yield* requireStepUp("admin");
-          const domains = yield* DomainsService;
-          const row = yield* domains.request(orgId, principal.userId, body.name);
-          // Resumable onboarding runs as a Workflow; status is read from the domain resource.
-          yield* Effect.promise(() =>
-            env.PROVISION_DOMAIN.create({
-              id: `dom-${row.id}`,
-              params: { v: 1, domainId: row.id, actorId: principal.userId },
-            }).catch(() => undefined),
-          );
-          yield* setDomainWorkflow(env, row.id, `dom-${row.id}`);
-
-          return {
-            ...row,
-            verificationRecord: verificationRecord(row),
-          };
-        }),
-      { status: 202 },
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/orgs/:orgId/domains",
-    authed(({ env, params }) =>
+    // ---- customer domains (O01) ----
+    .handle("requestDomain", ({ payload }) =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const orgId = payload.orgId;
+        // Only organization admins, with a recent step-up, may claim a domain (O01/O02).
+        const principal = yield* requireOrgAdminAccess(orgId);
+        yield* requireStepUp("admin");
+        const domains = yield* DomainsService;
+        const row = yield* domains.request(orgId, principal.userId, payload.name);
+        // Resumable onboarding runs as a Workflow; status is read from the domain resource.
+        yield* Effect.promise(() =>
+          env.PROVISION_DOMAIN.create({
+            id: `dom-${row.id}`,
+            params: { v: 1, domainId: row.id, actorId: principal.userId },
+          }).catch(() => undefined),
+        );
+        yield* setDomainWorkflow(env, row.id, `dom-${row.id}`);
+
+        return {
+          ...row,
+          verificationRecord: verificationRecord(row),
+        };
+      }).pipe(publicly),
+    )
+    .handle("orgDomains", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
         const principal = yield* requireScope("read");
 
-        if (!principal.organizationIds.includes(params.orgId!))
+        if (!principal.organizationIds.includes(params.orgId))
           return yield* new Forbidden({ reason: "not a member of organization" });
 
         const rows = yield* ctl(() =>
@@ -816,20 +707,17 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
             .prepare(
               "SELECT id, name, state, plus_addressing, catch_all_mailbox_id, updated_at FROM domains WHERE org_id = ? AND state != 'removed' ORDER BY name",
             )
-            .bind(params.orgId!)
-            .all(),
+            .bind(params.orgId)
+            .all<OrgDomainSummary>(),
         );
 
         return { items: rows.results };
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/domains/:id",
-    authed(({ env, params }) =>
+      }).pipe(publicly),
+    )
+    .handle("domain", ({ params }) =>
       Effect.gen(function* () {
-        const { domain } = yield* adminDomain(params.id!);
+        const { env } = yield* Invocation;
+        const { domain } = yield* adminDomain(params.id);
 
         const diag = yield* ctl(() =>
           env.DIRECTORY.withSession("first-primary")
@@ -856,232 +744,188 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
             ? { id: workflowId, status: (instance as { status: string }).status }
             : null,
         };
-      }),
-    ),
-  ),
-  // Live DNS change preview (public answers vs. the service profile), shown before applying.
-  route(
-    "GET",
-    "/v1/domains/:id/dns",
-    authed(({ env, params }) =>
+      }).pipe(publicly),
+    )
+    .handle("domainDnsPreview", ({ params }) =>
       Effect.gen(function* () {
-        const { domain } = yield* adminDomain(params.id!);
+        const { env } = yield* Invocation;
+        const { domain } = yield* adminDomain(params.id);
         const deps = yield* depsFor(env, domain.name, null);
 
         return yield* ctl(() =>
           new DomainOnboarding(env.DIRECTORY, kernelClock, deps).preview(domain.id),
         );
-      }),
-    ),
-  ),
-  route(
-    "PATCH",
-    "/v1/domains/:id",
-    authedBody(DomainSettingsRequest, ({ params, body }) =>
+      }).pipe(publicly),
+    )
+    .handle("configureDomain", ({ params, payload }) =>
       Effect.gen(function* () {
-        const { domain, principal, domains } = yield* adminDomain(params.id!);
+        const { domain, principal, domains } = yield* adminDomain(params.id);
         yield* requireStepUp("admin");
 
         const settings: Types.Mutable<Parameters<typeof domains.configure>[2]> = {};
 
-        if (body.plusAddressing !== undefined) settings.plusAddressing = body.plusAddressing;
+        if (payload.plusAddressing !== undefined) settings.plusAddressing = payload.plusAddressing;
 
-        if (body.catchAllMailboxId !== undefined)
-          settings.catchAllMailboxId = body.catchAllMailboxId;
+        if (payload.catchAllMailboxId !== undefined)
+          settings.catchAllMailboxId = payload.catchAllMailboxId;
 
         return yield* domains.configure(domain.id, principal.userId, settings);
-      }),
-    ),
-  ),
-  // Explicit, separately approved zone-authorization step (§5.4); resumes the onboarding Workflow.
-  route(
-    "POST",
-    "/v1/domains/:id/authorize-zone",
-    authedBody(
-      ZoneAuthorizationRequest,
-      ({ env, params, body }) =>
-        Effect.gen(function* () {
-          const { domain, principal } = yield* adminDomain(params.id!);
-          yield* requireStepUp("admin");
-          const method: ZoneAuthorizationMethod = body.method;
+      }).pipe(publicly),
+    )
+    .handle("authorizeDomainZone", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { domain, principal } = yield* adminDomain(params.id);
+        yield* requireStepUp("admin");
+        const method: ZoneAuthorizationMethod = payload.method;
 
-          if (
-            method !== "manual-records" &&
-            (yield* Effect.promise(() => zoneApiToken(env, domain.name))) === null
-          )
-            return yield* badRequest("zone automation is not configured; use manual-records");
+        if (
+          method !== "manual-records" &&
+          (yield* Effect.promise(() => zoneApiToken(env, domain.name))) === null
+        )
+          return yield* badRequest("zone automation is not configured; use manual-records");
 
-          const onboarding = new DomainOnboarding(
-            env.DIRECTORY,
-            kernelClock,
-            yield* depsFor(env, domain.name, method),
+        const onboarding = new DomainOnboarding(
+          env.DIRECTORY,
+          kernelClock,
+          yield* depsFor(env, domain.name, method),
+        );
+
+        // One read of the current setup (authoritative zone records and routing rules when the
+        // zone API is available) decides the cutover and becomes the recorded snapshot.
+        const inspection = yield* ctl(() => onboarding.inspect(domain.id));
+        const { requiresCutover, provider } = inspection.classification;
+
+        const needConfirmation = () =>
+          Effect.fail(
+            new ApiError({
+              code: "conflict",
+              message: `incoming mail for ${domain.name} currently goes to ${provider}; confirm the switch to continue`,
+              details: { cutoverRequired: true, provider },
+            }),
           );
 
-          // One read of the current setup (authoritative zone records and routing rules when the
-          // zone API is available) decides the cutover and becomes the recorded snapshot.
-          const inspection = yield* ctl(() => onboarding.inspect(domain.id));
-          const { requiresCutover, provider } = inspection.classification;
+        const authorizedStates = [
+          "zone-authorized",
+          "dns-configured",
+          "inbound-tested",
+          "outbound-tested",
+        ];
 
-          const needConfirmation = () =>
-            Effect.fail(
-              new ApiError({
-                code: "conflict",
-                message: `incoming mail for ${domain.name} currently goes to ${provider}; confirm the switch to continue`,
-                details: { cutoverRequired: true, provider },
-              }),
-            );
-
-          const authorizedStates = [
-            "zone-authorized",
-            "dns-configured",
-            "inbound-tested",
-            "outbound-tested",
-          ];
-
-          if (authorizedStates.includes(domain.state)) {
-            // Already authorized, but the current provider is still in place (it appeared after
-            // authorization, or public DNS was stale): confirm the switch now and restart setup
-            // so it continues immediately.
-            if (!requiresCutover || inspection.link.cutoverConfirmedAt !== null)
-              return yield* Effect.fail(
-                new ApiError({ code: "conflict", message: `domain is ${domain.state}` }),
-              );
-
-            if (body.confirmCutover !== true) return yield* needConfirmation();
-            yield* ctl(() =>
-              onboarding.domains.recordCutover(
-                domain.id,
-                principal.userId,
-                onboarding.snapshotOf(inspection),
-                true,
-              ),
-            );
-            yield* restartDomainWorkflow(env, domain.id, principal.userId);
-
-            return { domainId: domain.id, method, status: "switching" };
-          }
-
-          if (domain.state !== "ownership-proven")
+        if (authorizedStates.includes(domain.state)) {
+          // Already authorized, but the current provider is still in place (it appeared after
+          // authorization, or public DNS was stale): confirm the switch now and restart setup
+          // so it continues immediately.
+          if (!requiresCutover || inspection.link.cutoverConfirmedAt !== null)
             return yield* Effect.fail(
               new ApiError({ code: "conflict", message: `domain is ${domain.state}` }),
             );
 
-          // Replacing the current provider is a separate, explicit decision (infra/onboarding/spec.md
-          // §12 state 3); the current configuration is recorded before anything is written.
-          if (requiresCutover && body.confirmCutover !== true) return yield* needConfirmation();
+          if (payload.confirmCutover !== true) return yield* needConfirmation();
           yield* ctl(() =>
             onboarding.domains.recordCutover(
               domain.id,
               principal.userId,
               onboarding.snapshotOf(inspection),
-              requiresCutover,
+              true,
             ),
           );
-          // Recorded before the event, so a fresh instance resumes from it without waiting.
-          yield* ctl(() =>
-            onboarding.domains.recordAuthorization(domain.id, principal.userId, method),
+          yield* restartDomainWorkflow(env, domain.id, principal.userId);
+
+          return { domainId: domain.id, method, status: "switching" };
+        }
+
+        if (domain.state !== "ownership-proven")
+          return yield* Effect.fail(
+            new ApiError({ code: "conflict", message: `domain is ${domain.state}` }),
           );
-          const workflow = yield* ensureDomainWorkflow(env, domain.id, principal.userId);
 
-          if (!workflow.fresh) {
-            const instance = yield* Effect.promise(() => env.PROVISION_DOMAIN.get(workflow.id));
-            yield* Effect.promise(() =>
-              instance.sendEvent({ type: "zone-authorized", payload: { method } }),
-            );
-          }
+        // Replacing the current provider is a separate, explicit decision (infra/onboarding/spec.md
+        // §12 state 3); the current configuration is recorded before anything is written.
+        if (requiresCutover && payload.confirmCutover !== true) return yield* needConfirmation();
+        yield* ctl(() =>
+          onboarding.domains.recordCutover(
+            domain.id,
+            principal.userId,
+            onboarding.snapshotOf(inspection),
+            requiresCutover,
+          ),
+        );
+        // Recorded before the event, so a fresh instance resumes from it without waiting.
+        yield* ctl(() =>
+          onboarding.domains.recordAuthorization(domain.id, principal.userId, method),
+        );
+        const workflow = yield* ensureDomainWorkflow(env, domain.id, principal.userId);
 
-          return { domainId: domain.id, method, status: "authorizing" };
-        }),
-      { status: 202 },
-    ),
-  ),
-  // Restart onboarding (e.g. after the Workflow timed out waiting for DNS); idempotent steps resume.
-  route(
-    "POST",
-    "/v1/domains/:id/retry",
-    authed(
-      ({ env, params }) =>
-        Effect.gen(function* () {
-          const { domain, principal } = yield* adminDomain(params.id!);
-          yield* requireStepUp("admin");
-          // A fresh instance re-runs the checks from the recorded state and authorization; the
-          // live one (if any) is stopped first so two never run for one domain.
-          const { id } = yield* restartDomainWorkflow(env, domain.id, principal.userId);
+        if (!workflow.fresh) {
+          const instance = yield* Effect.promise(() => env.PROVISION_DOMAIN.get(workflow.id));
+          yield* Effect.promise(() =>
+            instance.sendEvent({ type: "zone-authorized", payload: { method } }),
+          );
+        }
 
-          return { domainId: domain.id, workflowId: id };
-        }),
-      { status: 202 },
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/domains/:id",
-    authed(({ params }) =>
+        return { domainId: domain.id, method, status: "authorizing" };
+      }).pipe(publicly),
+    )
+    .handle("retryDomain", ({ params }) =>
       Effect.gen(function* () {
-        const { domain, principal, domains } = yield* adminDomain(params.id!);
+        const { env } = yield* Invocation;
+        const { domain, principal } = yield* adminDomain(params.id);
+        yield* requireStepUp("admin");
+        // A fresh instance re-runs the checks from the recorded state and authorization; the
+        // live one (if any) is stopped first so two never run for one domain.
+        const { id } = yield* restartDomainWorkflow(env, domain.id, principal.userId);
+
+        return { domainId: domain.id, workflowId: id };
+      }).pipe(publicly),
+    )
+    .handle("removeDomain", ({ params }) =>
+      Effect.gen(function* () {
+        const { domain, principal, domains } = yield* adminDomain(params.id);
         yield* requireStepUp("admin");
 
         return yield* domains.remove(domain.id, principal.userId);
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/domains/:id/aliases",
-    authed(({ params }) =>
+      }).pipe(publicly),
+    )
+    .handle("domainAliases", ({ params }) =>
       Effect.gen(function* () {
-        const { domain, domains } = yield* adminDomain(params.id!);
+        const { domain, domains } = yield* adminDomain(params.id);
 
         return { items: yield* domains.listAliases(domain.id) };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/domains/:id/aliases",
-    authedBody(
-      DomainAliasRequest,
-      ({ params, body }) =>
-        Effect.gen(function* () {
-          const { domain, principal, domains } = yield* adminDomain(params.id!);
-          // Routing an address to a mailbox is a forwarding-class change (§7.3): fresh step-up.
-          yield* requireStepUp("admin");
-
-          return yield* domains.addAlias(domain.id, principal.userId, {
-            localPart: body.localPart,
-            mailboxId: body.mailboxId,
-          });
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/domains/:id/aliases/:address",
-    authed(({ params }) =>
+      }).pipe(publicly),
+    )
+    .handle("addDomainAlias", ({ params, payload }) =>
       Effect.gen(function* () {
-        const { domain, principal, domains } = yield* adminDomain(params.id!);
+        const { domain, principal, domains } = yield* adminDomain(params.id);
+        // Routing an address to a mailbox is a forwarding-class change (§7.3): fresh step-up.
         yield* requireStepUp("admin");
 
-        if (!(yield* domains.removeAlias(domain.id, principal.userId, params.address!)))
+        return yield* domains.addAlias(domain.id, principal.userId, {
+          localPart: payload.localPart,
+          mailboxId: payload.mailboxId,
+        });
+      }).pipe(publicly),
+    )
+    .handle("removeDomainAlias", ({ params }) =>
+      Effect.gen(function* () {
+        const { domain, principal, domains } = yield* adminDomain(params.id);
+        yield* requireStepUp("admin");
+
+        if (!(yield* domains.removeAlias(domain.id, principal.userId, params.address)))
           return yield* new NotFound({ resource: "alias" });
 
         return { removed: true };
-      }),
-    ),
-  ),
+      }).pipe(publicly),
+    )
 
-  // ---- billing (A02) ----
-  route(
-    "GET",
-    "/v1/billing",
-    authed(({ env, url }) =>
+    // ---- billing (A02) ----
+    .handle("billing", ({ query }) =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
         const principal = yield* requireScope("read");
 
         const orgId =
-          url.searchParams.get("orgId") ??
-          (yield* Effect.promise(() => personalOrgOf(env, principal.userId)));
+          query.orgId ?? (yield* Effect.promise(() => personalOrgOf(env, principal.userId)));
 
         if (!orgId || !principal.organizationIds.includes(orgId))
           return yield* new Forbidden({ reason: "not a member of organization" });
@@ -1107,150 +951,120 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
           ledger: yield* commerce.ledgerFor(orgId),
           plans: Object.values(PLAN_CATALOG),
         };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/billing/checkout",
-    authedBody(
-      CheckoutRequest,
-      ({ env, body }) =>
-        Effect.gen(function* () {
-          const principal = yield* requireUser();
-          const orgId = yield* billingOrgId(env, body.orgId, principal.userId);
-          yield* requireOrgAdminAccess(orgId, "read");
-          const commerce = yield* CommerceService;
+      }).pipe(publicly),
+    )
+    .handle("createCheckout", ({ payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireUser();
+        const orgId = yield* billingOrgId(env, payload.orgId, principal.userId);
+        yield* requireOrgAdminAccess(orgId, "read");
+        const commerce = yield* CommerceService;
 
-          return yield* commerce.createCheckout({
-            purpose: "subscription",
-            plan: body.plan,
-            interval: body.interval,
-            seats: body.seats ?? 1,
-            orgId,
-            userId: principal.userId,
-            returnUrl: `${env.APP_ORIGIN}/settings/billing`,
-          });
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/billing/checkout/:id",
-    authed(({ params, url }) =>
+        return yield* commerce.createCheckout({
+          purpose: "subscription",
+          plan: payload.plan,
+          interval: payload.interval,
+          seats: payload.seats ?? 1,
+          orgId,
+          userId: principal.userId,
+          returnUrl: `${env.APP_ORIGIN}/settings/billing`,
+        });
+      }).pipe(publicly),
+    )
+    .handle("checkoutStatus", ({ params, query }) =>
       Effect.gen(function* () {
         yield* requireScope("read");
         const commerce = yield* CommerceService;
 
-        return yield* commerce.checkoutStatus(params.id!, url.searchParams.get("sig") ?? "");
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/billing/plan",
-    authedBody(
-      CheckoutRequest,
-      ({ env, body }) =>
-        Effect.gen(function* () {
-          const principal = yield* requireUser();
-          const orgId = yield* billingOrgId(env, body.orgId, principal.userId);
-          yield* requireOrgAdminAccess(orgId, "read");
-          yield* requireStepUp("admin");
-          const commerce = yield* CommerceService;
+        return yield* commerce.checkoutStatus(params.id, query.sig ?? "");
+      }).pipe(publicly),
+    )
+    .handle("changePlan", ({ payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireUser();
+        const orgId = yield* billingOrgId(env, payload.orgId, principal.userId);
+        yield* requireOrgAdminAccess(orgId, "read");
+        yield* requireStepUp("admin");
+        const commerce = yield* CommerceService;
 
-          return yield* commerce.requestPlanChange(orgId, principal.userId, {
-            plan: body.plan,
-            interval: body.interval,
-            seats: body.seats ?? 1,
-          });
-        }),
-      { status: 202 },
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/billing/cancel",
-    authedBody(
-      CancelSubscriptionRequest,
-      ({ env, body }) =>
-        Effect.gen(function* () {
-          const principal = yield* requireUser();
-          const orgId = yield* billingOrgId(env, body.orgId, principal.userId);
-          yield* requireOrgAdminAccess(orgId, "read");
-          yield* requireStepUp("admin");
-          const commerce = yield* CommerceService;
+        return yield* commerce.requestPlanChange(orgId, principal.userId, {
+          plan: payload.plan,
+          interval: payload.interval,
+          seats: payload.seats ?? 1,
+        });
+      }).pipe(publicly),
+    )
+    .handle("cancelSubscription", ({ payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireUser();
+        const orgId = yield* billingOrgId(env, payload.orgId, principal.userId);
+        yield* requireOrgAdminAccess(orgId, "read");
+        yield* requireStepUp("admin");
+        const commerce = yield* CommerceService;
 
-          return yield* commerce.requestCancel(orgId, principal.userId, body.atPeriodEnd ?? true);
-        }),
-      { status: 202 },
-    ),
-  ),
+        return yield* commerce.requestCancel(orgId, principal.userId, payload.atPeriodEnd ?? true);
+      }).pipe(publicly),
+    )
 
-  // ---- export, device sessions, closure (A04) ----
-  route(
-    "POST",
-    "/v1/exports",
-    authed(
-      ({ env }) =>
-        Effect.gen(function* () {
-          // A full-account export is bulk access to everything: interactive sessions only (a lapsed
-          // account keeps it, read scope suffices), never agent tokens or support sessions.
-          const principal = yield* requireUser();
-          const exportId = crypto.randomUUID();
-          // Each export is a full copy of every mailbox and calendar kept for a week: one in
-          // flight per user, and a cooldown between requests (claimed atomically in D1).
-          const now = Date.now();
+    // ---- export, device sessions, closure (A04) ----
+    .handle("requestExport", () =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        // A full-account export is bulk access to everything: interactive sessions only (a lapsed
+        // account keeps it, read scope suffices), never agent tokens or support sessions.
+        const principal = yield* requireUser();
+        const exportId = crypto.randomUUID();
+        // Each export is a full copy of every mailbox and calendar kept for a week: one in
+        // flight per user, and a cooldown between requests (claimed atomically in D1).
+        const now = Date.now();
 
-          const claimed = yield* Effect.promise(() =>
-            env.DIRECTORY.prepare(
-              `INSERT INTO account_exports (id, user_id, created_at)
-               SELECT ?, ?, ? WHERE NOT EXISTS (
-                 SELECT 1 FROM account_exports WHERE user_id = ?
-                   AND ((completed_at IS NULL AND created_at > ?) OR created_at > ?))`,
+        const claimed = yield* Effect.promise(() =>
+          env.DIRECTORY.prepare(
+            `INSERT INTO account_exports (id, user_id, created_at)
+             SELECT ?, ?, ? WHERE NOT EXISTS (
+               SELECT 1 FROM account_exports WHERE user_id = ?
+                 AND ((completed_at IS NULL AND created_at > ?) OR created_at > ?))`,
+          )
+            .bind(
+              exportId,
+              principal.userId,
+              now,
+              principal.userId,
+              now - EXPORT_STALE_MS,
+              now - EXPORT_COOLDOWN_MS,
             )
-              .bind(
-                exportId,
-                principal.userId,
-                now,
-                principal.userId,
-                now - EXPORT_STALE_MS,
-                now - EXPORT_COOLDOWN_MS,
-              )
-              .run(),
-          );
+            .run(),
+        );
 
-          if (!claimed.meta.changes)
-            return yield* Effect.fail(
-              new ApiError({
-                code: "rate_limited",
-                message: "an export is already in progress or was requested recently",
-              }),
-            );
-          yield* Effect.promise(() =>
-            env.EXPORT_ACCOUNT.create({
-              id: `exp-${principal.userId}-${exportId}`,
-              params: {
-                v: 1,
-                exportId,
-                userId: principal.userId,
-                mailboxIds: principal.mailboxIds,
-                calendarIds: principal.calendarIds,
-              },
+        if (!claimed.meta.changes)
+          return yield* Effect.fail(
+            new ApiError({
+              code: "rate_limited",
+              message: "an export is already in progress or was requested recently",
             }),
           );
+        yield* Effect.promise(() =>
+          env.EXPORT_ACCOUNT.create({
+            id: `exp-${principal.userId}-${exportId}`,
+            params: {
+              v: 1,
+              exportId,
+              userId: principal.userId,
+              mailboxIds: principal.mailboxIds,
+              calendarIds: principal.calendarIds,
+            },
+          }),
+        );
 
-          return { exportId, status: "queued" };
-        }),
-      { status: 202 },
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/exports/:id",
-    authed(({ params, env }) =>
+        return { exportId, status: "queued" };
+      }).pipe(publicly),
+    )
+    .handle("exportStatus", ({ params }) =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
         const principal = yield* requireUser();
 
         // Instance IDs embed the owner, so one user can never read another's export status.
@@ -1309,40 +1123,11 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
         );
 
         return { ...status, files };
-      }),
-    ),
-  ),
-  // Capability download: the signed, expiring token is the authorization (works for CLI and browsers).
-  route("GET", "/v1/downloads", async (request, _p, env) => {
-    const url = new URL(request.url);
-    const key = url.searchParams.get("key") ?? "";
-
-    if (
-      !key.startsWith("t/") ||
-      !key.includes("/export/") ||
-      !(await verifyDownload(env, key, url.searchParams.get("token") ?? "", Date.now()))
-    ) {
-      return errorResponse("forbidden", "invalid or expired download link");
-    }
-
-    const object = await env.EXPORTS.get(key);
-
-    if (!object) return errorResponse("not_found", "file");
-
-    return new Response(object.body, {
-      headers: {
-        "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
-        "content-disposition": `attachment; filename="${(key.split("/").pop() ?? "export").replace(/[^A-Za-z0-9._-]/g, "_")}"`,
-        "cache-control": "private, no-store",
-        "x-content-type-options": "nosniff",
-      },
-    });
-  }),
-  route(
-    "GET",
-    "/v1/devices",
-    authed(({ env }) =>
+      }).pipe(publicly),
+    )
+    .handle("devices", () =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
         const principal = yield* requireScope("read");
 
         return {
@@ -1350,14 +1135,11 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
             new ControlDeviceAuth(env.DIRECTORY, kernelClock).listSessions(principal.userId),
           ),
         };
-      }),
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/devices/:id",
-    authed(({ params, env }) =>
+      }).pipe(publicly),
+    )
+    .handle("revokeDevice", ({ params }) =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
         // Credential management is for the account holder's own interactive session only.
         const principal = yield* requireUser();
 
@@ -1365,42 +1147,34 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
           closeLiveSockets(env, userId, sessionId),
         );
 
-        const ok = yield* Effect.promise(() =>
-          devices.revokeOwnSession(principal.userId, params.id!),
+        const revoked = yield* Effect.promise(() =>
+          devices.revokeOwnSession(principal.userId, params.id),
         );
 
-        if (!ok) return yield* new NotFound({ resource: "device" });
+        if (!revoked) return yield* new NotFound({ resource: "device" });
 
         return { revoked: true };
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/account/closure-terms",
-    authed(() =>
+      }).pipe(publicly),
+    )
+    .handle("closureTerms", () =>
       Effect.gen(function* () {
         const principal = yield* requireScope("read");
         const commerce = yield* CommerceService;
 
         return yield* commerce.closureTerms(principal.userId);
-      }),
-    ),
-  ),
-  // Closure terms come from the entitlement; an optional forwarding destination is verified by email.
-  route(
-    "POST",
-    "/v1/account/close",
-    authedBody(CloseAccountRequest, ({ env, body }) =>
+      }).pipe(publicly),
+    )
+    .handle("closeAccount", ({ payload }) =>
       Effect.gen(function* () {
+        const { env } = yield* Invocation;
         const principal = yield* requireScope("read");
         const commerce = yield* CommerceService;
         const lifecycle = yield* LifecycleService;
         const terms = yield* commerce.closureTerms(principal.userId);
-        const forwardTo = (body.forwardTo ?? "").trim().toLowerCase();
+        const forwardTo = (payload.forwardTo ?? "").trim().toLowerCase();
 
         const closed = yield* closeOwnAccount({
-          confirmAddress: body.confirmAddress,
+          confirmAddress: payload.confirmAddress,
           reserveAddressDays: terms.reserveAddressDays,
           forwardingDays: terms.forwardingDays,
         });
@@ -1434,59 +1208,45 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
         }
 
         return { ...closed, terms, forwarding };
-      }),
-    ),
-  ),
+      }).pipe(publicly),
+    )
 
-  // ---- platform operator tooling (§10 abuse review, A02 credits, audited support access) ----
-  route(
-    "GET",
-    "/v1/operator/signals",
-    authed(() =>
+    // ---- platform operator tooling (§10 abuse review, A02 credits, audited support access) ----
+    .handle("operatorSignals", () =>
       Effect.gen(function* () {
         yield* requireOperatorAccess();
         const sending = yield* SendingService;
 
         return { items: yield* sending.openSignals() };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/operator/signals/:id/review",
-    authedBody(SignalReviewRequest, ({ params, body }) =>
+      }).pipe(publicly),
+    )
+    .handle("reviewSignal", ({ params, payload }) =>
       Effect.gen(function* () {
         const operator = yield* requireOperatorAccess();
         yield* requireStepUp("admin");
-        const resolution = body.resolution;
+        const resolution = payload.resolution;
         const sending = yield* SendingService;
-        yield* sending.reviewSignal(params.id!, operator.userId, resolution);
+        yield* sending.reviewSignal(params.id, operator.userId, resolution);
 
         return { reviewed: true };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/operator/suspensions",
-    authedBody(
-      SuspensionRequest,
-      ({ body }) =>
-        Effect.gen(function* () {
-          const operator = yield* requireOperatorAccess();
-          yield* requireStepUp("admin");
-          const sending = yield* SendingService;
-          yield* sending.suspend(body.scope, body.key, body.reason || "operator", operator.userId);
+      }).pipe(publicly),
+    )
+    .handle("suspendSending", ({ payload }) =>
+      Effect.gen(function* () {
+        const operator = yield* requireOperatorAccess();
+        yield* requireStepUp("admin");
+        const sending = yield* SendingService;
+        yield* sending.suspend(
+          payload.scope,
+          payload.key,
+          payload.reason || "operator",
+          operator.userId,
+        );
 
-          return { suspended: true };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/operator/suspensions/:scope/:key",
-    authed(({ params }) =>
+        return { suspended: true };
+      }).pipe(publicly),
+    )
+    .handle("liftSuspension", ({ params }) =>
       Effect.gen(function* () {
         const operator = yield* requireOperatorAccess();
         yield* requireStepUp("admin");
@@ -1495,77 +1255,50 @@ export const adminRoutes: ReadonlyArray<Route<CoreEnv>> = [
         if (!SENDING_SCOPES.includes(scope)) return yield* badRequest("invalid scope");
         const sending = yield* SendingService;
 
-        return { lifted: yield* sending.lift(scope, params.key!, operator.userId) };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/operator/suppressions",
-    authedBody(
-      SuppressionRequest,
-      ({ body }) =>
-        Effect.gen(function* () {
-          const operator = yield* requireOperatorAccess();
-          yield* requireStepUp("admin");
-          const sending = yield* SendingService;
-          yield* sending.suppress(body.address, "manual", `operator:${operator.userId}`);
+        return { lifted: yield* sending.lift(scope, params.key, operator.userId) };
+      }).pipe(publicly),
+    )
+    .handle("suppressAddress", ({ payload }) =>
+      Effect.gen(function* () {
+        const operator = yield* requireOperatorAccess();
+        yield* requireStepUp("admin");
+        const sending = yield* SendingService;
+        yield* sending.suppress(payload.address, "manual", `operator:${operator.userId}`);
 
-          return { suppressed: true };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/operator/suppressions/:address",
-    authed(({ params }) =>
+        return { suppressed: true };
+      }).pipe(publicly),
+    )
+    .handle("unsuppressAddress", ({ params }) =>
       Effect.gen(function* () {
         yield* requireOperatorAccess();
         yield* requireStepUp("admin");
         const sending = yield* SendingService;
 
-        return { removed: yield* sending.unsuppress(params.address!) };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/operator/credits",
-    authedBody(
-      CreditRequest,
-      ({ body }) =>
-        Effect.gen(function* () {
-          const operator = yield* requireOperatorAccess();
-          yield* requireStepUp("admin");
-          const commerce = yield* CommerceService;
-          yield* commerce.grantCredit(
-            body.orgId,
-            operator.userId,
-            body.cents,
-            body.reason ?? "goodwill",
-          );
+        return { removed: yield* sending.unsuppress(params.address) };
+      }).pipe(publicly),
+    )
+    .handle("grantCredit", ({ payload }) =>
+      Effect.gen(function* () {
+        const operator = yield* requireOperatorAccess();
+        yield* requireStepUp("admin");
+        const commerce = yield* CommerceService;
+        yield* commerce.grantCredit(
+          payload.orgId,
+          operator.userId,
+          payload.cents,
+          payload.reason ?? "goodwill",
+        );
 
-          return { credited: true };
-        }),
-      { status: 201 },
-    ),
-  ),
-  // Support sessions exist only under an active user grant; every open is audited and time-boxed.
-  route(
-    "POST",
-    "/v1/operator/support-sessions",
-    authedBody(
-      SupportSessionRequest,
-      ({ body }) =>
-        Effect.gen(function* () {
-          const operator = yield* requireOperatorAccess();
-          yield* requireStepUp("admin");
-          const support = yield* SupportService;
+        return { credited: true };
+      }).pipe(publicly),
+    )
+    .handle("openSupportSession", ({ payload }) =>
+      Effect.gen(function* () {
+        const operator = yield* requireOperatorAccess();
+        yield* requireStepUp("admin");
+        const support = yield* SupportService;
 
-          return yield* support.openSession(operator.userId, body.grantId);
-        }),
-      { status: 201 },
+        return yield* support.openSession(operator.userId, payload.grantId);
+      }).pipe(publicly),
     ),
-  ),
-];
+);

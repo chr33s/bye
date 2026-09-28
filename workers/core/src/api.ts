@@ -1,46 +1,66 @@
-import { Effect, Exit } from "effect";
-import {
-  Forbidden,
-  requestAuthLayer,
-  requireMailbox,
-  requireScope,
-  Unauthenticated,
-} from "@bye/application";
+import { Effect, Exit, Layer } from "effect";
+import { HttpRouter } from "effect/unstable/http";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { Forbidden, requestAuthLayer, requireMailbox, requireScope } from "@bye/application";
 import { ControlDirectory } from "@bye/platform-cloudflare";
 import type { CoreEnv } from "./env.ts";
-import { describeError, errorResponse, matchRoute, runHttp, withSecurityHeaders } from "./http.ts";
+import { errorResponse, fetchHandler, runHttp, withSecurityHeaders } from "./http.ts";
+import { ApiPlatformLive, RequestServicesLive, SchemaErrorsLive } from "./httpapi.ts";
+import { CoreApi } from "./spec/index.ts";
 import { handleImageProxy, handleRender } from "./render.ts";
 
-import { identityRoutes } from "./routes/identity.ts";
-import { mailRoutes } from "./routes/mail.ts";
-import { calendarRoutes } from "./routes/calendar.ts";
-import { sharedRoutes } from "./routes/shared.ts";
-import { adminRoutes } from "./routes/admin.ts";
+import { IdentityHandlers } from "./routes/identity.ts";
+import { MailHandlers, mailRoutes } from "./routes/mail.ts";
+import { CalendarHandlers, calendarRoutes } from "./routes/calendar.ts";
+import { SharedHandlers, sharedRoutes } from "./routes/shared.ts";
+import { AdminHandlers, adminRoutes } from "./routes/admin.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { webhookRoutes } from "./routes/webhooks.ts";
-import { newsletterConfigRoutes } from "./routes/newsletter-config.ts";
-import { opsRoutes } from "./routes/ops.ts";
+import { NewsletterConfigHandlers } from "./routes/newsletter-config.ts";
+import { OpsHandlers, opsRoutes } from "./routes/ops.ts";
 import { probeRoutes } from "./routes/probe.ts";
 import { discoveryRoutes } from "./routes/discovery.ts";
 import { authenticate, bearer, requestId, serviceDomain } from "./routes/common.ts";
 
-// HTTP API (§8). Route tables live in ./routes/*; this module dispatches and owns the render-origin split.
+// HTTP API (§8). The conventional JSON API is one HttpApi (./spec/*, handlers in ./routes/*); the
+// rest are native routes (`NATIVE_ROUTES`). This module dispatches both through one HttpRouter and
+// owns the render-origin split. `API_SURFACE` is every method and path either answers.
 
 export { serviceDomain };
 
-export const ALL_ROUTES = [
-  ...identityRoutes,
+/** Routes that aren't plain JSON behind a credential: OAuth, WebAuthn, webhooks, files, tokens. */
+export const NATIVE_ROUTES = [
   ...mailRoutes,
   ...calendarRoutes,
   ...sharedRoutes,
   ...adminRoutes,
   ...authRoutes,
   ...webhookRoutes,
-  ...newsletterConfigRoutes,
   ...opsRoutes,
   ...probeRoutes,
   ...discoveryRoutes,
 ];
+
+const ApiLive = HttpApiBuilder.layer(CoreApi).pipe(
+  Layer.provide([
+    IdentityHandlers,
+    MailHandlers,
+    CalendarHandlers,
+    SharedHandlers,
+    AdminHandlers,
+    NewsletterConfigHandlers,
+    OpsHandlers,
+  ]),
+  Layer.provide([RequestServicesLive, SchemaErrorsLive, ApiPlatformLive]),
+);
+
+/** Every method and path the Worker answers: the HttpApi endpoints and the native routes. */
+export const API_SURFACE = [
+  ...Object.values(CoreApi.groups).flatMap((group) => Object.values(group.endpoints)),
+  ...NATIVE_ROUTES,
+];
+
+const dispatch = fetchHandler(Layer.merge(HttpRouter.addAll(NATIVE_ROUTES), ApiLive), API_SURFACE);
 
 const safeDecode = (value: string): string | null => {
   try {
@@ -188,39 +208,7 @@ const routeFetch = async (
     }
   }
 
-  let match: ReturnType<typeof matchRoute<CoreEnv>>;
-
-  try {
-    match = matchRoute(ALL_ROUTES, request.method, url.pathname);
-  } catch {
-    return errorResponse("bad_request", "malformed path");
-  }
-
-  if (match === "method-not-allowed") return errorResponse("bad_request", "method not allowed");
-
-  if (!match) return errorResponse("not_found", "not found");
-
-  try {
-    return await match.route.handler(request, match.params, env, ctx);
-  } catch (error) {
-    if (error instanceof Unauthenticated)
-      return errorResponse("unauthenticated", "unauthenticated");
-    const tag = (error as { _tag?: string })._tag;
-
-    if (tag === "PayloadTooLarge") return errorResponse("payload_too_large", "payload too large");
-
-    if (tag === "BadRequest") return errorResponse("bad_request", "invalid JSON");
-    console.error(
-      JSON.stringify({
-        level: "error",
-        op: "http",
-        path: match.route.pattern.source,
-        error: describeError(error),
-      }),
-    );
-
-    return errorResponse("internal", "internal error");
-  }
+  return dispatch(request, env, ctx);
 };
 
 export { ControlDirectory };

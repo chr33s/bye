@@ -1,0 +1,27 @@
+[
+  {
+    "items": []
+  },
+  {
+    "items": [
+      {
+        "userId": "wtl",
+        "role": "member",
+        "addedAt": -1.7976931348623143e308
+      },
+      {
+        "userId": "GFJ~",
+        "role": "owner",
+        "addedAt": 4.576647824861832e272
+      },
+      {
+        "userId": "0",
+        "role": "owner",
+        "addedAt": -3.5e-323
+      }
+    ]
+  },
+  {
+    "items": []
+  }
+]

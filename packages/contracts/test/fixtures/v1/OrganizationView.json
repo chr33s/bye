@@ -1,0 +1,43 @@
+[
+  {
+    "id": "\u0000",
+    "name": "\n",
+    "kind": "personal",
+    "seatLimit": -1.1083715951689188e186,
+    "reassignmentPolicy": "reassign-to-admin",
+    "role": "member",
+    "entitlement": {
+      "plan": "",
+      "status": "past_due",
+      "state": "grace",
+      "seats": -3.260559357601369e257,
+      "periodEnd": -2.2874736393233672e45,
+      "trialEndsAt": null
+    }
+  },
+  {
+    "id": "\ud800",
+    "name": "",
+    "kind": "personal",
+    "seatLimit": 2.0447379243107594e-259,
+    "reassignmentPolicy": "retain",
+    "role": "owner",
+    "entitlement": {
+      "plan": "",
+      "status": "active",
+      "state": "entitled",
+      "seats": -3.4238890174616375e-246,
+      "periodEnd": null,
+      "trialEndsAt": 1.673303874159744e96
+    }
+  },
+  {
+    "id": "😀",
+    "name": "\n",
+    "kind": "family",
+    "seatLimit": 3.5e-323,
+    "reassignmentPolicy": "retain",
+    "role": "member",
+    "entitlement": null
+  }
+]

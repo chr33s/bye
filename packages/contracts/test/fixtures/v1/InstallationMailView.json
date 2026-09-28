@@ -1,0 +1,30 @@
+[
+  {
+    "zone": null,
+    "automation": "zone-api",
+    "tokenConfigured": false,
+    "canSetup": true,
+    "domain": {
+      "id": "",
+      "orgId": "\u0000",
+      "state": ""
+    },
+    "incomingMail": ""
+  },
+  {
+    "zone": null,
+    "automation": "zone-api",
+    "tokenConfigured": true,
+    "canSetup": false,
+    "domain": null,
+    "incomingMail": ""
+  },
+  {
+    "zone": null,
+    "automation": "zone-api",
+    "tokenConfigured": false,
+    "canSetup": true,
+    "domain": null,
+    "incomingMail": "1"
+  }
+]

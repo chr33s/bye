@@ -80,7 +80,7 @@ export const authorizationServerMetadata = (env: Pick<CoreEnv, "APP_ORIGIN">) =>
 // Public and credential-free: clients probe without cookies, so the documents may be cached briefly.
 const PUBLIC = { "cache-control": "public, max-age=300", "access-control-allow-origin": "*" };
 
-export const discoveryRoutes: ReadonlyArray<Route<CoreEnv>> = [
+export const discoveryRoutes: ReadonlyArray<Route> = [
   route("GET", INSTANCE_DOCUMENT_PATH, async (_r, _p, env) =>
     json(instanceDocument(env), 200, PUBLIC),
   ),

@@ -1,0 +1,68 @@
+[
+  {
+    "items": [
+      {
+        "id": "\t",
+        "name": "\udc00",
+        "color": "",
+        "kind": "\udc00",
+        "visible": false,
+        "revision": 1.0325198790279617e-209,
+        "role": "owner"
+      },
+      {
+        "id": "L[6",
+        "name": "94Pp",
+        "color": "\udc00",
+        "kind": "\u0000",
+        "visible": false,
+        "revision": 4.5239240464871276e-274,
+        "role": "write"
+      },
+      {
+        "id": "}95",
+        "name": "",
+        "color": "",
+        "kind": "\udc00",
+        "visible": false,
+        "revision": 2.596501430500835e-193,
+        "role": "read"
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": "",
+        "name": "-1",
+        "color": "😀",
+        "kind": "",
+        "visible": false,
+        "revision": -5.4e-323,
+        "role": "read"
+      },
+      {
+        "id": "\t",
+        "name": "",
+        "color": "",
+        "kind": "A&lR",
+        "visible": true,
+        "revision": 5e-324,
+        "role": "write"
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": "😀",
+        "name": "y|XM",
+        "color": "5",
+        "kind": "\u0000",
+        "visible": false,
+        "revision": -2.6646323732750066e87,
+        "role": "read"
+      }
+    ]
+  }
+]

@@ -1,0 +1,80 @@
+[
+  {
+    "op": {
+      "opId": "",
+      "publicationId": null,
+      "kind": "create",
+      "state": "in-flight",
+      "attempts": 2.8009658323637815e28,
+      "firstAttemptAt": 5.78053139799071e-61,
+      "providerRef": "\ud800",
+      "detail": null
+    },
+    "publication": {
+      "id": "\t",
+      "postId": "\udc00",
+      "revision": 8.4e-323,
+      "provider": "e",
+      "account": "iX",
+      "configVersion": "",
+      "sender": "",
+      "subject": "-1",
+      "fingerprint": "",
+      "recipients": 9.25270747713386e247,
+      "scheduledAt": null,
+      "expiresAt": -4.8616650366833543e-126,
+      "state": "failed",
+      "providerRef": null,
+      "observed": "cancelled",
+      "cancel": {
+        "_tag": "Unsupported",
+        "detail": "-1"
+      },
+      "detail": null
+    }
+  },
+  {
+    "op": {
+      "opId": "",
+      "publicationId": "9O.",
+      "kind": "create",
+      "state": "unknown",
+      "attempts": 1.7976931348623127e308,
+      "firstAttemptAt": null,
+      "providerRef": null,
+      "detail": "0"
+    },
+    "publication": {
+      "id": "\t",
+      "postId": "_T%O",
+      "revision": 8e-323,
+      "provider": "\u0000",
+      "account": "\ud800",
+      "configVersion": "",
+      "sender": "-1",
+      "subject": "o",
+      "fingerprint": "",
+      "recipients": 1.7976931348623147e308,
+      "scheduledAt": 1.7976931348623155e308,
+      "expiresAt": 3.055954009264428e181,
+      "state": "approved",
+      "providerRef": null,
+      "observed": "queued",
+      "cancel": null,
+      "detail": "iX0\""
+    }
+  },
+  {
+    "op": {
+      "opId": "",
+      "publicationId": null,
+      "kind": "send",
+      "state": "rejected",
+      "attempts": 4.747110473697787e101,
+      "firstAttemptAt": -3.741454804070837e-75,
+      "providerRef": null,
+      "detail": null
+    },
+    "publication": null
+  }
+]

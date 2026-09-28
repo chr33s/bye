@@ -1,0 +1,20 @@
+[
+  {
+    "address": " ",
+    "mailboxId": "0",
+    "kind": "w*8k",
+    "disabled": false
+  },
+  {
+    "address": "\udc00",
+    "mailboxId": "",
+    "kind": "T",
+    "disabled": false
+  },
+  {
+    "address": "\udc00",
+    "mailboxId": "0",
+    "kind": "F",
+    "disabled": false
+  }
+]

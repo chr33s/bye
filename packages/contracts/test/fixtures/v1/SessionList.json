@@ -1,0 +1,48 @@
+[
+  {
+    "items": [
+      {
+        "id": "\udc00",
+        "device": "\"0",
+        "createdAt": 13,
+        "lastSeenAt": 14,
+        "current": false
+      },
+      {
+        "id": "\n",
+        "device": "Z2F#",
+        "createdAt": 7,
+        "lastSeenAt": 3,
+        "current": true
+      },
+      {
+        "id": "q",
+        "device": "G,^",
+        "createdAt": 15,
+        "lastSeenAt": 15,
+        "current": true
+      },
+      {
+        "id": "m-ZR",
+        "device": "\ud800",
+        "createdAt": 3,
+        "lastSeenAt": 13,
+        "current": false
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": "😀",
+        "device": "\t",
+        "createdAt": 14,
+        "lastSeenAt": 1,
+        "current": true
+      }
+    ]
+  },
+  {
+    "items": []
+  }
+]

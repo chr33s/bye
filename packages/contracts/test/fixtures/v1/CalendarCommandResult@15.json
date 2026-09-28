@@ -1,0 +1,13 @@
+[
+  {
+    "firstWeekday": 2e-323,
+    "hour12": false,
+    "timeZone": "",
+    "lastView": "month",
+    "nightHoursCollapsed": false,
+    "waking": {
+      "startMinute": 8e-323,
+      "endMinute": -1.4334746191855085e25
+    }
+  }
+]

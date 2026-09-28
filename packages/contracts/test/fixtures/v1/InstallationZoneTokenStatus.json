@@ -1,0 +1,14 @@
+[
+  {
+    "automation": "manual-records",
+    "tokenConfigured": true
+  },
+  {
+    "automation": "zone-api",
+    "tokenConfigured": false
+  },
+  {
+    "automation": "zone-api",
+    "tokenConfigured": false
+  }
+]

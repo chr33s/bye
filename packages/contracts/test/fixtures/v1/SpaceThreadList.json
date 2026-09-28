@@ -1,0 +1,73 @@
+[
+  {
+    "items": [
+      {
+        "id": "-1",
+        "subject": "😀",
+        "includeFuture": false,
+        "createdAt": 2.5e-323,
+        "messages": -1.608016778363842e23
+      },
+      {
+        "id": "3xsL",
+        "subject": "0",
+        "includeFuture": false,
+        "createdAt": -1.7976931348623147e308,
+        "messages": -5e-323
+      }
+    ],
+    "pendingPropagation": -3.601312926384415e-77
+  },
+  {
+    "items": [
+      {
+        "id": " ",
+        "subject": "\t",
+        "includeFuture": false,
+        "createdAt": -1.7976931348623157e308,
+        "messages": -2.658663447635167e-90
+      },
+      {
+        "id": "X]iU",
+        "subject": "L!s^",
+        "includeFuture": true,
+        "createdAt": 2.1313758335295225e62,
+        "messages": 9e-323
+      },
+      {
+        "id": "9$",
+        "subject": "",
+        "includeFuture": true,
+        "createdAt": 4.325632414828307e293,
+        "messages": -5.066604188204564e-74
+      },
+      {
+        "id": "-1",
+        "subject": "",
+        "includeFuture": false,
+        "createdAt": 6.4e-323,
+        "messages": -8e-323
+      }
+    ],
+    "pendingPropagation": -6.153113231633953e-40
+  },
+  {
+    "items": [
+      {
+        "id": "\ud800",
+        "subject": "kyy&",
+        "includeFuture": false,
+        "createdAt": -9.763332254289578e306,
+        "messages": -8e-323
+      },
+      {
+        "id": "😀",
+        "subject": "\u0000",
+        "includeFuture": false,
+        "createdAt": 1.3908937016254793e-61,
+        "messages": 9.4e-323
+      }
+    ],
+    "pendingPropagation": -7e-323
+  }
+]

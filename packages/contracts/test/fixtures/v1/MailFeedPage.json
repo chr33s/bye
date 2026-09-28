@@ -1,0 +1,168 @@
+[
+  {
+    "items": [],
+    "nextCursor": "\ud800",
+    "boundary": 5.4e-323,
+    "position": null,
+    "previousVisitAt": 5.4e-323
+  },
+  {
+    "items": [
+      {
+        "thread": {
+          "threadId": "U98",
+          "subject": "| 3l",
+          "originalSubject": "0",
+          "sender": "0",
+          "destination": "feed",
+          "disposition": "spam",
+          "quarantined": true,
+          "bundleKey": "😀",
+          "bundleCount": 1,
+          "newForYou": true,
+          "revision": 0,
+          "seenRevision": 1,
+          "lastActivityAt": 0,
+          "messageCount": 14,
+          "attention": {
+            "replyLater": true,
+            "setAside": true,
+            "unfollowed": true,
+            "bubble": {
+              "_tag": "Scheduled",
+              "at": 1.5892613192540916e99,
+              "generation": 15,
+              "condition": "if-no-reply"
+            }
+          },
+          "labels": ["😀", "", "3", "\ud800"],
+          "mergedInto": "\t",
+          "newSinceVisit": false
+        },
+        "latest": {
+          "deliveryId": "ub7",
+          "from": null,
+          "date": 5e-324,
+          "subject": " ",
+          "renderUrl": "M"
+        }
+      },
+      {
+        "thread": {
+          "threadId": "w_",
+          "subject": "😀",
+          "originalSubject": "",
+          "sender": "\n",
+          "destination": "paper-trail",
+          "disposition": "screening",
+          "quarantined": true,
+          "bundleKey": null,
+          "bundleCount": 12,
+          "newForYou": true,
+          "revision": 13,
+          "seenRevision": 10,
+          "lastActivityAt": 0,
+          "messageCount": 1,
+          "attention": {
+            "replyLater": false,
+            "setAside": true,
+            "unfollowed": true,
+            "bubble": {
+              "_tag": "None"
+            }
+          },
+          "labels": ["tdH'", "😀", "|XS", ""],
+          "mergedInto": null,
+          "newSinceVisit": false
+        },
+        "latest": null
+      },
+      {
+        "thread": {
+          "threadId": "N",
+          "subject": "9[lW",
+          "originalSubject": "Y7`S",
+          "sender": "",
+          "destination": "feed",
+          "disposition": "screened-out",
+          "quarantined": false,
+          "bundleKey": "",
+          "bundleCount": 13,
+          "newForYou": false,
+          "revision": 12,
+          "seenRevision": 6,
+          "lastActivityAt": 1.797693134862315e308,
+          "messageCount": 11,
+          "attention": {
+            "replyLater": false,
+            "setAside": false,
+            "unfollowed": false,
+            "bubble": {
+              "_tag": "Pinned"
+            }
+          },
+          "labels": [" ", "n:+", "0Me5", "-1"],
+          "mergedInto": "😀",
+          "newSinceVisit": true
+        },
+        "latest": {
+          "deliveryId": "\ud800",
+          "from": null,
+          "date": -1.792279292758124e-169,
+          "subject": "d}Tx",
+          "renderUrl": "\t"
+        }
+      },
+      {
+        "thread": {
+          "threadId": "hB0H",
+          "subject": "\u0000",
+          "originalSubject": "😀",
+          "sender": "",
+          "destination": "feed",
+          "disposition": "active",
+          "quarantined": false,
+          "bundleKey": "",
+          "bundleCount": 10,
+          "newForYou": false,
+          "revision": 14,
+          "seenRevision": 2,
+          "lastActivityAt": 3.968356682403337e294,
+          "messageCount": 0,
+          "attention": {
+            "replyLater": false,
+            "setAside": false,
+            "unfollowed": false,
+            "bubble": {
+              "_tag": "Scheduled",
+              "at": 1.5642394970168222e94,
+              "generation": 9,
+              "condition": "always"
+            }
+          },
+          "labels": ["&ae|", ""],
+          "mergedInto": "L:hu",
+          "newSinceVisit": true
+        },
+        "latest": {
+          "deliveryId": "0",
+          "from": false,
+          "date": -5.4e-323,
+          "subject": "\udc00",
+          "renderUrl": "\udc00"
+        }
+      }
+    ],
+    "nextCursor": null,
+    "boundary": -1.5e-323,
+    "position": "",
+    "previousVisitAt": -3.6281376999602355e39
+  },
+  {
+    "items": [],
+    "nextCursor": null,
+    "boundary": -1.7976931348623123e308,
+    "position": null,
+    "previousVisitAt": -1.3333952221838915e258
+  }
+]

@@ -1,0 +1,91 @@
+[
+  {
+    "items": [
+      {
+        "id": "\u0000",
+        "clientId": "",
+        "deviceName": "\udc00",
+        "createdAt": 9.671660753953831e-32,
+        "lastUsedAt": 1.858142256040779e146
+      },
+      {
+        "id": "-1",
+        "clientId": "7=}0",
+        "deviceName": "",
+        "createdAt": -2.6094040910681385e-307,
+        "lastUsedAt": 5.906197522330581e137
+      },
+      {
+        "id": "\udc00",
+        "clientId": "+\"",
+        "deviceName": "-1",
+        "createdAt": -5.30743775657683e-199,
+        "lastUsedAt": -2.903938487621327e66
+      },
+      {
+        "id": "",
+        "clientId": "1%1.",
+        "deviceName": "-1",
+        "createdAt": 6.076680854983021e-13,
+        "lastUsedAt": 0
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": " ",
+        "clientId": "",
+        "deviceName": "\t",
+        "createdAt": -1.193302926235034e190,
+        "lastUsedAt": -8e-323
+      },
+      {
+        "id": "",
+        "clientId": "\n",
+        "deviceName": "",
+        "createdAt": 7.4e-323,
+        "lastUsedAt": 1.797693134862314e308
+      },
+      {
+        "id": "\n",
+        "clientId": "Hj?l",
+        "deviceName": "",
+        "createdAt": 6.4e-323,
+        "lastUsedAt": 5.24719131319431e-177
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": "FP=c",
+        "clientId": "",
+        "deviceName": "",
+        "createdAt": -1.0111665868724309e299,
+        "lastUsedAt": -3.501645297678934e-238
+      },
+      {
+        "id": "aPpM",
+        "clientId": "",
+        "deviceName": " ",
+        "createdAt": 6.4e-323,
+        "lastUsedAt": -1e-323
+      },
+      {
+        "id": " ",
+        "clientId": "\ud800",
+        "deviceName": "\udc00",
+        "createdAt": -4.8532883979700695e237,
+        "lastUsedAt": -3.3143604945435325e172
+      },
+      {
+        "id": "",
+        "clientId": "+",
+        "deviceName": "0",
+        "createdAt": 1.4362799664097613e207,
+        "lastUsedAt": 5.2021699665444794e60
+      }
+    ]
+  }
+]

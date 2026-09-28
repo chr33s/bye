@@ -1,0 +1,61 @@
+[
+  {
+    "items": [
+      {
+        "id": "\n",
+        "label": "",
+        "startedAt": 2.3938856896742117e26,
+        "source": "timer"
+      },
+      {
+        "id": "@3HV",
+        "label": "\t",
+        "startedAt": 1.2993375410181901e-135,
+        "source": "manual"
+      },
+      {
+        "id": "\ud800",
+        "label": "",
+        "startedAt": -8.4e-323,
+        "source": "manual"
+      },
+      {
+        "id": "C",
+        "label": "HUP",
+        "startedAt": 4.721243783573011e-165,
+        "source": "manual"
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": "\ud800",
+        "label": "\n",
+        "startedAt": 4e-323,
+        "source": "timer"
+      },
+      {
+        "id": "",
+        "label": "\u0000",
+        "startedAt": 5.4e-323,
+        "source": "timer"
+      },
+      {
+        "id": "0",
+        "label": "\u0000",
+        "startedAt": -2e-323,
+        "source": "timer"
+      },
+      {
+        "id": "6",
+        "label": " ",
+        "startedAt": -3.941929153372424e289,
+        "source": "timer"
+      }
+    ]
+  },
+  {
+    "items": []
+  }
+]

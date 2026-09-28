@@ -1,0 +1,238 @@
+[
+  {
+    "capturedAt": 2e-323,
+    "mx": [
+      {
+        "type": "&V(b",
+        "name": "*e1",
+        "content": " `{#",
+        "priority": -4.008308273770066e-16
+      },
+      {
+        "type": "~",
+        "name": "\n",
+        "content": "r!o7"
+      }
+    ],
+    "spf": [
+      {
+        "type": "|",
+        "name": "",
+        "content": "0"
+      },
+      {
+        "type": "",
+        "name": "\ud800",
+        "content": ""
+      },
+      {
+        "type": "}fJ",
+        "name": "-1",
+        "content": "\u0000"
+      },
+      {
+        "type": "&x G",
+        "name": "\ud800",
+        "content": "s'"
+      }
+    ],
+    "dkim": [
+      {
+        "type": "😀",
+        "name": "BmX)",
+        "content": "",
+        "priority": -5e-324
+      },
+      {
+        "type": "",
+        "name": "-1",
+        "content": "\ud800"
+      }
+    ],
+    "dmarc": [],
+    "routing": {
+      "enabled": false,
+      "catchAll": {
+        "enabled": true,
+        "name": "",
+        "matchers": [],
+        "actions": []
+      },
+      "rules": []
+    }
+  },
+  {
+    "capturedAt": 2.1729457160865538e197,
+    "mx": [
+      {
+        "type": "",
+        "name": "",
+        "content": "😀",
+        "priority": 2.5e-323
+      }
+    ],
+    "spf": [
+      {
+        "type": "\ud800",
+        "name": "3U%w",
+        "content": " ",
+        "priority": -1.7976931348623141e308
+      },
+      {
+        "type": "\udc00",
+        "name": "U",
+        "content": "4^5P"
+      },
+      {
+        "type": " ",
+        "name": "\t",
+        "content": "-1",
+        "id": "0"
+      },
+      {
+        "type": "\ud800",
+        "name": "",
+        "content": ""
+      }
+    ],
+    "dkim": [
+      {
+        "type": "{Nv",
+        "name": "\ud800",
+        "content": ""
+      },
+      {
+        "type": "\u0000",
+        "name": "\t",
+        "content": "fcix"
+      },
+      {
+        "type": "Kc-0",
+        "name": "-1",
+        "content": "\u0000"
+      },
+      {
+        "type": "",
+        "name": "\n",
+        "content": "\n"
+      }
+    ],
+    "dmarc": [
+      {
+        "type": "",
+        "name": "W",
+        "content": "\n"
+      },
+      {
+        "type": "\u0000",
+        "name": "\ud800",
+        "content": "😀"
+      },
+      {
+        "type": "",
+        "name": ">&",
+        "content": "E^~k"
+      },
+      {
+        "type": " ",
+        "name": "",
+        "content": "",
+        "priority": -1.7976931348623143e308
+      }
+    ],
+    "routing": {
+      "enabled": true,
+      "catchAll": {
+        "enabled": false,
+        "name": "😀",
+        "matchers": [
+          {
+            "type": "-1",
+            "field": "😀",
+            "value": "VNE"
+          },
+          {
+            "type": "0",
+            "value": "\ud800"
+          },
+          {
+            "type": "\\"
+          },
+          {
+            "type": "q|]"
+          }
+        ],
+        "actions": [
+          {
+            "type": "vR%."
+          }
+        ]
+      },
+      "rules": [
+        {
+          "enabled": false,
+          "matchers": [],
+          "actions": []
+        },
+        {
+          "enabled": true,
+          "name": "\\R%>",
+          "matchers": [
+            {
+              "type": "",
+              "value": ""
+            },
+            {
+              "type": "/",
+              "field": "GY"
+            }
+          ],
+          "actions": [
+            {
+              "type": "\udc00"
+            },
+            {
+              "type": "\ud800"
+            },
+            {
+              "type": "\udc00"
+            },
+            {
+              "type": ""
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "capturedAt": 1.0987501317363389e-111,
+    "mx": [
+      {
+        "type": "'wIP",
+        "name": "",
+        "content": "mc,",
+        "id": "😀"
+      },
+      {
+        "type": "iyp(",
+        "name": "GW1",
+        "content": "c&4"
+      },
+      {
+        "type": "",
+        "name": "\t",
+        "content": "\ud800"
+      },
+      {
+        "type": "\n",
+        "name": "3Jp",
+        "content": "-1"
+      }
+    ],
+    "spf": [],
+    "dkim": [],
+    "dmarc": [],
+    "routing": null
+  }
+]

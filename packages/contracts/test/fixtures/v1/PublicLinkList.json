@@ -1,0 +1,80 @@
+[
+  {
+    "items": [
+      {
+        "id": "0",
+        "includeFuture": true,
+        "createdAt": 2.259650337025223e-204,
+        "expiresAt": null
+      },
+      {
+        "id": "\udc00",
+        "includeFuture": true,
+        "createdAt": -7.4e-323,
+        "expiresAt": 2.4160717132688373e62
+      },
+      {
+        "id": "F",
+        "includeFuture": false,
+        "createdAt": 2.1214336936672215e-183,
+        "expiresAt": null
+      },
+      {
+        "id": "\ud800",
+        "includeFuture": true,
+        "createdAt": 1.7976931348623135e308,
+        "expiresAt": null
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": "0",
+        "includeFuture": false,
+        "createdAt": -1.7976931348623121e308,
+        "expiresAt": 1.7976931348623145e308
+      },
+      {
+        "id": "9JTj",
+        "includeFuture": true,
+        "createdAt": 7.818736382693814e-35,
+        "expiresAt": 7e-323
+      },
+      {
+        "id": "-1",
+        "includeFuture": false,
+        "createdAt": 5.4e-323,
+        "expiresAt": null
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": "nz",
+        "includeFuture": false,
+        "createdAt": -3.418367248826163e-220,
+        "expiresAt": null
+      },
+      {
+        "id": "\udc00",
+        "includeFuture": false,
+        "createdAt": 4.2309027652439454e-305,
+        "expiresAt": null
+      },
+      {
+        "id": "\n",
+        "includeFuture": false,
+        "createdAt": 1.7976931348623135e308,
+        "expiresAt": 3.5e-323
+      },
+      {
+        "id": "",
+        "includeFuture": false,
+        "createdAt": 1.7976931348623153e308,
+        "expiresAt": 1e-323
+      }
+    ]
+  }
+]

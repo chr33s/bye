@@ -1,0 +1,35 @@
+[
+  {
+    "firstWeekday": -7.232898457622623e-209,
+    "hour12": true,
+    "timeZone": "0",
+    "lastView": "week",
+    "nightHoursCollapsed": true,
+    "waking": {
+      "startMinute": -2e-323,
+      "endMinute": 1.769752098977325e87
+    }
+  },
+  {
+    "firstWeekday": 6e-323,
+    "hour12": false,
+    "timeZone": "Uj7",
+    "lastView": "month",
+    "nightHoursCollapsed": false,
+    "waking": {
+      "startMinute": -6e-323,
+      "endMinute": -1.716708693761027e76
+    }
+  },
+  {
+    "firstWeekday": 3.0346309272554847e251,
+    "hour12": true,
+    "timeZone": "\n",
+    "lastView": "day",
+    "nightHoursCollapsed": false,
+    "waking": {
+      "startMinute": 6e-323,
+      "endMinute": 1.8900725666863512e51
+    }
+  }
+]

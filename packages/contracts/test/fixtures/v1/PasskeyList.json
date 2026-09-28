@@ -1,0 +1,36 @@
+[
+  {
+    "items": [
+      {
+        "id": "\ud800",
+        "label": "\udc00",
+        "createdAt": -3.618185268968035e-7,
+        "lastUsedAt": 1.337932391847859e-84
+      },
+      {
+        "id": "",
+        "label": "\n",
+        "createdAt": -1.797693134862315e308,
+        "lastUsedAt": null
+      },
+      {
+        "id": "!",
+        "label": "\u0000",
+        "createdAt": -5.715645748460962e278,
+        "lastUsedAt": null
+      },
+      {
+        "id": "\t",
+        "label": "0",
+        "createdAt": 1.3347834693658342e257,
+        "lastUsedAt": null
+      }
+    ]
+  },
+  {
+    "items": []
+  },
+  {
+    "items": []
+  }
+]

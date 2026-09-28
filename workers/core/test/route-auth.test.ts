@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ALL_ROUTES, handleFetch } from "../src/api.ts";
+import { API_SURFACE, handleFetch } from "../src/api.ts";
+import { RequestServices, SchemaErrors } from "../src/httpapi.ts";
+import { CoreApi } from "../src/spec/index.ts";
 import { executionContext, makeHarness } from "./harness.ts";
 
 // P0.6a (spec.md §13.3): every /v1 route refuses a caller without credentials before it
@@ -18,11 +20,20 @@ const PUBLIC_V1 = new Set<string>([
 const ctx = executionContext;
 
 /** A concrete path for a route pattern: each `:param` becomes a plausible, well-formed ID. */
-const samplePath = (pattern: RegExp): string =>
-  pattern.source.slice(1, -1).replaceAll("([^/]+)", "x_1").replaceAll("\\/", "/");
+const samplePath = (path: string): string => path.replace(/:[a-zA-Z]+/g, "x_1");
 
 describe("[A03] route authorization", () => {
-  const v1 = ALL_ROUTES.filter((r) => r.pattern.source.startsWith("^\\/v1\\/"));
+  const v1 = API_SURFACE.filter((r) => r.path.startsWith("/v1/"));
+
+  it("every HttpApi endpoint authenticates and maps schema errors", () => {
+    // Group middleware applies only to endpoints added before it: an endpoint added after
+    // `.middleware(...)` would run unauthenticated.
+    for (const group of Object.values(CoreApi.groups))
+      for (const endpoint of Object.values(group.endpoints))
+        expect([...endpoint.middlewares], `${endpoint.method} ${endpoint.path}`).toEqual(
+          expect.arrayContaining([RequestServices, SchemaErrors]),
+        );
+  });
 
   it("enumerates the /v1 surface", () => {
     expect(v1.length).toBeGreaterThan(50);
@@ -33,7 +44,7 @@ describe("[A03] route authorization", () => {
     const open: Array<string> = [];
 
     for (const r of v1) {
-      const path = samplePath(r.pattern);
+      const path = samplePath(r.path);
       const key = `${r.method} ${path}`;
 
       const requestHeaders = new Headers({ "content-type": "application/json" });

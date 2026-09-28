@@ -109,7 +109,7 @@ const AUTHORIZE_PARAMS: ReadonlySet<string> = new Set([
   "device_name",
 ]);
 
-export const authRoutes: ReadonlyArray<Route<CoreEnv>> = [
+export const authRoutes: ReadonlyArray<Route> = [
   route("POST", "/auth/challenge", async (request, _p, env) => {
     if (!(await allowedForIp(env, request, "auth")))
       return errorResponse("rate_limited", "slow down");

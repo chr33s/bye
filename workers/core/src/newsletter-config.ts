@@ -8,6 +8,7 @@ import {
   sealWithKey,
   type VersionedKeys,
 } from "@bye/platform-cloudflare";
+import type { NewsletterConfigView } from "@bye/contracts";
 import type { CoreEnv } from "./env.ts";
 
 // Runtime newsletter provider configuration (infra/onboarding/spec.md §21–§28). An instance operator
@@ -19,17 +20,7 @@ import type { CoreEnv } from "./env.ts";
 
 export const NEWSLETTER_WEBHOOK_PATH = "/webhooks/newsletter";
 
-export type NewsletterConfigStatus = "unconfigured" | "ready" | "blocked" | "needs-attention";
-
-/** What any signed-in user may learn about the instance's newsletter provider. No secrets. */
-export interface NewsletterConfigView {
-  readonly provider: "resend";
-  readonly status: NewsletterConfigStatus;
-  readonly qualified: boolean;
-  readonly canConfigure: boolean;
-  readonly configuredAt?: number;
-  readonly detail?: string;
-}
+export type NewsletterConfigStatus = NewsletterConfigView["status"];
 
 /** Decrypted runtime credentials: only ever held for the duration of one request or task. */
 export interface RuntimeNewsletterCredentials {

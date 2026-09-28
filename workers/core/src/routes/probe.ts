@@ -37,7 +37,7 @@ const guarded =
     return handler(request, id, env);
   };
 
-export const probeRoutes: ReadonlyArray<Route<CoreEnv>> = [
+export const probeRoutes: ReadonlyArray<Route> = [
   route(
     "POST",
     "/__probe/queue/:id",

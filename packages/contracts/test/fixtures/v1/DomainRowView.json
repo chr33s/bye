@@ -1,0 +1,29 @@
+[
+  {
+    "id": "XdfR",
+    "org_id": "a$",
+    "name": "\u0000",
+    "state": "ownership-proven",
+    "verification_token": " ",
+    "plus_addressing": -8.586990974220423e-17,
+    "catch_all_mailbox_id": "1)S9"
+  },
+  {
+    "id": "\ud800",
+    "org_id": "",
+    "name": "}SD",
+    "state": "outbound-tested",
+    "verification_token": " ",
+    "plus_addressing": 1.694352781577051e141,
+    "catch_all_mailbox_id": ""
+  },
+  {
+    "id": "-1",
+    "org_id": "\t",
+    "name": "0",
+    "state": "requested",
+    "verification_token": "",
+    "plus_addressing": 1.21236803022404e-166,
+    "catch_all_mailbox_id": ""
+  }
+]

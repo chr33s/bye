@@ -1,0 +1,17 @@
+[
+  {
+    "imported": -3e-323,
+    "updated": 1.7976931348623143e308,
+    "warnings": ["\n", "", "0", " "]
+  },
+  {
+    "imported": -2.5e-323,
+    "updated": 4e-323,
+    "warnings": []
+  },
+  {
+    "imported": 1.7976931348623133e308,
+    "updated": 5e-324,
+    "warnings": []
+  }
+]

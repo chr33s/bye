@@ -1,0 +1,36 @@
+[
+  {
+    "op": "keep",
+    "record": {
+      "type": "^s>-",
+      "name": "\ud800",
+      "content": "",
+      "id": "😀"
+    },
+    "purpose": "0"
+  },
+  {
+    "op": "create",
+    "record": {
+      "type": " ",
+      "name": "\t",
+      "content": ""
+    },
+    "purpose": "😀"
+  },
+  {
+    "op": "conflict",
+    "existing": {
+      "type": "-1",
+      "name": "\udc00",
+      "content": ""
+    },
+    "desired": {
+      "type": "\ud800",
+      "name": "\n",
+      "content": "",
+      "priority": -4.584796800229416e-297
+    },
+    "purpose": ""
+  }
+]

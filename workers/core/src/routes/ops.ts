@@ -2,12 +2,10 @@ import { Effect, Match, Predicate, type Types } from "effect";
 import { requireMailbox, requireScope, requireStepUp } from "@bye/application";
 import {
   ApiError,
-  ExternalIdentityCredentialRequest,
   OpsDiscardRequest,
   OpsErasureRequest,
   OpsReindexRequest,
   OpsRestoreRequest,
-  PushSubscriptionRequest,
 } from "@bye/contracts";
 import { isForbiddenProxyTarget } from "@bye/mail-codec";
 import { type ExternalCredential, timingSafeEqual } from "@bye/platform-cloudflare";
@@ -17,15 +15,27 @@ import { discardDeadLetter, listDeadLetters, replayDeadLetter } from "../dlq.ts"
 import type { CoreEnv } from "../env.ts";
 import { replayTombstones, replayTombstonesFor, startErasure } from "../erasure.ts";
 import { validateRestorePoint, awaitRestart } from "../restore.ts";
-import { errorResponse, json, readJson, route, type Route } from "../http.ts";
+import {
+  errorResponse,
+  Invocation,
+  json,
+  readJson,
+  route,
+  type Route,
+  type RouteHandler,
+} from "../http.ts";
+import { ok, publicly } from "../httpapi.ts";
 import { type PushRegistration, validateRegistration } from "../push.ts";
 import { storeExternalCredential } from "../transports.ts";
-import { authed, authedBody, requireUser } from "./common.ts";
+import { requireUser } from "./common.ts";
 import { decodeAs } from "./decode.ts";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { CoreApi } from "../spec/index.ts";
 
 // Push device registration (E23), external send-as credentials (E19), and operator recovery
 // routes (§6 DLQ inspect/replay, §12 reindex/erasure/tombstone replay). Operator routes take a
-// separate OPS_TOKEN bearer — they are never reachable with a user session or API token.
+// separate OPS_TOKEN bearer — they are never reachable with a user session or API token — so they
+// stay native routes; the session/API-token endpoints are in ../spec/ops.ts.
 
 const badRequest = (message: string) => Effect.fail(new ApiError({ code: "bad_request", message }));
 
@@ -50,7 +60,7 @@ type OpsHandler = (
 ) => Promise<Response>;
 
 const ops =
-  (op: string, handler: OpsHandler): Route<CoreEnv>["handler"] =>
+  (op: string, handler: OpsHandler): RouteHandler =>
   async (request, params, env) => {
     if (!isOpsRequest(request, env))
       return errorResponse("unauthenticated", "operator token required");
@@ -76,194 +86,12 @@ const opsBody = async <S extends Parameters<typeof decodeAs>[0]>(
   return decodeAs(schema, raw ?? {});
 };
 
-export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
+export const opsRoutes: ReadonlyArray<Route> = [
   // ---- push subscriptions (E23, C02/C10) ----
   route("GET", "/v1/push/vapid-key", async (_r, _p, env) =>
     env.VAPID_PUBLIC_KEY
       ? json({ publicKey: env.VAPID_PUBLIC_KEY })
       : errorResponse("not_found", "web push not configured"),
-  ),
-  route(
-    "GET",
-    "/v1/push/subscriptions",
-    authed(({ env }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireScope("read");
-
-        const rows = yield* Effect.promise(() =>
-          env.DIRECTORY.prepare(
-            "SELECT id, kind, label, enabled, created_at, last_success_at, disabled_at FROM push_devices WHERE user_id = ? ORDER BY created_at DESC",
-          )
-            .bind(principal.userId)
-            .all<{
-              id: string;
-              kind: string;
-              label: string;
-              enabled: number;
-              created_at: number;
-              last_success_at: number | null;
-              disabled_at: number | null;
-            }>(),
-        );
-
-        return {
-          items: rows.results.map((r) => ({
-            id: r.id,
-            kind: r.kind,
-            label: r.label,
-            enabled: r.enabled === 1,
-            createdAt: r.created_at,
-            lastSuccessAt: r.last_success_at,
-            disabledAt: r.disabled_at,
-          })),
-        };
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/push/subscriptions",
-    authedBody(
-      PushSubscriptionRequest,
-      ({ env, body: b }) =>
-        Effect.gen(function* () {
-          // A registration outlives the credential that made it, so only the account holder's own
-          // session (browser or signed-in app) registers — never agent/CLI tokens or support access.
-          const principal = yield* requireUser();
-          const p256dh = b.p256dh ?? b.keys?.p256dh;
-          const auth = b.auth ?? b.keys?.auth;
-
-          const registration: Types.Mutable<PushRegistration> = {
-            kind: b.kind,
-            endpoint: b.endpoint,
-            label: (b.label ?? "").slice(0, 80),
-          };
-
-          if (p256dh !== undefined) registration.p256dh = p256dh;
-
-          if (auth !== undefined) registration.auth = auth;
-
-          const invalid = validateRegistration(registration);
-
-          if (invalid) return yield* badRequest(invalid);
-          const id = `pd_${crypto.randomUUID()}`;
-
-          const result = yield* Effect.promise(async () => {
-            const count = await env.DIRECTORY.prepare(
-              "SELECT COUNT(*) AS n FROM push_devices WHERE user_id = ? AND enabled = 1 AND endpoint <> ?",
-            )
-              .bind(principal.userId, registration.endpoint)
-              .first<{ n: number }>();
-
-            if ((count?.n ?? 0) >= MAX_DEVICES_PER_USER) return null;
-
-            return env.DIRECTORY.prepare(
-              `INSERT INTO push_devices (id, user_id, kind, endpoint, p256dh, auth, label, enabled, created_at, failures) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
-           ON CONFLICT (user_id, endpoint) DO UPDATE SET kind = excluded.kind, p256dh = excluded.p256dh, auth = excluded.auth, label = excluded.label, enabled = 1, failures = 0, disabled_at = NULL
-           RETURNING id`,
-            )
-              .bind(
-                id,
-                principal.userId,
-                registration.kind,
-                registration.endpoint,
-                registration.p256dh ?? null,
-                registration.auth ?? null,
-                registration.label ?? "",
-                Date.now(),
-              )
-              .first<{ id: string }>();
-          });
-
-          if (result === null)
-            return yield* new ApiError({
-              code: "conflict",
-              message: `at most ${MAX_DEVICES_PER_USER} devices`,
-            });
-
-          return { id: result?.id ?? id };
-        }),
-      { status: 201 },
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/push/subscriptions/:id",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireUser();
-
-        const r = yield* Effect.promise(() =>
-          env.DIRECTORY.prepare("DELETE FROM push_devices WHERE id = ? AND user_id = ?")
-            .bind(params.id, principal.userId)
-            .run(),
-        );
-
-        if (r.meta.changes !== 1)
-          return yield* new ApiError({ code: "not_found", message: "device not found" });
-
-        return { ok: true };
-      }),
-    ),
-  ),
-
-  // ---- external send-as credentials (§5.3 ExternalIdentityTransport, E19) ----
-  route(
-    "PUT",
-    "/v1/mailboxes/:mailboxId/external-identities/:address",
-    authedBody(ExternalIdentityCredentialRequest, ({ env, params, body: b }) =>
-      Effect.gen(function* () {
-        yield* requireMailbox(params.mailboxId!, "send");
-        yield* requireStepUp("credentials");
-        const address = params.address!.toLowerCase();
-
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))
-          return yield* badRequest("invalid address");
-        const { provider } = b;
-        const credential: ExternalCredential = b;
-
-        for (const url of [credential.endpoint, credential.tokenEndpoint]) {
-          if (url !== undefined && (!url.startsWith("https://") || isForbiddenProxyTarget(url)))
-            return yield* badRequest("endpoints must be public https URLs");
-        }
-
-        if (provider === "http" && (!credential.endpoint || !credential.apiKey))
-          return yield* badRequest("relay needs endpoint and apiKey");
-
-        if (provider !== "http" && !credential.accessToken && !credential.refreshToken)
-          return yield* badRequest("accessToken or refreshToken required");
-
-        if (!env.EXTERNAL_IDENTITY_SEAL_KEY)
-          return yield* new ApiError({
-            code: "conflict",
-            message: "external identities are not enabled",
-          });
-        yield* Effect.promise(() =>
-          storeExternalCredential(env, params.mailboxId!, address, credential),
-        );
-
-        return { ok: true };
-      }),
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/mailboxes/:mailboxId/external-identities/:address",
-    authed(({ env, params }) =>
-      Effect.gen(function* () {
-        yield* requireMailbox(params.mailboxId!, "send");
-        yield* requireStepUp("credentials");
-        yield* Effect.promise(() =>
-          env.DIRECTORY.prepare(
-            "UPDATE external_identity_credentials SET revoked_at = ?, ciphertext = '', iv = '' WHERE mailbox_id = ? AND address = ?",
-          )
-            .bind(Date.now(), params.mailboxId, params.address!.toLowerCase())
-            .run(),
-        );
-
-        return { ok: true };
-      }),
-    ),
   ),
 
   // ---- operator recovery (§6, §12) ----
@@ -421,3 +249,172 @@ export const opsRoutes: ReadonlyArray<Route<CoreEnv>> = [
     ops("blobgc.sweep", async (_r, _p, env) => json(await sweepBlobGc(env))),
   ),
 ];
+
+export const OpsHandlers = HttpApiBuilder.group(CoreApi, "ops", (handlers) =>
+  handlers
+    // ---- push subscriptions (E23, C02/C10) ----
+    .handle("listPushSubscriptions", () =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireScope("read");
+
+        const rows = yield* Effect.promise(() =>
+          env.DIRECTORY.prepare(
+            "SELECT id, kind, label, enabled, created_at, last_success_at, disabled_at FROM push_devices WHERE user_id = ? ORDER BY created_at DESC",
+          )
+            .bind(principal.userId)
+            .all<{
+              id: string;
+              kind: string;
+              label: string;
+              enabled: number;
+              created_at: number;
+              last_success_at: number | null;
+              disabled_at: number | null;
+            }>(),
+        );
+
+        return {
+          items: rows.results.map((r) => ({
+            id: r.id,
+            kind: r.kind,
+            label: r.label,
+            enabled: r.enabled === 1,
+            createdAt: r.created_at,
+            lastSuccessAt: r.last_success_at,
+            disabledAt: r.disabled_at,
+          })),
+        };
+      }).pipe(publicly),
+    )
+    .handle("registerPushSubscription", ({ payload: b }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        // A registration outlives the credential that made it, so only the account holder's own
+        // session (browser or signed-in app) registers — never agent/CLI tokens or support access.
+        const principal = yield* requireUser();
+        const p256dh = b.p256dh ?? b.keys?.p256dh;
+        const auth = b.auth ?? b.keys?.auth;
+
+        const registration: Types.Mutable<PushRegistration> = {
+          kind: b.kind,
+          endpoint: b.endpoint,
+          label: (b.label ?? "").slice(0, 80),
+        };
+
+        if (p256dh !== undefined) registration.p256dh = p256dh;
+
+        if (auth !== undefined) registration.auth = auth;
+
+        const invalid = validateRegistration(registration);
+
+        if (invalid) return yield* badRequest(invalid);
+        const id = `pd_${crypto.randomUUID()}`;
+
+        const result = yield* Effect.promise(async () => {
+          const count = await env.DIRECTORY.prepare(
+            "SELECT COUNT(*) AS n FROM push_devices WHERE user_id = ? AND enabled = 1 AND endpoint <> ?",
+          )
+            .bind(principal.userId, registration.endpoint)
+            .first<{ n: number }>();
+
+          if ((count?.n ?? 0) >= MAX_DEVICES_PER_USER) return null;
+
+          return env.DIRECTORY.prepare(
+            `INSERT INTO push_devices (id, user_id, kind, endpoint, p256dh, auth, label, enabled, created_at, failures) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
+           ON CONFLICT (user_id, endpoint) DO UPDATE SET kind = excluded.kind, p256dh = excluded.p256dh, auth = excluded.auth, label = excluded.label, enabled = 1, failures = 0, disabled_at = NULL
+           RETURNING id`,
+          )
+            .bind(
+              id,
+              principal.userId,
+              registration.kind,
+              registration.endpoint,
+              registration.p256dh ?? null,
+              registration.auth ?? null,
+              registration.label ?? "",
+              Date.now(),
+            )
+            .first<{ id: string }>();
+        });
+
+        if (result === null)
+          return yield* new ApiError({
+            code: "conflict",
+            message: `at most ${MAX_DEVICES_PER_USER} devices`,
+          });
+
+        return { id: result?.id ?? id };
+      }).pipe(publicly),
+    )
+    .handle("removePushSubscription", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireUser();
+
+        const r = yield* Effect.promise(() =>
+          env.DIRECTORY.prepare("DELETE FROM push_devices WHERE id = ? AND user_id = ?")
+            .bind(params.id, principal.userId)
+            .run(),
+        );
+
+        if (r.meta.changes !== 1)
+          return yield* new ApiError({ code: "not_found", message: "device not found" });
+
+        return ok;
+      }).pipe(publicly),
+    )
+
+    // ---- external send-as credentials (§5.3 ExternalIdentityTransport, E19) ----
+    .handle("storeExternalIdentity", ({ params, payload: b }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        yield* requireMailbox(params.mailboxId, "send");
+        yield* requireStepUp("credentials");
+        const address = params.address.toLowerCase();
+
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))
+          return yield* badRequest("invalid address");
+        const { provider } = b;
+        const credential: ExternalCredential = b;
+
+        for (const url of [credential.endpoint, credential.tokenEndpoint]) {
+          if (url !== undefined && (!url.startsWith("https://") || isForbiddenProxyTarget(url)))
+            return yield* badRequest("endpoints must be public https URLs");
+        }
+
+        if (provider === "http" && (!credential.endpoint || !credential.apiKey))
+          return yield* badRequest("relay needs endpoint and apiKey");
+
+        if (provider !== "http" && !credential.accessToken && !credential.refreshToken)
+          return yield* badRequest("accessToken or refreshToken required");
+
+        if (!env.EXTERNAL_IDENTITY_SEAL_KEY)
+          return yield* new ApiError({
+            code: "conflict",
+            message: "external identities are not enabled",
+          });
+        yield* Effect.promise(() =>
+          storeExternalCredential(env, params.mailboxId, address, credential),
+        );
+
+        return ok;
+      }).pipe(publicly),
+    )
+    .handle("revokeExternalIdentity", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        yield* requireMailbox(params.mailboxId, "send");
+        yield* requireStepUp("credentials");
+        yield* Effect.promise(() =>
+          env.DIRECTORY.prepare(
+            "UPDATE external_identity_credentials SET revoked_at = ?, ciphertext = '', iv = '' WHERE mailbox_id = ? AND address = ?",
+          )
+            .bind(Date.now(), params.mailboxId, params.address.toLowerCase())
+            .run(),
+        );
+
+        return ok;
+      }).pipe(publicly),
+    ),
+);

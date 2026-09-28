@@ -1,0 +1,35 @@
+[
+  {
+    "id": "",
+    "kind": "personal",
+    "monthlyCents": -1.156592325378296e306,
+    "annualCents": -5.183900311056399e42,
+    "perSeat": true,
+    "closure": {
+      "reserveAddressDays": 1e-323,
+      "forwardingDays": 6.702654504043269e-165
+    }
+  },
+  {
+    "id": "\ud800",
+    "kind": "domain",
+    "monthlyCents": 7.4e-323,
+    "annualCents": 8.238032174228913e-197,
+    "perSeat": true,
+    "closure": {
+      "reserveAddressDays": -2.691433617634184e35,
+      "forwardingDays": 4.4e-323
+    }
+  },
+  {
+    "id": "\ud800",
+    "kind": "domain",
+    "monthlyCents": 7.950095523331346e-125,
+    "annualCents": -1.0614435659465894e99,
+    "perSeat": true,
+    "closure": {
+      "reserveAddressDays": 2e-323,
+      "forwardingDays": 4.982488764735444e114
+    }
+  }
+]

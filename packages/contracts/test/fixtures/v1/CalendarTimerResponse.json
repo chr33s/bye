@@ -1,0 +1,21 @@
+[
+  {
+    "active": null
+  },
+  {
+    "active": {
+      "id": "3A",
+      "label": "\ud800",
+      "startedAt": 0,
+      "source": "manual"
+    }
+  },
+  {
+    "active": {
+      "id": "j  U",
+      "label": "\"C,i",
+      "startedAt": -2e-323,
+      "source": "manual"
+    }
+  }
+]

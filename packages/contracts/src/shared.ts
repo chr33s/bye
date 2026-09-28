@@ -129,6 +129,18 @@ export const NewsletterConfigRequest = Schema.Struct({
   apiKey: Schema.String,
 });
 
+/** What any signed-in user may learn about the instance's newsletter provider. No secrets. */
+export const NewsletterConfigView = Schema.Struct({
+  provider: Schema.Literals(["resend"]),
+  status: Schema.Literals(["unconfigured", "ready", "blocked", "needs-attention"]),
+  qualified: Schema.Boolean,
+  canConfigure: Schema.Boolean,
+  configuredAt: Schema.optional(Schema.Number),
+  detail: Schema.optional(Schema.String),
+});
+
+export type NewsletterConfigView = typeof NewsletterConfigView.Type;
+
 /** Operator resolution of a held newsletter operation, with the evidence relied on. */
 export const NewsletterResolveRequest = Schema.Struct({
   opId: Text(256),
@@ -136,3 +148,349 @@ export const NewsletterResolveRequest = Schema.Struct({
   note: Text(300),
   providerRef: Schema.optional(Text(256)),
 });
+
+// ---- responses (§8): plain wire shapes, exactly what the handlers answer ----
+
+/** A stored address as the space recorded it (unchecked: responses echo what was stored). */
+const StoredAddress = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  address: Schema.String,
+});
+
+const StoredMessage = Schema.Struct({
+  messageRef: Schema.String,
+  from: StoredAddress,
+  to: Schema.Array(StoredAddress),
+  cc: Schema.Array(StoredAddress),
+  subject: Schema.String,
+  snippet: Schema.String,
+  contentKey: Schema.String,
+  sentAt: Schema.Number,
+  addedAt: Schema.Number,
+});
+
+export const SpaceCreated = Schema.Struct({ spaceId: Schema.String });
+
+export type SpaceCreated = typeof SpaceCreated.Type;
+
+export const SpaceList = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({ id: Schema.String, orgId: Schema.String, kind: Schema.String }),
+  ),
+});
+
+export type SpaceList = typeof SpaceList.Type;
+
+export const SpaceMemberList = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      userId: Schema.String,
+      role: Schema.Literals(["owner", "member"]),
+      addedAt: Schema.Number,
+    }),
+  ),
+});
+
+export type SpaceMemberList = typeof SpaceMemberList.Type;
+
+export const SpaceMemberSet = Schema.Struct({
+  userId: Schema.String,
+  role: Schema.Literals(["owner", "member"]),
+});
+
+export type SpaceMemberSet = typeof SpaceMemberSet.Type;
+
+export const SpaceMemberRemoved = Schema.Struct({ removed: Schema.Literal(true) });
+
+export type SpaceMemberRemoved = typeof SpaceMemberRemoved.Type;
+
+/** Shared threads the caller can read, and deliveries still propagating into the space (§6 row 6). */
+export const SpaceThreadList = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      subject: Schema.String,
+      includeFuture: Schema.Boolean,
+      createdAt: Schema.Number,
+      messages: Schema.Number,
+    }),
+  ),
+  pendingPropagation: Schema.Number,
+});
+
+export type SpaceThreadList = typeof SpaceThreadList.Type;
+
+export const SpaceThreadView = Schema.Struct({
+  id: Schema.String,
+  subject: Schema.String,
+  includeFuture: Schema.Boolean,
+  messages: Schema.Array(StoredMessage),
+  pendingPropagation: Schema.Number,
+});
+
+export type SpaceThreadView = typeof SpaceThreadView.Type;
+
+export const SpaceCommentList = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      authorId: Schema.String,
+      body: Schema.String,
+      createdAt: Schema.Number,
+    }),
+  ),
+});
+
+export type SpaceCommentList = typeof SpaceCommentList.Type;
+
+export const SpaceCommentCreated = Schema.Struct({ commentId: Schema.String });
+
+export type SpaceCommentCreated = typeof SpaceCommentCreated.Type;
+
+export const SpaceCollectionList = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      ownerId: Schema.String,
+      items: Schema.Number,
+    }),
+  ),
+});
+
+export type SpaceCollectionList = typeof SpaceCollectionList.Type;
+
+export const SpaceCollectionCreated = Schema.Struct({ collectionId: Schema.String });
+
+export type SpaceCollectionCreated = typeof SpaceCollectionCreated.Type;
+
+/** A collection's aggregated timeline: messages of the threads the viewer can read. */
+export const SpaceCollectionTimeline = Schema.Struct({
+  items: Schema.Array(Schema.Struct({ ...StoredMessage.fields, threadId: Schema.String })),
+});
+
+export type SpaceCollectionTimeline = typeof SpaceCollectionTimeline.Type;
+
+export const SpaceCollectionItemAdded = Schema.Struct({ added: Schema.Literal(true) });
+
+export type SpaceCollectionItemAdded = typeof SpaceCollectionItemAdded.Type;
+
+export const SpaceGrantList = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      grantee: Schema.String,
+      createdBy: Schema.String,
+      createdAt: Schema.Number,
+    }),
+  ),
+});
+
+export type SpaceGrantList = typeof SpaceGrantList.Type;
+
+export const SpaceGrantCreated = Schema.Struct({ grantId: Schema.String });
+
+export type SpaceGrantCreated = typeof SpaceGrantCreated.Type;
+
+export const SpaceRevoked = Schema.Struct({ revoked: Schema.Literal(true) });
+
+export type SpaceRevoked = typeof SpaceRevoked.Type;
+
+/** Exactly what an anonymous viewer of a public link would see. */
+export const PublicThreadPreview = Schema.Struct({
+  subject: Schema.String,
+  messages: Schema.Array(
+    Schema.Struct({
+      from: StoredAddress,
+      to: Schema.Array(StoredAddress),
+      cc: Schema.Array(StoredAddress),
+      subject: Schema.String,
+      snippet: Schema.String,
+      contentKey: Schema.String,
+      sentAt: Schema.Number,
+    }),
+  ),
+});
+
+export type PublicThreadPreview = typeof PublicThreadPreview.Type;
+
+export const PublicLinkList = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      includeFuture: Schema.Boolean,
+      createdAt: Schema.Number,
+      expiresAt: Schema.NullOr(Schema.Number),
+    }),
+  ),
+});
+
+export type PublicLinkList = typeof PublicLinkList.Type;
+
+/** The committed version of a publish; `purged` when the public caches were refreshed. */
+export const WorldPublished = Schema.Struct({
+  postId: Schema.String,
+  revision: Schema.Number,
+  purged: Schema.optionalKey(Schema.Boolean),
+});
+
+export type WorldPublished = typeof WorldPublished.Type;
+
+export const WorldInfo = Schema.Struct({
+  handle: Schema.String,
+  url: Schema.String,
+  publishAddress: Schema.String,
+});
+
+export type WorldInfo = typeof WorldInfo.Type;
+
+const WorldPostStatus = Schema.Literals(["draft", "published", "unpublished"]);
+
+export const WorldPostList = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      slug: Schema.String,
+      status: WorldPostStatus,
+      title: Schema.String,
+      revision: Schema.Number,
+      publishedAt: Schema.NullOr(Schema.Number),
+      updatedAt: Schema.Number,
+    }),
+  ),
+});
+
+export type WorldPostList = typeof WorldPostList.Type;
+
+export const WorldDraftCreated = Schema.Struct({ postId: Schema.String, revision: Schema.Number });
+
+export type WorldDraftCreated = typeof WorldDraftCreated.Type;
+
+export const WorldPostRevision = Schema.Struct({ revision: Schema.Number });
+
+export type WorldPostRevision = typeof WorldPostRevision.Type;
+
+/** Author-only view of a post's latest revision, including unpublished drafts. */
+export const WorldPostView = Schema.Struct({
+  id: Schema.String,
+  slug: Schema.String,
+  status: WorldPostStatus,
+  revision: Schema.Number,
+  title: Schema.String,
+  html: Schema.String,
+  text: Schema.String,
+  media: Schema.Array(
+    Schema.Struct({ name: Schema.String, contentType: Schema.String, publicKey: Schema.String }),
+  ),
+  publishedAt: Schema.NullOr(Schema.Number),
+});
+
+export type WorldPostView = typeof WorldPostView.Type;
+
+export const WorldPostPublished = Schema.Struct({
+  postId: Schema.String,
+  revision: Schema.Number,
+  purged: Schema.Boolean,
+});
+
+export type WorldPostPublished = typeof WorldPostPublished.Type;
+
+export const WorldPostUnpublished = Schema.Struct({
+  unpublished: Schema.Literal(true),
+  purged: Schema.Boolean,
+});
+
+export type WorldPostUnpublished = typeof WorldPostUnpublished.Type;
+
+/** One newsletter publication (spec.md §5.5): intent, provider-observed state, cancellation. */
+export const NewsletterPublication = Schema.Struct({
+  id: Schema.String,
+  postId: Schema.String,
+  revision: Schema.Number,
+  provider: Schema.String,
+  account: Schema.String,
+  configVersion: Schema.String,
+  sender: Schema.String,
+  subject: Schema.String,
+  fingerprint: Schema.String,
+  recipients: Schema.Number,
+  scheduledAt: Schema.NullOr(Schema.Number),
+  expiresAt: Schema.Number,
+  state: Schema.Literals([
+    "approved",
+    "draft-pending",
+    "drafted",
+    "submit-pending",
+    "submitted",
+    "scheduled",
+    "sent",
+    "cancelled",
+    "held",
+    "failed",
+  ]),
+  providerRef: Schema.NullOr(Schema.String),
+  observed: Schema.NullOr(
+    Schema.Literals(["draft", "scheduled", "queued", "sending", "sent", "cancelled"]),
+  ),
+  /** Reported as requested/confirmed/unsupported/uncertain; never a recall. */
+  cancel: Schema.NullOr(
+    Schema.Union([
+      Schema.TaggedStruct("Requested", {}),
+      Schema.TaggedStruct("Confirmed", { coverage: Schema.Literals(["complete", "partial"]) }),
+      Schema.TaggedStruct("Unsupported", { detail: Schema.String }),
+      Schema.TaggedStruct("Uncertain", { detail: Schema.String }),
+    ]),
+  ),
+  detail: Schema.NullOr(Schema.String),
+});
+
+export type NewsletterPublication = typeof NewsletterPublication.Type;
+
+/** One provider operation of a publication, with its own persisted identity. */
+export const NewsletterOperation = Schema.Struct({
+  opId: Schema.String,
+  publicationId: Schema.NullOr(Schema.String),
+  kind: Schema.Literals(["audience", "create", "send", "cancel"]),
+  state: Schema.Literals(["pending", "in-flight", "accepted", "rejected", "unknown", "held"]),
+  attempts: Schema.Number,
+  firstAttemptAt: Schema.NullOr(Schema.Number),
+  providerRef: Schema.NullOr(Schema.String),
+  detail: Schema.NullOr(Schema.String),
+});
+
+export type NewsletterOperation = typeof NewsletterOperation.Type;
+
+/** Author-scoped publication status: recipient outcomes, audience drift, operations. */
+export const NewsletterStatusView = Schema.Struct({
+  publication: NewsletterPublication,
+  outcomes: Schema.Record(Schema.String, Schema.Number),
+  drift: Schema.Number,
+  ops: Schema.Array(NewsletterOperation),
+});
+
+export type NewsletterStatusView = typeof NewsletterStatusView.Type;
+
+/** Operator review of one creator's newsletter work that is held or unknown. */
+export const NewsletterReview = Schema.Struct({
+  health: Schema.Struct({
+    unknownOps: Schema.Number,
+    heldOps: Schema.Number,
+    syncPending: Schema.Number,
+    syncHeld: Schema.Number,
+    oldestSyncPendingAt: Schema.NullOr(Schema.Number),
+    openPublication: Schema.NullOr(Schema.String),
+    uncertainCancels: Schema.Number,
+    unmappedEvents: Schema.Number,
+  }),
+  held: Schema.Array(NewsletterOperation),
+  publications: Schema.Array(NewsletterPublication),
+});
+
+export type NewsletterReview = typeof NewsletterReview.Type;
+
+export const NewsletterResolved = Schema.Struct({
+  op: NewsletterOperation,
+  publication: Schema.NullOr(NewsletterPublication),
+});
+
+export type NewsletterResolved = typeof NewsletterResolved.Type;

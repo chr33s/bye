@@ -1,0 +1,26 @@
+[
+  {
+    "schemaVersion": 1,
+    "deliveryId": "\udc00",
+    "text": "T",
+    "truncated": false,
+    "source": "html",
+    "hasHtml": false
+  },
+  {
+    "schemaVersion": 1,
+    "deliveryId": "\n",
+    "text": "VB}q",
+    "truncated": false,
+    "source": "html",
+    "hasHtml": true
+  },
+  {
+    "schemaVersion": 1,
+    "deliveryId": "",
+    "text": "q",
+    "truncated": false,
+    "source": "html",
+    "hasHtml": false
+  }
+]

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "3I",
+    "kind": "N=c",
+    "label": "😀",
+    "scopes": [],
+    "createdAt": -3.1940840945718832e150,
+    "lastUsedAt": null,
+    "expiresAt": null
+  },
+  {
+    "id": "",
+    "kind": "\n",
+    "label": "",
+    "scopes": ["send", "publish", "screen", "calendar"],
+    "createdAt": 9.4e-323,
+    "lastUsedAt": null,
+    "expiresAt": 5.4e-323
+  },
+  {
+    "id": "0",
+    "kind": "s .",
+    "label": "",
+    "scopes": ["screen"],
+    "createdAt": 7e-323,
+    "lastUsedAt": -4.4e-323,
+    "expiresAt": null
+  }
+]

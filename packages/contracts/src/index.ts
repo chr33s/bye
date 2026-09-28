@@ -9,3 +9,5 @@ export * from "./calendar.ts";
 export * from "./control.ts";
 
 export * from "./shared.ts";
+
+export * from "./wire.ts";

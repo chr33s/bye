@@ -1,0 +1,63 @@
+[
+  {
+    "reserved": ["\t", ""],
+    "terms": {
+      "plan": "\u0000",
+      "reserveAddressDays": 3.4822855701486675e72,
+      "forwardingDays": -7.4e-323
+    },
+    "forwarding": []
+  },
+  {
+    "reserved": [">n"],
+    "terms": {
+      "plan": " ",
+      "reserveAddressDays": -1.5e-323,
+      "forwardingDays": -7e-323
+    },
+    "forwarding": [
+      {
+        "address": "^C[",
+        "pending": false
+      },
+      {
+        "address": "",
+        "pending": true
+      },
+      {
+        "address": "-1",
+        "pending": false
+      },
+      {
+        "address": "0",
+        "pending": true
+      }
+    ]
+  },
+  {
+    "reserved": ["F1\";", ""],
+    "terms": {
+      "plan": "",
+      "reserveAddressDays": -1.548677241542131e-219,
+      "forwardingDays": -9e-323
+    },
+    "forwarding": [
+      {
+        "address": "\udc00",
+        "pending": true
+      },
+      {
+        "address": "O",
+        "pending": false
+      },
+      {
+        "address": "",
+        "pending": false
+      },
+      {
+        "address": "\ud800",
+        "pending": false
+      }
+    ]
+  }
+]

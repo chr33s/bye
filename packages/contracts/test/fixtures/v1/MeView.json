@@ -1,0 +1,26 @@
+[
+  {
+    "userId": "b`#C",
+    "kind": "user",
+    "scopes": ["read", "draft"],
+    "mailboxIds": [],
+    "calendarIds": ["\t", "\udc00", " ", "H:{1"],
+    "organizationIds": []
+  },
+  {
+    "userId": "grMr",
+    "kind": "user",
+    "scopes": [],
+    "mailboxIds": [],
+    "calendarIds": ["\t", "\ud800", "😀", "0"],
+    "organizationIds": ["0"]
+  },
+  {
+    "userId": "",
+    "kind": "user",
+    "scopes": ["delete"],
+    "mailboxIds": [],
+    "calendarIds": ["0"],
+    "organizationIds": []
+  }
+]

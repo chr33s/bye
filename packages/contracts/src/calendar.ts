@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { AuthorityValue } from "./wire.ts";
 
 // Versioned calendar HTTP contracts (§8 `/v1/calendars/:id/events`, C01–C10).
 // JSON on the wire; the calendar engine's in-memory types are not exposed directly.
@@ -487,3 +488,305 @@ export const CALENDAR_DEEP_LINKS = {
   timer: () => "bye://calendar/timer",
   weekTasks: (date: string) => `bye://calendar/week/${date}`,
 } as const;
+
+// ---- HTTP request bodies and responses of the calendar API (C01–C10) ----
+
+/** `PATCH /v1/calendars/:id/preferences`: one SetPreferences command's fields. */
+export const CalendarPreferencesRequest = Schema.Struct({
+  commandId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
+  preferences: Schema.optional(Schema.Unknown),
+});
+
+export type CalendarPreferencesRequest = typeof CalendarPreferencesRequest.Type;
+
+/** `POST /v1/calendars/:id/import`: one ImportIcs command's fields. */
+export const CalendarImportRequest = Schema.Struct({
+  commandId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
+  calendarId: Schema.String,
+  ics: Schema.String,
+});
+
+export type CalendarImportRequest = typeof CalendarImportRequest.Type;
+
+/** A calendar the principal can read in one calendar space, with their role there (C05). */
+export const CalendarListItemWire = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  color: Schema.String,
+  kind: Schema.String,
+  visible: Schema.Boolean,
+  revision: Schema.Number,
+  role: Schema.Literals(["owner", "write", "read"]),
+});
+
+export type CalendarListItemWire = typeof CalendarListItemWire.Type;
+
+export const CalendarListResponse = Schema.Struct({ items: Schema.Array(CalendarListItemWire) });
+
+export type CalendarListResponse = typeof CalendarListResponse.Type;
+
+/** Discovery (C05): calendars across owned spaces and spaces that shared calendars. */
+export const VisibleCalendarsResponse = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      spaceId: Schema.String,
+      owned: Schema.Boolean,
+      ...CalendarListItemWire.fields,
+    }),
+  ),
+});
+
+export type VisibleCalendarsResponse = typeof VisibleCalendarsResponse.Type;
+
+export const CalendarSearchHitWire = Schema.Struct({
+  docId: Schema.String,
+  kind: Schema.Literals(["event", "task", "journal", "time", "day", "habit"]),
+  ref: Schema.String,
+  snippet: Schema.String,
+});
+
+export const CalendarSearchItemsResponse = Schema.Struct({
+  items: Schema.Array(CalendarSearchHitWire),
+});
+
+export type CalendarSearchItemsResponse = typeof CalendarSearchItemsResponse.Type;
+
+export const CalendarEventCreated = Schema.Struct({ eventId: Schema.String, uid: Schema.String });
+
+export type CalendarEventCreated = typeof CalendarEventCreated.Type;
+
+const WakingWindow = Schema.Struct({ startMinute: Schema.Number, endMinute: Schema.Number });
+
+export const CalendarPreferencesWire = Schema.Struct({
+  firstWeekday: Schema.Number,
+  hour12: Schema.Boolean,
+  timeZone: Schema.String,
+  lastView: Schema.Literals(["day", "week", "agenda", "year", "month"]),
+  lastDate: Schema.optional(Schema.String),
+  nightHoursCollapsed: Schema.Boolean,
+  waking: WakingWindow,
+});
+
+export type CalendarPreferencesWire = typeof CalendarPreferencesWire.Type;
+
+export const CalendarAgendaResponse = Schema.Struct({
+  days: Schema.Array(
+    Schema.Struct({ date: Schema.String, occurrences: Schema.Array(OccurrenceWire) }),
+  ),
+});
+
+export type CalendarAgendaResponse = typeof CalendarAgendaResponse.Type;
+
+/** The owner's private context for a day (C08); `photoUrl` is a short-lived signed read link. */
+export const CalendarDayContextWire = Schema.Struct({
+  date: Schema.String,
+  label: Schema.optional(Schema.String),
+  photoKey: Schema.optional(Schema.String),
+  photoUrl: Schema.optional(Schema.String),
+  journal: Schema.optional(Schema.Struct({ body: Schema.String, revision: Schema.Number })),
+  freeTime: Schema.Array(Schema.Struct({ startMs: Schema.Number, endMs: Schema.Number })),
+  highlights: Schema.Array(OccurrenceWire),
+});
+
+export type CalendarDayContextWire = typeof CalendarDayContextWire.Type;
+
+/** One day for a viewer (C01): occurrences, night-hours state, and the owner's day context. */
+export const CalendarDayViewWire = Schema.Struct({
+  date: Schema.String,
+  zone: Schema.String,
+  occurrences: Schema.Array(OccurrenceWire),
+  nightHoursBusy: Schema.Boolean,
+  nightHoursCollapsed: Schema.Boolean,
+  waking: WakingWindow,
+  context: Schema.optional(CalendarDayContextWire),
+});
+
+export type CalendarDayViewWire = typeof CalendarDayViewWire.Type;
+
+const DayCounts = Schema.Record(Schema.String, Schema.Number);
+
+export const CalendarMonthViewWire = Schema.Struct({
+  year: Schema.Number,
+  month: Schema.Number,
+  firstWeekday: Schema.Number,
+  counts: DayCounts,
+});
+
+export type CalendarMonthViewWire = typeof CalendarMonthViewWire.Type;
+
+export const CalendarYearViewWire = Schema.Struct({ year: Schema.Number, counts: DayCounts });
+
+export type CalendarYearViewWire = typeof CalendarYearViewWire.Type;
+
+export const CalendarWeekTaskWire = Schema.Struct({
+  id: Schema.String,
+  anchor: Schema.String,
+  title: Schema.String,
+  orderKey: Schema.String,
+  completedAt: Schema.optional(Schema.Number),
+  eventId: Schema.optional(Schema.String),
+  revision: Schema.Number,
+});
+
+export type CalendarWeekTaskWire = typeof CalendarWeekTaskWire.Type;
+
+export const CalendarWeekTasksResponse = Schema.Struct({
+  items: Schema.Array(CalendarWeekTaskWire),
+});
+
+export type CalendarWeekTasksResponse = typeof CalendarWeekTasksResponse.Type;
+
+export const CalendarHabitsResponse = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      weekdays: Schema.Array(Schema.Number),
+      completed: Schema.Array(Schema.String),
+    }),
+  ),
+});
+
+export type CalendarHabitsResponse = typeof CalendarHabitsResponse.Type;
+
+export const CalendarTimeEntryWire = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  startedAt: Schema.Number,
+  stoppedAt: Schema.optional(Schema.Number),
+  source: Schema.Literals(["timer", "manual"]),
+});
+
+export type CalendarTimeEntryWire = typeof CalendarTimeEntryWire.Type;
+
+export const CalendarTimerResponse = Schema.Struct({
+  active: Schema.NullOr(CalendarTimeEntryWire),
+});
+
+export type CalendarTimerResponse = typeof CalendarTimerResponse.Type;
+
+export const CalendarTimeEntriesResponse = Schema.Struct({
+  items: Schema.Array(CalendarTimeEntryWire),
+});
+
+export type CalendarTimeEntriesResponse = typeof CalendarTimeEntriesResponse.Type;
+
+/** What the home-screen widget shows (C10). */
+export const CalendarWidgetResponse = Schema.Struct({
+  upcoming: Schema.Array(OccurrenceWire),
+  activeTimer: Schema.optional(CalendarTimeEntryWire),
+  weekTasks: Schema.Array(CalendarWeekTaskWire),
+  today: Schema.String,
+});
+
+export type CalendarWidgetResponse = typeof CalendarWidgetResponse.Type;
+
+/** Change feed (§8): the owner sees every change, others only calendars they can read. */
+export const CalendarChangesResponse = Schema.Struct({
+  changes: Schema.Array(
+    Schema.Struct({
+      seq: Schema.Number,
+      resource: Schema.String,
+      kind: Schema.String,
+      payload: Schema.Unknown,
+      createdAt: Schema.Number,
+    }),
+  ),
+  cursor: Schema.Number,
+  /** When true, the client must refresh a snapshot instead of replaying. */
+  expired: Schema.Boolean,
+});
+
+export type CalendarChangesResponse = typeof CalendarChangesResponse.Type;
+
+/** Private feed tokens (C05), listed by hash; the raw token is never stored. */
+export const CalendarFeedTokensResponse = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      tokenHash: Schema.String,
+      label: Schema.String,
+      calendarIds: Schema.Array(Schema.String),
+      createdAt: Schema.Number,
+      revokedAt: Schema.optional(Schema.Number),
+    }),
+  ),
+});
+
+export type CalendarFeedTokensResponse = typeof CalendarFeedTokensResponse.Type;
+
+/** A new private feed: the raw token and its URL, returned exactly once. */
+export const CalendarFeedTokenCreated = Schema.Struct({ token: Schema.String, url: Schema.String });
+
+export type CalendarFeedTokenCreated = typeof CalendarFeedTokenCreated.Type;
+
+export const CalendarImportResult = Schema.Struct({
+  imported: Schema.Number,
+  updated: Schema.Number,
+  warnings: Schema.Array(Schema.String),
+});
+
+export type CalendarImportResult = typeof CalendarImportResult.Type;
+
+export const LocationSuggestionsResponse = Schema.Struct({
+  items: Schema.Array(LocationSuggestion),
+});
+
+export type LocationSuggestionsResponse = typeof LocationSuggestionsResponse.Type;
+
+/**
+ * What a `CalendarCommand` answers, by command. A command with no result answers `{ ok: true }`.
+ * Members are ordered most specific first: a result matches the first member whose keys it has.
+ */
+export const CalendarCommandResult = Schema.Union([
+  /** UpdateEvent (`splitEventId` when a "this and future" edit split the series). */
+  Schema.Struct({
+    eventId: Schema.String,
+    revision: Schema.Number,
+    splitEventId: Schema.optional(Schema.String),
+  }),
+  /** CreateEvent. */
+  CalendarEventCreated,
+  /** ConvertWeekTask. */
+  Schema.Struct({ eventId: Schema.String }),
+  /** AddWeekTask. */
+  Schema.Struct({ taskId: Schema.String, anchor: Schema.String }),
+  /** MoveWeekTask. */
+  Schema.Struct({ anchor: Schema.String }),
+  /** ReorderWeekTask. */
+  Schema.Struct({ orderKey: Schema.String }),
+  /** CreateCalendar, AddSubscription. */
+  Schema.Struct({ calendarId: Schema.String }),
+  /** UpdateCalendar, RespondInvitation, WriteJournal. */
+  Schema.Struct({ revision: Schema.Number }),
+  /** DeleteCalendar, DeleteEvent. */
+  Schema.Struct({ deleted: Schema.Boolean }),
+  /** CreateHabit. */
+  Schema.Struct({ habitId: Schema.String }),
+  /** StartTimer (`stoppedEntryId` when it stopped a running timer), AddTimeEntry. */
+  Schema.Struct({ entryId: Schema.String, stoppedEntryId: Schema.optional(Schema.String) }),
+  /** StopTimer. */
+  Schema.Struct({ _tag: Schema.Literal("Stopped"), entry: CalendarTimeEntryWire }),
+  Schema.Struct({
+    _tag: Schema.Literal("AlreadyStopped"),
+    entry: Schema.optional(CalendarTimeEntryWire),
+  }),
+  /** SetDayDecoration (`released`: a photo no day shows any more). */
+  Schema.Struct({ applied: Schema.Boolean, released: Schema.optional(Schema.String) }),
+  /** ImportIcs. */
+  CalendarImportResult,
+  /** SetPreferences. */
+  CalendarPreferencesWire,
+  /** GrantCalendar, RevokeCalendar, CompleteWeekTask, DeleteWeekTask, SetHabitCompletion, ArchiveHabit, RevokeFeedToken. */
+  Schema.Struct({ ok: Schema.Literal(true) }),
+]);
+
+export type CalendarCommandResult = typeof CalendarCommandResult.Type;
+
+/**
+ * A generic command's result as the calendar authority answered it: a `CalendarCommandResult`, or
+ * `{ ok: true }` for a command with none. Passed through unvalidated (see `AuthorityValue`): the
+ * command has committed by then, and idempotent replays answer receipts stored by earlier releases.
+ */
+export const CalendarCommandOutcome = AuthorityValue;
+
+export type CalendarCommandOutcome = typeof CalendarCommandOutcome.Type;

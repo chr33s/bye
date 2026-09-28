@@ -1,0 +1,17 @@
+[
+  {
+    "changes": [["", null, {}, "\t"], "0"],
+    "cursor": 1.1520561077518233e-146,
+    "expired": false
+  },
+  {
+    "changes": [],
+    "cursor": -2.0501849961130826e-56,
+    "expired": true
+  },
+  {
+    "changes": [-4e-323, [], [null]],
+    "cursor": 6.777861124505818e199,
+    "expired": true
+  }
+]

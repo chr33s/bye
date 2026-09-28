@@ -1,0 +1,16 @@
+[
+  {
+    "op": "update",
+    "from": {
+      "type": ";;-",
+      "name": " ",
+      "content": "\udc00"
+    },
+    "to": {
+      "type": "0",
+      "name": "",
+      "content": "\u0000"
+    },
+    "purpose": "ue2"
+  }
+]

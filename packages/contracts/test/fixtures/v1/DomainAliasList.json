@@ -1,0 +1,49 @@
+[
+  {
+    "items": [
+      {
+        "address": "\udc00",
+        "mailboxId": "W+2P",
+        "kind": "f{Sa",
+        "disabled": true
+      },
+      {
+        "address": "-1",
+        "mailboxId": "#+o+",
+        "kind": "\u0000",
+        "disabled": true
+      },
+      {
+        "address": "0",
+        "mailboxId": "-1",
+        "kind": "F-RN",
+        "disabled": false
+      },
+      {
+        "address": "KR&",
+        "mailboxId": "",
+        "kind": "\n",
+        "disabled": true
+      }
+    ]
+  },
+  {
+    "items": []
+  },
+  {
+    "items": [
+      {
+        "address": "DL>",
+        "mailboxId": "\udc00",
+        "kind": "~%KQ",
+        "disabled": false
+      },
+      {
+        "address": "\n",
+        "mailboxId": "",
+        "kind": "t ",
+        "disabled": true
+      }
+    ]
+  }
+]

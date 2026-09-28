@@ -1,0 +1,77 @@
+[
+  {
+    "items": [
+      {
+        "id": "C9md",
+        "reason": "b-;g",
+        "grantedAt": -9.970814256003973e-88,
+        "expiresAt": 1e-323,
+        "active": false
+      },
+      {
+        "id": "",
+        "reason": "yr:~",
+        "grantedAt": 1.7976931348623137e308,
+        "expiresAt": -7e-323,
+        "active": false
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": "p\"L",
+        "reason": "-1",
+        "grantedAt": 1e-323,
+        "expiresAt": 8e-323,
+        "active": false
+      },
+      {
+        "id": "~a}/",
+        "reason": "hJ",
+        "grantedAt": 1.7976931348623151e308,
+        "expiresAt": 1.7976931348623145e308,
+        "active": false
+      },
+      {
+        "id": "9;Ke",
+        "reason": "-1",
+        "grantedAt": -3e-323,
+        "expiresAt": 7e-323,
+        "active": true
+      },
+      {
+        "id": "",
+        "reason": "\t",
+        "grantedAt": -3e-323,
+        "expiresAt": -2.5050994701216654e35,
+        "active": true
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": "\udc00",
+        "reason": "-1",
+        "grantedAt": -6.099538770871578e-267,
+        "expiresAt": -7e-323,
+        "active": true
+      },
+      {
+        "id": "24I[",
+        "reason": "\ud800",
+        "grantedAt": -9e-323,
+        "expiresAt": -2e-323,
+        "active": false
+      },
+      {
+        "id": "\udc00",
+        "reason": "\udc00",
+        "grantedAt": -8.4e-323,
+        "expiresAt": 8.43343600692691e67,
+        "active": true
+      }
+    ]
+  }
+]

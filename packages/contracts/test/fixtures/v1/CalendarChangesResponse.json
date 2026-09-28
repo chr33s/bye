@@ -1,0 +1,46 @@
+[
+  {
+    "changes": [],
+    "cursor": 6.88376177933389e-265,
+    "expired": true
+  },
+  {
+    "changes": [
+      {
+        "seq": 2e-323,
+        "resource": "",
+        "kind": "\n",
+        "payload": -9.158824313171339e172,
+        "createdAt": -1.797693134862313e308
+      },
+      {
+        "seq": 1e-323,
+        "resource": "\n",
+        "kind": "",
+        "payload": null,
+        "createdAt": 1.6383650787307538e184
+      },
+      {
+        "seq": -7.4e-323,
+        "resource": "",
+        "kind": "/>l",
+        "payload": -2.5598826955473773e-101,
+        "createdAt": 6.443323153327206e-138
+      },
+      {
+        "seq": -9.330316232856368e119,
+        "resource": ";ab#",
+        "kind": "\u0000",
+        "payload": "\u0000",
+        "createdAt": 1.1443184142277386e-185
+      }
+    ],
+    "cursor": -263.06532944375243,
+    "expired": false
+  },
+  {
+    "changes": [],
+    "cursor": -3.811116395927042e193,
+    "expired": false
+  }
+]

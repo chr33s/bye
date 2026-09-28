@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { AuthorityValue } from "./wire.ts";
 
 // Mailbox wire contracts (§8 API sketch). Versioned independently of Effect/HTTP libraries.
 // Every mutation carries a client command ID; conflicting writes carry an expected revision.
@@ -456,7 +457,11 @@ export const MailUnifiedPage = Schema.Struct({
   items: Schema.Array(MailUnifiedItem),
   /** Per-mailbox continuation cursors; omitted mailboxes are exhausted. */
   cursors: Schema.Record(Schema.String, Schema.String),
+  /** `cursors` as one opaque token for the next page; null when every mailbox is exhausted. */
+  cursor: Schema.optional(Schema.NullOr(Schema.String)),
 });
+
+export type MailUnifiedPage = typeof MailUnifiedPage.Type;
 
 /** Upload session (E20, §8 `/v1/uploads`): reserve → PUT parts → complete (size-verified, then scanned). */
 export const MailUploadReserveRequest = Schema.Struct({
@@ -502,3 +507,113 @@ export const MailAttachmentZipRequest = Schema.Struct({
     Schema.isMaxLength(50),
   ),
 });
+
+// ---- responses (§8): plain wire shapes, exactly what the handlers answer ----
+// Values the mailbox authority returns untyped over RPC (command results, typed reads, thread
+// details, drafts) pass through as `MailAuthorityValue` (see `AuthorityValue`).
+
+/** A value the mailbox authority returned untyped, answered exactly as it always was. */
+export const MailAuthorityValue = AuthorityValue;
+
+export type MailAuthorityValue = typeof MailAuthorityValue.Type;
+
+/**
+ * An authority command result or typed read, passed through as the mailbox authority answered it.
+ * A command or read with no result answers `{ ok: true }`.
+ */
+export const MailAuthorityResult = MailAuthorityValue;
+
+export type MailAuthorityResult = typeof MailAuthorityResult.Type;
+
+/** One delivery of a thread with its short-lived render capability for the render origin (§10). */
+export const MailRenderableDelivery = Schema.StructWithRest(
+  Schema.Struct({
+    deliveryId: Schema.String,
+    renderToken: Schema.String,
+    renderUrl: Schema.String,
+  }),
+  [Schema.Record(Schema.String, MailAuthorityValue)],
+);
+
+export type MailRenderableDelivery = typeof MailRenderableDelivery.Type;
+
+/** A thread's detail: the authority's thread and merge history, deliveries with render URLs. */
+export const MailThreadDetail = Schema.Struct({
+  thread: MailAuthorityValue,
+  deliveries: Schema.Array(MailRenderableDelivery),
+  mergeHistory: MailAuthorityValue,
+});
+
+export type MailThreadDetail = typeof MailThreadDetail.Type;
+
+/** Plain-text body of one delivery for terminal and agent clients (X02). */
+export const MailDeliveryText = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  deliveryId: Schema.String,
+  text: Schema.String,
+  /** The body was longer than the returned text. */
+  truncated: Schema.Boolean,
+  /** `html` when the message had no text part and its HTML was converted. */
+  source: Schema.Literals(["text", "html"]),
+  hasHtml: Schema.Boolean,
+});
+
+export type MailDeliveryText = typeof MailDeliveryText.Type;
+
+/** Expanded Feed (E05): a feed thread and its latest message, rendered lazily from `renderUrl`. */
+export const MailFeedItem = Schema.Struct({
+  thread: MailThreadSummary,
+  latest: Schema.NullOr(
+    Schema.Struct({
+      deliveryId: Schema.String,
+      from: MailAuthorityValue,
+      date: Schema.Number,
+      subject: Schema.String,
+      renderUrl: Schema.String,
+    }),
+  ),
+});
+
+export type MailFeedItem = typeof MailFeedItem.Type;
+
+export const MailFeedPage = Schema.Struct({
+  items: Schema.Array(MailFeedItem),
+  nextCursor: Schema.NullOr(Schema.String),
+  boundary: Schema.Number,
+  /** Remembered reading position and previous visit marker (0 when never visited). */
+  position: Schema.NullOr(Schema.String),
+  previousVisitAt: Schema.Number,
+});
+
+export type MailFeedPage = typeof MailFeedPage.Type;
+
+/** GET /v1/changes: change events pass through as the authority recorded them (see `MailChangesResponse`). */
+export const MailChangeFeed = Schema.Struct({
+  changes: Schema.Array(MailAuthorityValue),
+  cursor: Schema.Number,
+  expired: Schema.Boolean,
+});
+
+export type MailChangeFeed = typeof MailChangeFeed.Type;
+
+/** Upload reservation (E20): upload parts of `partSize` bytes (the last may be smaller). */
+export const MailUploadReservation = Schema.Struct({
+  uploadId: Schema.String,
+  partSize: Schema.Number,
+  maxParts: Schema.Number,
+});
+
+export type MailUploadReservation = typeof MailUploadReservation.Type;
+
+/** Signed, short-lived attachment download link on the render origin. */
+export const MailAttachmentLink = Schema.Struct({
+  downloadUrl: Schema.String,
+  expiresInSeconds: Schema.Number,
+});
+
+export type MailAttachmentLink = typeof MailAttachmentLink.Type;
+
+/** Sandboxed attachment preview on the render origin (text and raster images only). */
+export const MailAttachmentPreview = Schema.Struct({ previewUrl: Schema.String });
+
+export type MailAttachmentPreview = typeof MailAttachmentPreview.Type;

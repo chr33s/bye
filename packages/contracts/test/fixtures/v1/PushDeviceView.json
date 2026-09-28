@@ -1,0 +1,29 @@
+[
+  {
+    "id": "M5x'",
+    "kind": ":Us.",
+    "label": "pDJ",
+    "enabled": false,
+    "createdAt": 1.2239490881167908e126,
+    "lastSuccessAt": null,
+    "disabledAt": null
+  },
+  {
+    "id": "\n",
+    "kind": ":UF",
+    "label": "\t",
+    "enabled": false,
+    "createdAt": 7.689732454181384e174,
+    "lastSuccessAt": 2.6471097937567103e-207,
+    "disabledAt": null
+  },
+  {
+    "id": "y",
+    "kind": "",
+    "label": "\u0000",
+    "enabled": true,
+    "createdAt": -5e-324,
+    "lastSuccessAt": -8e-323,
+    "disabledAt": 1.856761218287926e31
+  }
+]

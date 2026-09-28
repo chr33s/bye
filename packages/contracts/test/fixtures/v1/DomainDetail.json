@@ -1,0 +1,53 @@
+[
+  {
+    "id": "kHXZ",
+    "org_id": " ",
+    "name": "\t",
+    "state": "outbound-tested",
+    "verification_token": "-1",
+    "plus_addressing": -1.331891335504898e-260,
+    "catch_all_mailbox_id": null,
+    "diagnostics": 1.7976931348623131e308,
+    "verificationRecord": {
+      "type": "*",
+      "name": "",
+      "content": "\ud800"
+    },
+    "workflow": null
+  },
+  {
+    "id": "",
+    "org_id": "FLi",
+    "name": "l(z'",
+    "state": "inbound-tested",
+    "verification_token": "😀",
+    "plus_addressing": -3.5e-323,
+    "catch_all_mailbox_id": null,
+    "diagnostics": [{}],
+    "verificationRecord": {
+      "type": "1^D",
+      "name": "\ud800",
+      "content": "L1R"
+    },
+    "workflow": null
+  },
+  {
+    "id": "t9T|",
+    "org_id": "\u0000",
+    "name": "-1",
+    "state": "requested",
+    "verification_token": "\n",
+    "plus_addressing": 7.4e-323,
+    "catch_all_mailbox_id": "!A",
+    "diagnostics": 7e-323,
+    "verificationRecord": {
+      "type": "\udc00",
+      "name": " CP",
+      "content": ""
+    },
+    "workflow": {
+      "id": "O",
+      "status": "0"
+    }
+  }
+]

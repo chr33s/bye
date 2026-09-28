@@ -1,0 +1,127 @@
+[
+  {
+    "publication": {
+      "id": "\n",
+      "postId": "\"4",
+      "revision": 9.654524218342117e-32,
+      "provider": "$mkk",
+      "account": "",
+      "configVersion": "",
+      "sender": "1]l",
+      "subject": ")",
+      "fingerprint": "0",
+      "recipients": 8e-323,
+      "scheduledAt": -1.7976931348623137e308,
+      "expiresAt": 7e-323,
+      "state": "held",
+      "providerRef": "\u0000",
+      "observed": null,
+      "cancel": {
+        "_tag": "Confirmed",
+        "coverage": "complete"
+      },
+      "detail": ""
+    },
+    "outcomes": {
+      "*": 6.925878689084561e289,
+      "-1": 2.5e-323,
+      "": -3e-323
+    },
+    "drift": 1.430753723150282e74,
+    "ops": []
+  },
+  {
+    "publication": {
+      "id": "SvvK",
+      "postId": "",
+      "revision": 6.120123496242464e-128,
+      "provider": "",
+      "account": "0",
+      "configVersion": "😀",
+      "sender": "\u0000",
+      "subject": "\u0000",
+      "fingerprint": "\t",
+      "recipients": -9.100479133583519e244,
+      "scheduledAt": -3e-323,
+      "expiresAt": -1.797693134862313e308,
+      "state": "sent",
+      "providerRef": "",
+      "observed": "draft",
+      "cancel": {
+        "_tag": "Confirmed",
+        "coverage": "complete"
+      },
+      "detail": "JX"
+    },
+    "outcomes": {
+      "{Z": -5.520902759872992e233,
+      "-1": 9.165910043074342e-223,
+      "\udc00": -2.9369289667541875e-126
+    },
+    "drift": -8e-323,
+    "ops": [
+      {
+        "opId": "0",
+        "publicationId": "vpa/",
+        "kind": "create",
+        "state": "accepted",
+        "attempts": -7.310792338501139e86,
+        "firstAttemptAt": 6e-323,
+        "providerRef": "\udc00",
+        "detail": null
+      },
+      {
+        "opId": "0",
+        "publicationId": null,
+        "kind": "audience",
+        "state": "in-flight",
+        "attempts": 7.4e-323,
+        "firstAttemptAt": null,
+        "providerRef": "",
+        "detail": "':Pd"
+      },
+      {
+        "opId": "4d=4",
+        "publicationId": null,
+        "kind": "audience",
+        "state": "held",
+        "attempts": -2.772230735574915e26,
+        "firstAttemptAt": null,
+        "providerRef": "0",
+        "detail": ""
+      }
+    ]
+  },
+  {
+    "publication": {
+      "id": "2j=",
+      "postId": "KMHC",
+      "revision": -3.5e-323,
+      "provider": "",
+      "account": "RQ",
+      "configVersion": "7VyM",
+      "sender": " ",
+      "subject": "😀",
+      "fingerprint": "8|",
+      "recipients": 6.4e-323,
+      "scheduledAt": -2.3160661818081645e191,
+      "expiresAt": 0,
+      "state": "failed",
+      "providerRef": null,
+      "observed": "scheduled",
+      "cancel": {
+        "_tag": "Unsupported",
+        "detail": "\ud800"
+      },
+      "detail": "<a"
+    },
+    "outcomes": {
+      "\n": -5e-323,
+      "": -1.909482170127378e-268,
+      "\t": -5e-324,
+      "zj(B": 2.587773566455786e-99
+    },
+    "drift": -3e-323,
+    "ops": []
+  }
+]

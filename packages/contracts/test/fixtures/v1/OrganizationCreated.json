@@ -1,0 +1,20 @@
+[
+  {
+    "id": "",
+    "kind": "domain",
+    "name": "GYSa",
+    "seatLimit": -1.7976931348623153e308
+  },
+  {
+    "id": "\n",
+    "kind": "family",
+    "name": "\\",
+    "seatLimit": -2.187681546348401e128
+  },
+  {
+    "id": "0",
+    "kind": "domain",
+    "name": "\u0000",
+    "seatLimit": -5.1316349472606865e39
+  }
+]

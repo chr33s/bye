@@ -1,0 +1,17 @@
+[
+  {
+    "domainId": "\n",
+    "method": "delegated-token",
+    "status": "-1"
+  },
+  {
+    "domainId": "\ud800",
+    "method": "service-zone",
+    "status": "-1"
+  },
+  {
+    "domainId": "\udc00",
+    "method": "manual-records",
+    "status": " "
+  }
+]

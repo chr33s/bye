@@ -1,0 +1,69 @@
+[
+  {
+    "items": []
+  },
+  {
+    "items": [
+      {
+        "id": "\ud800",
+        "name": "0",
+        "state": "ownership-proven",
+        "plus_addressing": 2.5544018787012764e216,
+        "catch_all_mailbox_id": null,
+        "updated_at": -1.9393863297843936e-151
+      },
+      {
+        "id": "",
+        "name": " ",
+        "state": "removed",
+        "plus_addressing": 5e-323,
+        "catch_all_mailbox_id": null,
+        "updated_at": 3.941481366754015e114
+      },
+      {
+        "id": "%!",
+        "name": "",
+        "state": "removed",
+        "plus_addressing": 5.388044940923701e61,
+        "catch_all_mailbox_id": "\n",
+        "updated_at": -3.9986357785817074e-23
+      }
+    ]
+  },
+  {
+    "items": [
+      {
+        "id": "'/A;",
+        "name": "",
+        "state": "zone-authorized",
+        "plus_addressing": 1.8697155032466426e-158,
+        "catch_all_mailbox_id": null,
+        "updated_at": 1.0253390011372365e224
+      },
+      {
+        "id": "-1",
+        "name": "\n",
+        "state": "removing",
+        "plus_addressing": 1.5e-323,
+        "catch_all_mailbox_id": " ",
+        "updated_at": 1.047380873678666e259
+      },
+      {
+        "id": "",
+        "name": "😀",
+        "state": "ownership-proven",
+        "plus_addressing": 1.7976931348623137e308,
+        "catch_all_mailbox_id": "\\AZ#",
+        "updated_at": -5.720189169664504e216
+      },
+      {
+        "id": "",
+        "name": "TzJK",
+        "state": "zone-authorized",
+        "plus_addressing": 1.3203771140427985e-171,
+        "catch_all_mailbox_id": null,
+        "updated_at": 2.211178943125201e243
+      }
+    ]
+  }
+]

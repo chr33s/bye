@@ -1,0 +1,57 @@
+[
+  {
+    "enabled": true,
+    "name": "X",
+    "matchers": [],
+    "actions": [
+      {
+        "type": "-1",
+        "value": ["Z-\\", "v)}S"]
+      },
+      {
+        "type": "0"
+      },
+      {
+        "type": "😀",
+        "value": ["\ud800", "[n1S", "-1", ""]
+      }
+    ]
+  },
+  {
+    "enabled": true,
+    "matchers": [
+      {
+        "type": "\ud800",
+        "value": "(tw."
+      },
+      {
+        "type": "0"
+      },
+      {
+        "type": "\n"
+      },
+      {
+        "type": "",
+        "value": ""
+      }
+    ],
+    "actions": []
+  },
+  {
+    "enabled": false,
+    "matchers": [
+      {
+        "type": "",
+        "field": ">\\a9"
+      }
+    ],
+    "actions": [
+      {
+        "type": " "
+      },
+      {
+        "type": "em"
+      }
+    ]
+  }
+]

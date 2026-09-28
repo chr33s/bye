@@ -1,0 +1,14 @@
+[
+  {
+    "policy": "\u0000",
+    "mailboxes": ["", "d?2n", "%Z"]
+  },
+  {
+    "policy": "",
+    "mailboxes": ["0", "\n", "\n", "2/Z"]
+  },
+  {
+    "policy": "\udc00",
+    "mailboxes": []
+  }
+]

@@ -1,4 +1,6 @@
-// Mailbox, search, drafts, uploads and sending routes (§8, E01–E24).
+// Mailbox, search, drafts, uploads and sending routes (§8, E01–E24). The JSON API is the "mail"
+// HttpApi group (../spec/mail.ts); downloads, vCard import/export, part uploads and public file
+// links stay native routes (binary or streamed bodies, or no credential).
 import { Effect, type Types, Predicate } from "effect";
 import {
   blobKey,
@@ -11,6 +13,7 @@ import {
   readMailboxQuery,
   readMailboxThread,
   readMailboxView,
+  type RequestPayload,
   requireMailbox,
   type Scope,
 } from "@bye/application";
@@ -18,12 +21,7 @@ import {
   ApiError,
   MailAttachmentZipRequest,
   type MailboxCommand,
-  MailboxWriteRequest,
-  MailDraftCreateRequest,
-  MailDraftSaveRequest,
-  MailSendRequest,
   type MailViewQuery,
-  MailUploadReserveRequest,
 } from "@bye/contracts";
 import { htmlToReadableText, parseVCards, serializeVCards, type VCard } from "@bye/mail-codec";
 import {
@@ -33,11 +31,14 @@ import {
   type SearchPage,
   zipStream,
 } from "@bye/platform-cloudflare";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { call, mailbox } from "../authorities.ts";
 import { bodyKeyFor, type StoredBody } from "../objects.ts";
 import type { CoreEnv } from "../env.ts";
-import { errorResponse, type Params, route, type Route } from "../http.ts";
+import { errorResponse, Invocation, route, type Route } from "../http.ts";
+import { ok, publicly } from "../httpapi.ts";
 import { downloadToken, previewToken, renderToken } from "../render.ts";
+import { CoreApi } from "../spec/index.ts";
 import { authed, authedBody, readTextCapped } from "./common.ts";
 
 // ---------------------------------------------------------------------------- helpers
@@ -46,18 +47,13 @@ import { authed, authedBody, readTextCapped } from "./common.ts";
 const readMailbox = <A = unknown>(env: CoreEnv, mailboxId: string, query: MailboxReadQuery) =>
   call(() => mailbox(env, mailboxId).read(query)) as Effect.Effect<A, ApiError>;
 
-const num = (url: URL, key: string): number | undefined => {
-  const v = url.searchParams.get(key);
+/** Optional number query parameter: absent, empty or non-numeric reads as absent. */
+const num = (v: string | undefined): number | undefined =>
+  v === undefined || v === "" || !Number.isFinite(Number(v)) ? undefined : Number(v);
 
-  return v === null || v === "" || !Number.isFinite(Number(v)) ? undefined : Number(v);
-};
-
-/** Optional, clamped string query parameter. */
-const qs = (url: URL, key: string, max = 256): string | undefined => {
-  const v = url.searchParams.get(key);
-
-  return v ? v.slice(0, max) : undefined;
-};
+/** Optional, clamped string query parameter (empty reads as absent). */
+const clamp = (v: string | undefined, max = 256): string | undefined =>
+  v ? v.slice(0, max) : undefined;
 
 /** Upload part size returned by reserve; the last part may be smaller (R2 multipart minimum is 5 MiB). */
 const MAIL_UPLOAD_PART_BYTES = 8 * 1024 * 1024;
@@ -115,522 +111,20 @@ const requireAttachmentAccess = (
         }),
       );
 
-/**
- * Plain authority reads, as data: path, the read it maps to, and (optionally) where the mailbox ID
- * comes from and which scope it needs. One factory turns each into a route.
- */
-type ReadSpec = readonly [
-  path: string,
-  query: (params: Params, url: URL) => MailboxReadQuery,
-  options?: { readonly mailboxFrom?: "query"; readonly scope?: Scope },
-];
+/** A command or read the authority answered with nothing answers `{ ok: true }`. */
+const orOk = <A>(value: A) => value ?? ok;
 
-const READS: ReadonlyArray<ReadSpec> = [
-  ["/v1/mailboxes/:id/focus", () => ({ _tag: "FocusQueue" })],
-  ["/v1/mailboxes/:id/batches/:batchId", (p) => ({ _tag: "Batch", batchId: p.batchId! })],
-  ["/v1/mailboxes/:id/bundles/:bundleKey", (p) => ({ _tag: "Bundle", bundleKey: p.bundleKey! })],
-  ["/v1/mailboxes/:id/screener/senders", () => ({ _tag: "ScreenerSenders" })],
-  ["/v1/mailboxes/:id/searches/recent", () => ({ _tag: "RecentSearches" })],
-  // ---- sender policies (E02) ----
-  ["/v1/mailboxes/:id/policies", () => ({ _tag: "Policies" })],
-  [
-    "/v1/mailboxes/:id/policies/history",
-    (_p, url) => {
-      const subject = qs(url, "subject", 320);
+/** One mailbox command (decoded, guarded and scope-checked by the application). */
+const command = (mailboxId: string, raw: RequestPayload) =>
+  executeMailboxCommand(mailboxId, raw).pipe(Effect.map(orOk));
 
-      return subject ? { _tag: "PolicyHistory", subject } : { _tag: "PolicyHistory" };
-    },
-  ],
-  // ---- organization reads (E11–E16) ----
-  ["/v1/mailboxes/:id/labels", () => ({ _tag: "Labels" })],
-  ["/v1/mailboxes/:id/rules", () => ({ _tag: "Rules" })],
-  ["/v1/mailboxes/:id/workflows", () => ({ _tag: "Boards" })],
-  ["/v1/mailboxes/:id/workflows/:boardId", (p) => ({ _tag: "Board", boardId: p.boardId! })],
-  [
-    "/v1/mailboxes/:id/notes",
-    (_p, url) => {
-      const kind = url.searchParams.get("kind");
+/** One plain authority read, authorized for `scope` on the mailbox, answered as returned. */
+const authorityRead = (mailboxId: string, query: MailboxReadQuery, scope: Scope = "read") =>
+  readMailboxQuery(mailboxId, query, scope).pipe(Effect.map(orOk), publicly);
 
-      const notes: Types.Mutable<Extract<MailboxReadQuery, { _tag: "Notes" }>> = {
-        _tag: "Notes",
-      };
+// ---------------------------------------------------------------------------- native routes
 
-      const threadId = qs(url, "threadId", 64);
-
-      if (threadId) notes.threadId = threadId;
-
-      if (kind === "thread" || kind === "sticky" || kind === "cover") notes.kind = kind;
-
-      return notes;
-    },
-  ],
-  [
-    "/v1/mailboxes/:id/clips",
-    (_p, url) => {
-      const query = qs(url, "q");
-
-      return query ? { _tag: "Clips", query } : { _tag: "Clips" };
-    },
-  ],
-  // Personal collections (§8 `/v1/collections`, E14) and grants (the revocable large-file links).
-  ["/v1/collections", () => ({ _tag: "Collections" }), { mailboxFrom: "query" }],
-  [
-    "/v1/collections/:collectionId",
-    (p) => ({ _tag: "CollectionTimeline", collectionId: p.collectionId! }),
-    { mailboxFrom: "query" },
-  ],
-  ["/v1/grants", () => ({ _tag: "FileLinks" }), { mailboxFrom: "query" }],
-  // ---- contacts (E16) ----
-  [
-    "/v1/mailboxes/:id/contacts",
-    (_p, url) => {
-      const query = qs(url, "q");
-
-      return query ? { _tag: "Contacts", query } : { _tag: "Contacts" };
-    },
-  ],
-  [
-    "/v1/mailboxes/:id/contacts/suggest",
-    (_p, url) => ({
-      _tag: "SuggestRecipients",
-      prefix: qs(url, "prefix", 128) ?? "",
-      limit: num(url, "limit") ?? 10,
-    }),
-  ],
-  ["/v1/mailboxes/:id/contacts/:contactId", (p) => ({ _tag: "Contact", contactId: p.contactId! })],
-  [
-    "/v1/mailboxes/:id/senders/:address/history",
-    (p, url) => ({ _tag: "SenderHistory", address: p.address!, limit: num(url, "limit") ?? 50 }),
-  ],
-  [
-    "/v1/mailboxes/:id/recipients/:address/history",
-    (p, url) => ({ _tag: "RecipientHistory", address: p.address!, limit: num(url, "limit") ?? 50 }),
-  ],
-  // ---- settings reads (E19, E22–E24) ----
-  ["/v1/mailboxes/:id/identities", () => ({ _tag: "Identities" })],
-  ["/v1/mailboxes/:id/forwarding", () => ({ _tag: "ForwardingDestinations" })],
-  ["/v1/mailboxes/:id/preferences", () => ({ _tag: "Preferences" })],
-  // ---- drafts and send jobs (E17/E18) ----
-  ["/v1/mailboxes/:id/drafts", () => ({ _tag: "Drafts" }), { scope: "draft" }],
-  [
-    "/v1/mailboxes/:id/send-jobs",
-    (_p, url) => {
-      const state = qs(url, "state", 32);
-
-      return state ? { _tag: "SendJobs", state } : { _tag: "SendJobs" };
-    },
-  ],
-  ["/v1/mailboxes/:id/send-jobs/:sendJobId", (p) => ({ _tag: "SendJob", sendJobId: p.sendJobId! })],
-  [
-    "/v1/mailboxes/:id/uploads",
-    (_p, url) => ({ _tag: "Uploads", limit: num(url, "limit") ?? 100 }),
-  ],
-  // ---- attachments (E20) ----
-  [
-    "/v1/mailboxes/:id/attachments",
-    (_p, url) => {
-      const attachments: Types.Mutable<Extract<MailboxReadQuery, { _tag: "Attachments" }>> = {
-        _tag: "Attachments",
-        limit: num(url, "limit") ?? 100,
-      };
-
-      const contentTypePrefix = qs(url, "type", 64);
-      const from = qs(url, "from", 320);
-      const minSize = num(url, "minSize");
-
-      if (contentTypePrefix) attachments.contentTypePrefix = contentTypePrefix;
-
-      if (from) attachments.from = from;
-
-      if (minSize !== undefined) attachments.minSize = minSize;
-
-      return attachments;
-    },
-  ],
-];
-
-const readRoute = ([path, query, options]: ReadSpec): Route<CoreEnv> =>
-  route(
-    "GET",
-    path,
-    authed(({ params, url }) =>
-      readMailboxQuery(
-        options?.mailboxFrom === "query" ? (url.searchParams.get("mailbox") ?? "") : params.id!,
-        query(params, url),
-        options?.scope ?? "read",
-      ),
-    ),
-  );
-
-// ---------------------------------------------------------------------------- routes
-
-export const mailRoutes: ReadonlyArray<Route<CoreEnv>> = [
-  // ---- views and threads (E04–E06, E10, E11) ----
-  route(
-    "GET",
-    "/v1/mailboxes/:id/views/:view",
-    authed(({ params, url }) => {
-      const paging: Types.Mutable<Omit<MailViewQuery, "view">> = {};
-      const label = url.searchParams.get("label");
-      const cursor = url.searchParams.get("cursor");
-      const limit = url.searchParams.get("limit");
-
-      if (label) paging.label = label;
-
-      if (cursor) paging.cursor = cursor;
-
-      if (limit) paging.limit = Number(limit);
-
-      return readMailboxView(params.id!, { view: params.view, ...paging });
-    }),
-  ),
-  route(
-    "GET",
-    "/v1/mailboxes/:id/threads/:threadId",
-    authed(({ params, env }) =>
-      Effect.gen(function* () {
-        const detail = (yield* readMailboxThread(params.id!, params.threadId!)) as {
-          thread: unknown;
-          deliveries: ReadonlyArray<{ deliveryId: string }>;
-          mergeHistory: unknown;
-        };
-
-        const now = Date.now();
-
-        // Render tokens are short-lived capabilities for the separate render origin (§10).
-        const deliveries = yield* Effect.forEach(
-          detail.deliveries,
-          (d) =>
-            Effect.promise(() => renderToken(env, params.id!, d.deliveryId, now)).pipe(
-              Effect.map((token) => ({
-                ...d,
-                renderToken: token,
-                renderUrl: `${env.MAIL_ORIGIN}/render/${token}`,
-              })),
-            ),
-          { concurrency: 8 },
-        );
-
-        return { ...detail, deliveries };
-      }),
-    ),
-  ),
-  // Plain-text body for terminal and agent clients (X02): the same stored, sanitized body the
-  // render origin serves, as text. HTML-only messages are converted here, so clients never parse
-  // HTML themselves. Output is data, not markup: clients must still sanitize control characters.
-  route(
-    "GET",
-    "/v1/mailboxes/:id/deliveries/:deliveryId/text",
-    authed(({ params, env }) =>
-      Effect.gen(function* () {
-        yield* requireMailbox(params.id!, "read");
-
-        const renderable = yield* Effect.promise(() =>
-          mailbox(env, params.id!).renderable(params.deliveryId!),
-        );
-
-        if (!renderable) return yield* new NotFound({ resource: "delivery" });
-
-        const object = yield* Effect.promise(() =>
-          env.PARTS.get(bodyKeyFor(renderable.messageKey)),
-        );
-
-        // A missing body (purged, or not yet stored) is reported, never shown as an empty message.
-        if (!object) return yield* new NotFound({ resource: "message body" });
-        const stored = (yield* Effect.promise(() => object.json())) as StoredBody;
-        const converted = !stored.text.trim() && stored.html !== null;
-        const text = converted ? htmlToReadableText(stored.html!) : stored.text;
-        const truncated = text.length > TEXT_BODY_MAX_CHARS;
-        let cut = truncated ? text.slice(0, TEXT_BODY_MAX_CHARS) : text;
-
-        // Never end on half of a surrogate pair (an emoji cut in two).
-        if (truncated && /[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
-
-        return {
-          schemaVersion: 1,
-          deliveryId: params.deliveryId!,
-          text: cut,
-          truncated,
-          source: converted ? "html" : "text",
-          hasHtml: stored.html !== null,
-        };
-      }),
-    ),
-  ),
-  // Expanded Feed (E05): one page of feed threads, each with its latest message's render URL for
-  // safe lazy rendering; visit markers and remembered position come with the page.
-  route(
-    "GET",
-    "/v1/mailboxes/:id/feed",
-    authed(({ params, url, env }) =>
-      Effect.gen(function* () {
-        const feedCursor = url.searchParams.get("cursor");
-        const feedLimit = Math.min(num(url, "limit") ?? 20, 50);
-
-        const page = (yield* readMailboxView(
-          params.id!,
-          feedCursor
-            ? { view: "feed", limit: feedLimit, cursor: feedCursor }
-            : { view: "feed", limit: feedLimit },
-        )) as {
-          items: ReadonlyArray<{ threadId: string }>;
-          nextCursor: string | null;
-          boundary: number;
-          position?: string | null;
-          previousVisitAt?: number;
-        };
-
-        const now = Date.now();
-        const stub = mailbox(env, params.id!);
-
-        const items = yield* Effect.forEach(
-          page.items,
-          (thread) =>
-            Effect.gen(function* () {
-              const t = (yield* Effect.promise(() => stub.thread(thread.threadId))) as {
-                ok: boolean;
-                value?: {
-                  deliveries: ReadonlyArray<{
-                    deliveryId: string;
-                    from: unknown;
-                    date: number;
-                    subject: string;
-                  }>;
-                };
-              };
-
-              const latest = t.ok ? t.value?.deliveries.at(-1) : undefined;
-
-              if (!latest) return { thread, latest: null };
-
-              const token = yield* Effect.promise(() =>
-                renderToken(env, params.id!, latest.deliveryId, now),
-              );
-
-              return {
-                thread,
-                latest: {
-                  deliveryId: latest.deliveryId,
-                  from: latest.from,
-                  date: latest.date,
-                  subject: latest.subject,
-                  renderUrl: `${env.MAIL_ORIGIN}/render/${token}`,
-                },
-              };
-            }),
-          { concurrency: 6 },
-        );
-
-        return {
-          items,
-          nextCursor: page.nextCursor,
-          boundary: page.boundary,
-          position: page.position ?? null,
-          previousVisitAt: page.previousVisitAt ?? 0,
-        };
-      }),
-    ),
-  ),
-  // Unified view across the principal's mailboxes with identity badges (E19). Bounded fan-out.
-  route(
-    "GET",
-    "/v1/unified/views/:view",
-    authed(({ params, url, env }) =>
-      Effect.gen(function* () {
-        const principal = yield* Principal;
-
-        if (!principal.scopes.includes("read"))
-          return yield* new Forbidden({ reason: "missing scope read" });
-        const limit = Math.min(num(url, "limit") ?? 50, 100);
-
-        const cursors = (() => {
-          try {
-            return JSON.parse(atob(url.searchParams.get("cursor") ?? "") || "{}") as Record<
-              string,
-              string | null
-            >;
-          } catch {
-            return {} as Record<string, string | null>;
-          }
-        })();
-
-        // Cursor map: mailboxId → resume cursor ("" = from the start); absent = exhausted.
-        const first = !url.searchParams.get("cursor");
-
-        const mailboxes = principal.mailboxIds
-          .slice(0, MAX_UNIFIED_MAILBOXES)
-          .filter((m) => first || Predicate.isString(cursors[m]));
-
-        type Page = {
-          items: ReadonlyArray<{ lastActivityAt: number; threadId: string }>;
-          nextCursor: string | null;
-          order?: {
-            ascending: boolean;
-            keys: ReadonlyArray<number>;
-            cursors: ReadonlyArray<string>;
-          };
-        };
-
-        const pages = yield* Effect.forEach(
-          mailboxes,
-          (mailboxId) =>
-            Effect.gen(function* () {
-              const mailboxCursor = cursors[mailboxId];
-
-              const page = (yield* readMailboxView(
-                mailboxId,
-                mailboxCursor
-                  ? { view: params.view, limit, cursor: mailboxCursor }
-                  : { view: params.view, limit },
-              )) as Page;
-
-              const ids = (yield* readMailbox<{
-                items: ReadonlyArray<{ address: string; name: string | null; isDefault: boolean }>;
-              }>(env, mailboxId, { _tag: "Identities" })).items;
-
-              const primary = ids.find((i) => i.isDefault) ?? ids[0];
-
-              return {
-                mailboxId,
-                page,
-                identity: primary ? { address: primary.address, name: primary.name } : null,
-              };
-            }),
-          { concurrency: 4 },
-        );
-
-        // Merge by each view's own sort key and direction, take exactly `limit`, and resume every
-        // mailbox right after the last item it contributed (items not shown are fetched again later).
-        const ascending = pages.find((p) => p.page.order)?.page.order?.ascending ?? false;
-
-        const candidates = pages.flatMap((p) =>
-          p.page.items.map((thread, i) => ({
-            mailboxId: p.mailboxId,
-            identity: p.identity,
-            thread,
-            index: i,
-            key: p.page.order?.keys[i] ?? thread.lastActivityAt,
-          })),
-        );
-
-        candidates.sort(
-          (a, b) =>
-            (ascending ? a.key - b.key : b.key - a.key) ||
-            (a.thread.threadId < b.thread.threadId ? (ascending ? -1 : 1) : ascending ? 1 : -1),
-        );
-        const taken = candidates.slice(0, limit);
-        const next: Record<string, string> = {};
-
-        for (const p of pages) {
-          const used = taken.filter((t) => t.mailboxId === p.mailboxId);
-
-          if (used.length === p.page.items.length) {
-            if (p.page.nextCursor) next[p.mailboxId] = p.page.nextCursor;
-          } else if (used.length === 0) {
-            next[p.mailboxId] = cursors[p.mailboxId] ?? "";
-          } else {
-            const lastIndex = Math.max(...used.map((t) => t.index));
-            const resume = p.page.order?.cursors[lastIndex];
-
-            if (resume) next[p.mailboxId] = resume;
-          }
-        }
-
-        const items = taken.map(({ mailboxId, identity, thread }) => ({
-          mailboxId,
-          identity,
-          thread,
-        }));
-
-        return {
-          view: params.view,
-          items,
-          cursors: next,
-          cursor: Object.keys(next).length ? btoa(JSON.stringify(next)) : null,
-        };
-      }),
-    ),
-  ),
-
-  // ---- commands ----
-  // Per-command guards (step-up, redelivery, rule targets, send-as) live with the scope table in
-  // the application's `executeMailboxCommand` (COMMAND_GUARDS).
-  route(
-    "POST",
-    "/v1/mailboxes/:id/commands",
-    authed(({ params, body }) => executeMailboxCommand(params.id!, body)),
-  ),
-
-  // ---- search (§8, E21): fan out over the mailbox's shards, merge by date, rehydrate ----
-  route(
-    "GET",
-    "/v1/mailboxes/:id/search",
-    authed(({ params, url, env }) =>
-      Effect.gen(function* () {
-        const principal = yield* requireMailbox(params.id!, "read");
-        const q = (url.searchParams.get("q") ?? "").slice(0, 1024);
-        const limit = Math.min(100, Math.max(1, num(url, "limit") ?? 25));
-        const cursor = url.searchParams.get("cursor") ?? undefined;
-        const stub = mailbox(env, params.id!);
-        const shards = (yield* Effect.promise(() => stub.searchShards())).slice(-MAX_SEARCH_SHARDS);
-
-        const pages: Array<SearchPage> = yield* Effect.forEach(
-          shards,
-          // A shard refusal (bad cursor, too many terms) is the client's 400, not a 500.
-          (s) =>
-            call(() =>
-              env.SEARCH_SHARDS.getByName(s.name).candidates(
-                q,
-                cursor ? { limit, cursor } : { limit },
-              ),
-            ),
-          { concurrency: 4 },
-        );
-
-        // Merge (de-duplicated) by stable date ordering, then rehydrate/reauthorize (never compare
-        // shard scores). The cursor comes from the same merged page the results do.
-        const { results, last, more } = yield* Effect.promise(() =>
-          authorizeSearchResults(pages, (candidates) => stub.searchHits(candidates, q), limit),
-        );
-
-        const indexing = yield* Effect.promise(() => stub.indexWatermark());
-
-        // Recording the query is a write to the mailbox: only for credentials that may triage it.
-        // Read-only credentials (agents, support sessions) search without leaving history behind.
-        if (q.trim() && !cursor && principal.scopes.includes("screen"))
-          yield* readMailbox(env, params.id!, { _tag: "RecordSearch", query: q });
-
-        return {
-          results,
-          nextCursor: more && last ? btoa(JSON.stringify({ d: last.date, id: last.docId })) : null,
-          watermark: indexing.watermark,
-          lagging: indexing.lagging,
-        };
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/changes",
-    authed(({ url }) =>
-      readMailboxChanges(
-        url.searchParams.get("mailbox") ?? "",
-        Number(url.searchParams.get("cursor") ?? "0"),
-      ),
-    ),
-  ),
-  route(
-    "DELETE",
-    "/v1/grants/:grantId",
-    authed(({ params, url, request }) =>
-      executeMailboxCommand(url.searchParams.get("mailbox") ?? "", {
-        _tag: "RevokeFileLink",
-        commandId: idempotencyKey(request) ?? `revoke:${params.grantId}`,
-        linkId: params.grantId,
-      }),
-    ),
-  ),
-
+export const mailRoutes: ReadonlyArray<Route> = [
   // ---- contacts (E16): vCard export and import ----
   route(
     "GET",
@@ -723,144 +217,7 @@ export const mailRoutes: ReadonlyArray<Route<CoreEnv>> = [
     ),
   ),
 
-  route(
-    "GET",
-    "/v1/mailboxes/:id/quota",
-    authed(({ params, env }) =>
-      requireMailbox(params.id!, "read").pipe(
-        // Include parts, bodies and exports (D1 accounting) in what the quota reports (§12).
-        Effect.andThen(() => Effect.promise(() => mailbox(env, params.id!).refreshExternalUsage())),
-        Effect.andThen(() => readMailbox(env, params.id!, { _tag: "Quota" })),
-      ),
-    ),
-  ),
-
-  // ---- drafts and sending (E17/E18) ----
-  route(
-    "POST",
-    "/v1/drafts",
-    authedBody(
-      MailDraftCreateRequest,
-      ({ body }) => {
-        const draft = {
-          _tag: "CreateDraft",
-          commandId: body.commandId,
-          content: body.content,
-        } as const;
-
-        return executeMailboxCommand(
-          body.mailboxId,
-          body.threadId ? { ...draft, threadId: body.threadId } : draft,
-        );
-      },
-      { status: 201 },
-    ),
-  ),
-  route(
-    "PATCH",
-    "/v1/drafts/:id",
-    authedBody(MailDraftSaveRequest, ({ params, body }) =>
-      executeMailboxCommand(body.mailboxId, {
-        _tag: "SaveDraft",
-        commandId: body.commandId,
-        draftId: params.id,
-        expectedRevision: body.expectedRevision,
-        content: body.content,
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/drafts/:id/send",
-    authedBody(
-      MailSendRequest,
-      ({ params, body }) => {
-        const send: Types.Mutable<Extract<MailboxCommand, { _tag: "Send" }>> = {
-          _tag: "Send",
-          commandId: body.commandId,
-          draftId: params.id!,
-          expectedRevision: body.revision,
-        };
-
-        if (body.sendAt) send.sendAt = body.sendAt;
-
-        if (body.individually) send.individually = true;
-
-        if (body.afterSend !== undefined) send.afterSend = body.afterSend;
-
-        return executeMailboxCommand(body.mailboxId, send);
-      },
-      { status: 202 },
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/send-jobs/:id/cancel",
-    authedBody(MailboxWriteRequest, ({ params, body }) =>
-      executeMailboxCommand(body.mailboxId, {
-        _tag: "CancelSend",
-        commandId: body.commandId,
-        sendJobId: params.id,
-      }),
-    ),
-  ),
-  route(
-    "GET",
-    "/v1/mailboxes/:id/drafts/:draftId",
-    authed(({ params, env }) =>
-      Effect.gen(function* () {
-        yield* requireMailbox(params.id!, "draft");
-        const draft = yield* Effect.promise(() => mailbox(env, params.id!).draft(params.draftId!));
-
-        if (!draft) return yield* new NotFound({ resource: "draft" });
-
-        return draft;
-      }),
-    ),
-  ),
-
-  // ---- uploads (§8 `/v1/uploads`, E20): reserve → PUT parts (R2 multipart) → complete ----
-  route(
-    "POST",
-    "/v1/uploads",
-    authedBody(
-      MailUploadReserveRequest,
-      ({ body, env }) =>
-        Effect.gen(function* () {
-          // The quota decision counts parts, bodies and exports too (§12): refresh them first.
-          yield* requireMailbox(body.mailboxId, "draft");
-          const stub = mailbox(env, body.mailboxId);
-          yield* Effect.promise(() => stub.refreshExternalUsage());
-
-          const reserved = (yield* executeMailboxCommand(body.mailboxId, {
-            _tag: "ReserveUpload",
-            commandId: body.commandId,
-            filename: body.filename,
-            contentType: body.contentType || "application/octet-stream",
-            declaredSize: body.declaredSize,
-          })) as { uploadId: string; blobKey: string };
-
-          const existing = yield* Effect.promise(() => stub.uploadParts(reserved.uploadId));
-
-          if (!existing.r2UploadId) {
-            const mp = yield* Effect.promise(() =>
-              env.PARTS.createMultipartUpload(reserved.blobKey, {
-                customMetadata: { filename: body.filename.slice(0, 255) },
-              }),
-            );
-
-            yield* Effect.promise(() => stub.setUploadR2Id(reserved.uploadId, mp.uploadId));
-          }
-
-          return {
-            uploadId: reserved.uploadId,
-            partSize: MAIL_UPLOAD_PART_BYTES,
-            maxParts: 10_000,
-          };
-        }),
-      { status: 201 },
-    ),
-  ),
+  // ---- uploads (§8 `/v1/uploads`, E20): the part body streams straight to R2 multipart ----
   route(
     "PUT",
     "/v1/uploads/:uploadId/parts/:part",
@@ -918,96 +275,6 @@ export const mailRoutes: ReadonlyArray<Route<CoreEnv>> = [
       { rawBody: true },
     ),
   ),
-  route(
-    "POST",
-    "/v1/uploads/:uploadId/complete",
-    authedBody(MailboxWriteRequest, ({ params, body, env }) =>
-      Effect.gen(function* () {
-        const { mailboxId, commandId } = body;
-        yield* requireMailbox(mailboxId, "draft");
-        const stub = mailbox(env, mailboxId);
-
-        const state = yield* readMailbox<{ blobKey: string; declaredSize: number }>(
-          env,
-          mailboxId,
-          { _tag: "Upload", uploadId: params.uploadId! },
-        );
-
-        const { r2UploadId, parts } = yield* Effect.promise(() =>
-          stub.uploadParts(params.uploadId!),
-        );
-
-        if (parts.length === 0 && state.declaredSize === 0) {
-          // An empty file has no parts to upload: store the empty object directly (R2 multipart
-          // needs at least one part), then verify and scan like any other upload.
-          if (r2UploadId)
-            yield* Effect.promise(() =>
-              env.PARTS.resumeMultipartUpload(state.blobKey, r2UploadId)
-                .abort()
-                .catch(() => undefined),
-            );
-          yield* Effect.promise(() => env.PARTS.put(state.blobKey, new Uint8Array(0)));
-
-          return yield* executeMailboxCommand(mailboxId, {
-            _tag: "CompleteUpload",
-            commandId,
-            uploadId: params.uploadId,
-            actualSize: 0,
-          });
-        }
-
-        if (!r2UploadId || parts.length === 0)
-          return yield* new ApiError({ code: "conflict", message: "no parts uploaded" });
-        const mp = env.PARTS.resumeMultipartUpload(state.blobKey, r2UploadId);
-        yield* Effect.promise(() =>
-          mp.complete(parts.map((p) => ({ partNumber: p.n, etag: p.etag }))),
-        );
-        // Verify the ACTUAL stored size against the declaration before scanning (§10).
-        const head = yield* Effect.promise(() => env.PARTS.head(state.blobKey));
-
-        if (!head) return yield* new ApiError({ code: "conflict", message: "upload not stored" });
-
-        return yield* executeMailboxCommand(mailboxId, {
-          _tag: "CompleteUpload",
-          commandId,
-          uploadId: params.uploadId,
-          actualSize: head.size,
-        });
-      }),
-    ),
-  ),
-  route(
-    "POST",
-    "/v1/uploads/:uploadId/abort",
-    authedBody(MailboxWriteRequest, ({ params, body, env }) =>
-      Effect.gen(function* () {
-        const { mailboxId, commandId } = body;
-        yield* requireMailbox(mailboxId, "draft");
-
-        const state = yield* readMailbox<{ blobKey: string }>(env, mailboxId, {
-          _tag: "Upload",
-          uploadId: params.uploadId!,
-        });
-
-        const { r2UploadId } = yield* Effect.promise(() =>
-          mailbox(env, mailboxId).uploadParts(params.uploadId!),
-        );
-
-        if (r2UploadId)
-          yield* Effect.promise(() =>
-            env.PARTS.resumeMultipartUpload(state.blobKey, r2UploadId)
-              .abort()
-              .catch(() => undefined),
-          );
-
-        return yield* executeMailboxCommand(mailboxId, {
-          _tag: "AbortUpload",
-          commandId,
-          uploadId: params.uploadId,
-        });
-      }),
-    ),
-  ),
 
   // ---- attachments (E20) ----
   route(
@@ -1040,52 +307,6 @@ export const mailRoutes: ReadonlyArray<Route<CoreEnv>> = [
         raw: ({ object, attachment }) =>
           new Response(object.body, { headers: downloadHeaders(attachment.filename, object.size) }),
       },
-    ),
-  ),
-  // Signed, short-lived download link on the render origin for clients that open links outside the app.
-  route(
-    "POST",
-    "/v1/mailboxes/:id/deliveries/:deliveryId/attachments/:partId/link",
-    authed(({ params, env }) =>
-      Effect.gen(function* () {
-        yield* requireMailbox(params.id!, "read");
-
-        const a = yield* Effect.promise(() =>
-          mailbox(env, params.id!).attachmentFor(params.deliveryId!, params.partId!),
-        );
-
-        if (!a) return yield* new NotFound({ resource: "attachment" });
-        yield* requireAttachmentAccess(a.access);
-
-        const token = yield* Effect.promise(() =>
-          downloadToken(env, params.id!, params.deliveryId!, params.partId!, Date.now()),
-        );
-
-        return { downloadUrl: `${env.MAIL_ORIGIN}/render/${token}`, expiresInSeconds: 300 };
-      }),
-    ),
-  ),
-  // Sandboxed preview on the render origin (text and raster images only).
-  route(
-    "GET",
-    "/v1/mailboxes/:id/deliveries/:deliveryId/attachments/:partId/preview",
-    authed(({ params, env }) =>
-      Effect.gen(function* () {
-        yield* requireMailbox(params.id!, "read");
-
-        const a = yield* Effect.promise(() =>
-          mailbox(env, params.id!).attachmentFor(params.deliveryId!, params.partId!),
-        );
-
-        if (!a) return yield* new NotFound({ resource: "attachment" });
-        yield* requireAttachmentAccess(a.access);
-
-        const token = yield* Effect.promise(() =>
-          previewToken(env, params.id!, params.deliveryId!, params.partId!, Date.now()),
-        );
-
-        return { previewUrl: `${env.MAIL_ORIGIN}/render/${token}` };
-      }),
     ),
   ),
   // Bulk download: bounded, clean-scanned only, streamed as a stored ZIP.
@@ -1166,8 +387,672 @@ export const mailRoutes: ReadonlyArray<Route<CoreEnv>> = [
       headers: { ...downloadHeaders(link.filename, object.size), "x-robots-tag": "noindex" },
     });
   }),
-
-  // Plain authority reads (declared above as data). Listed after the specific routes they could
-  // shadow (e.g. `contacts/export.vcf` before `contacts/:contactId`).
-  ...READS.map(readRoute),
 ];
+
+// ---------------------------------------------------------------------------- JSON API
+
+export const MailHandlers = HttpApiBuilder.group(CoreApi, "mail", (handlers) =>
+  handlers
+    // ---- views and threads (E04–E06, E10, E11) ----
+    .handle("getView", ({ params, query }) => {
+      const paging: Types.Mutable<Omit<MailViewQuery, "view">> = {};
+
+      if (query.label) paging.label = query.label;
+
+      if (query.cursor) paging.cursor = query.cursor;
+
+      if (query.limit) paging.limit = Number(query.limit);
+
+      return readMailboxView(params.id, { view: params.view, ...paging }).pipe(publicly);
+    })
+    .handle("getThread", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+
+        // The authority's thread detail is untyped over RPC; only the delivery IDs are read here,
+        // every other key passes through (`MailRenderableDelivery`).
+        const detail = (yield* readMailboxThread(params.id, params.threadId)) as {
+          readonly thread: unknown;
+          readonly deliveries: ReadonlyArray<{ readonly deliveryId: string }>;
+          readonly mergeHistory: unknown;
+        };
+
+        const now = Date.now();
+
+        // Render tokens are short-lived capabilities for the separate render origin (§10).
+        const deliveries = yield* Effect.forEach(
+          detail.deliveries,
+          (d) =>
+            Effect.promise(() => renderToken(env, params.id, d.deliveryId, now)).pipe(
+              Effect.map((token) => ({
+                ...d,
+                renderToken: token,
+                renderUrl: `${env.MAIL_ORIGIN}/render/${token}`,
+              })),
+            ),
+          { concurrency: 8 },
+        );
+
+        return { ...detail, deliveries };
+      }).pipe(publicly),
+    )
+    .handle("getDeliveryText", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        yield* requireMailbox(params.id, "read");
+
+        const renderable = yield* Effect.promise(() =>
+          mailbox(env, params.id).renderable(params.deliveryId),
+        );
+
+        if (!renderable) return yield* new NotFound({ resource: "delivery" });
+
+        const object = yield* Effect.promise(() =>
+          env.PARTS.get(bodyKeyFor(renderable.messageKey)),
+        );
+
+        // A missing body (purged, or not yet stored) is reported, never shown as an empty message.
+        if (!object) return yield* new NotFound({ resource: "message body" });
+        const stored = (yield* Effect.promise(() => object.json())) as StoredBody;
+        const converted = !stored.text.trim() && stored.html !== null;
+        const text = converted ? htmlToReadableText(stored.html!) : stored.text;
+        const truncated = text.length > TEXT_BODY_MAX_CHARS;
+        let cut = truncated ? text.slice(0, TEXT_BODY_MAX_CHARS) : text;
+
+        // Never end on half of a surrogate pair (an emoji cut in two).
+        if (truncated && /[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+
+        return {
+          schemaVersion: 1 as const,
+          deliveryId: params.deliveryId,
+          text: cut,
+          truncated,
+          source: converted ? ("html" as const) : ("text" as const),
+          hasHtml: stored.html !== null,
+        };
+      }).pipe(publicly),
+    )
+    .handle("getFeed", ({ params, query }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const feedLimit = Math.min(num(query.limit) ?? 20, 50);
+
+        const page = yield* readMailboxView(
+          params.id,
+          query.cursor
+            ? { view: "feed", limit: feedLimit, cursor: query.cursor }
+            : { view: "feed", limit: feedLimit },
+        );
+
+        const now = Date.now();
+        const stub = mailbox(env, params.id);
+
+        const items = yield* Effect.forEach(
+          page.items,
+          (thread) =>
+            Effect.gen(function* () {
+              const t = (yield* Effect.promise(() => stub.thread(thread.threadId))) as {
+                ok: boolean;
+                value?: {
+                  deliveries: ReadonlyArray<{
+                    deliveryId: string;
+                    from: unknown;
+                    date: number;
+                    subject: string;
+                  }>;
+                };
+              };
+
+              const latest = t.ok ? t.value?.deliveries.at(-1) : undefined;
+
+              if (!latest) return { thread, latest: null };
+
+              const token = yield* Effect.promise(() =>
+                renderToken(env, params.id, latest.deliveryId, now),
+              );
+
+              return {
+                thread,
+                latest: {
+                  deliveryId: latest.deliveryId,
+                  from: latest.from,
+                  date: latest.date,
+                  subject: latest.subject,
+                  renderUrl: `${env.MAIL_ORIGIN}/render/${token}`,
+                },
+              };
+            }),
+          { concurrency: 6 },
+        );
+
+        return {
+          items,
+          nextCursor: page.nextCursor,
+          boundary: page.boundary,
+          position: page.position ?? null,
+          previousVisitAt: page.previousVisitAt ?? 0,
+        };
+      }).pipe(publicly),
+    )
+    .handle("getUnifiedView", ({ params, query }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* Principal;
+
+        if (!principal.scopes.includes("read"))
+          return yield* new Forbidden({ reason: "missing scope read" });
+        const limit = Math.min(num(query.limit) ?? 50, 100);
+
+        const cursors = (() => {
+          try {
+            return JSON.parse(atob(query.cursor ?? "") || "{}") as Record<string, string | null>;
+          } catch {
+            return {} as Record<string, string | null>;
+          }
+        })();
+
+        // Cursor map: mailboxId → resume cursor ("" = from the start); absent = exhausted.
+        const first = !query.cursor;
+
+        const mailboxes = principal.mailboxIds
+          .slice(0, MAX_UNIFIED_MAILBOXES)
+          .filter((m) => first || Predicate.isString(cursors[m]));
+
+        const pages = yield* Effect.forEach(
+          mailboxes,
+          (mailboxId) =>
+            Effect.gen(function* () {
+              const mailboxCursor = cursors[mailboxId];
+
+              const page = yield* readMailboxView(
+                mailboxId,
+                mailboxCursor
+                  ? { view: params.view, limit, cursor: mailboxCursor }
+                  : { view: params.view, limit },
+              );
+
+              const ids = (yield* readMailbox<{
+                items: ReadonlyArray<{ address: string; name: string | null; isDefault: boolean }>;
+              }>(env, mailboxId, { _tag: "Identities" })).items;
+
+              const primary = ids.find((i) => i.isDefault) ?? ids[0];
+
+              return {
+                mailboxId,
+                page,
+                identity: primary ? { address: primary.address, name: primary.name } : null,
+              };
+            }),
+          { concurrency: 4 },
+        );
+
+        // Merge by each view's own sort key and direction, take exactly `limit`, and resume every
+        // mailbox right after the last item it contributed (items not shown are fetched again later).
+        const ascending = pages.find((p) => p.page.order)?.page.order?.ascending ?? false;
+
+        const candidates = pages.flatMap((p) =>
+          p.page.items.map((thread, i) => ({
+            mailboxId: p.mailboxId,
+            identity: p.identity,
+            thread,
+            index: i,
+            key: p.page.order?.keys[i] ?? thread.lastActivityAt,
+          })),
+        );
+
+        candidates.sort(
+          (a, b) =>
+            (ascending ? a.key - b.key : b.key - a.key) ||
+            (a.thread.threadId < b.thread.threadId ? (ascending ? -1 : 1) : ascending ? 1 : -1),
+        );
+        const taken = candidates.slice(0, limit);
+        const next: Record<string, string> = {};
+
+        for (const p of pages) {
+          const used = taken.filter((t) => t.mailboxId === p.mailboxId);
+
+          if (used.length === p.page.items.length) {
+            if (p.page.nextCursor) next[p.mailboxId] = p.page.nextCursor;
+          } else if (used.length === 0) {
+            next[p.mailboxId] = cursors[p.mailboxId] ?? "";
+          } else {
+            const lastIndex = Math.max(...used.map((t) => t.index));
+            const resume = p.page.order?.cursors[lastIndex];
+
+            if (resume) next[p.mailboxId] = resume;
+          }
+        }
+
+        const items = taken.map(({ mailboxId, identity, thread }) => ({
+          mailboxId,
+          identity,
+          thread,
+        }));
+
+        return {
+          view: params.view,
+          items,
+          cursors: next,
+          cursor: Object.keys(next).length ? btoa(JSON.stringify(next)) : null,
+        };
+      }).pipe(publicly),
+    )
+
+    // ---- commands ----
+    .handle("executeCommand", ({ params, payload }) => command(params.id, payload).pipe(publicly))
+
+    // ---- search (§8, E21): fan out over the mailbox's shards, merge by date, rehydrate ----
+    .handle("search", ({ params, query }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireMailbox(params.id, "read");
+        const q = (query.q ?? "").slice(0, 1024);
+        const limit = Math.min(100, Math.max(1, num(query.limit) ?? 25));
+        const cursor = query.cursor;
+        const stub = mailbox(env, params.id);
+        const shards = (yield* Effect.promise(() => stub.searchShards())).slice(-MAX_SEARCH_SHARDS);
+
+        const pages: Array<SearchPage> = yield* Effect.forEach(
+          shards,
+          // A shard refusal (bad cursor, too many terms) is the client's 400, not a 500.
+          (s) =>
+            call(() =>
+              env.SEARCH_SHARDS.getByName(s.name).candidates(
+                q,
+                cursor ? { limit, cursor } : { limit },
+              ),
+            ),
+          { concurrency: 4 },
+        );
+
+        // Merge (de-duplicated) by stable date ordering, then rehydrate/reauthorize (never compare
+        // shard scores). The cursor comes from the same merged page the results do.
+        const { results, last, more } = yield* Effect.promise(() =>
+          authorizeSearchResults(pages, (candidates) => stub.searchHits(candidates, q), limit),
+        );
+
+        const indexing = yield* Effect.promise(() => stub.indexWatermark());
+
+        // Recording the query is a write to the mailbox: only for credentials that may triage it.
+        // Read-only credentials (agents, support sessions) search without leaving history behind.
+        if (q.trim() && !cursor && principal.scopes.includes("screen"))
+          yield* readMailbox(env, params.id, { _tag: "RecordSearch", query: q });
+
+        return {
+          results,
+          nextCursor: more && last ? btoa(JSON.stringify({ d: last.date, id: last.docId })) : null,
+          watermark: indexing.watermark,
+          lagging: indexing.lagging,
+        };
+      }).pipe(publicly),
+    )
+    .handle("listChanges", ({ query }) =>
+      readMailboxChanges(query.mailbox ?? "", Number(query.cursor ?? "0")).pipe(publicly),
+    )
+    .handle("revokeGrant", ({ params, query }) =>
+      Effect.gen(function* () {
+        const { request } = yield* Invocation;
+
+        return yield* command(query.mailbox ?? "", {
+          _tag: "RevokeFileLink",
+          commandId: idempotencyKey(request) ?? `revoke:${params.grantId}`,
+          linkId: params.grantId,
+        });
+      }).pipe(publicly),
+    )
+    .handle("getQuota", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        yield* requireMailbox(params.id, "read");
+        // Include parts, bodies and exports (D1 accounting) in what the quota reports (§12).
+        yield* Effect.promise(() => mailbox(env, params.id).refreshExternalUsage());
+
+        return orOk(yield* readMailbox(env, params.id, { _tag: "Quota" }));
+      }).pipe(publicly),
+    )
+
+    // ---- drafts and sending (E17/E18) ----
+    .handle("createDraft", ({ payload }) => {
+      const draft = {
+        _tag: "CreateDraft",
+        commandId: payload.commandId,
+        content: payload.content,
+      } as const;
+
+      return command(
+        payload.mailboxId,
+        payload.threadId ? { ...draft, threadId: payload.threadId } : draft,
+      ).pipe(publicly);
+    })
+    .handle("saveDraft", ({ params, payload }) =>
+      command(payload.mailboxId, {
+        _tag: "SaveDraft",
+        commandId: payload.commandId,
+        draftId: params.id,
+        expectedRevision: payload.expectedRevision,
+        content: payload.content,
+      }).pipe(publicly),
+    )
+    .handle("sendDraft", ({ params, payload }) => {
+      const send: Types.Mutable<Extract<MailboxCommand, { _tag: "Send" }>> = {
+        _tag: "Send",
+        commandId: payload.commandId,
+        draftId: params.id,
+        expectedRevision: payload.revision,
+      };
+
+      if (payload.sendAt) send.sendAt = payload.sendAt;
+
+      if (payload.individually) send.individually = true;
+
+      if (payload.afterSend !== undefined) send.afterSend = payload.afterSend;
+
+      return command(payload.mailboxId, send).pipe(publicly);
+    })
+    .handle("cancelSend", ({ params, payload }) =>
+      command(payload.mailboxId, {
+        _tag: "CancelSend",
+        commandId: payload.commandId,
+        sendJobId: params.id,
+      }).pipe(publicly),
+    )
+    .handle("getDraft", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        yield* requireMailbox(params.id, "draft");
+        const draft = yield* Effect.promise(() => mailbox(env, params.id).draft(params.draftId));
+
+        if (!draft) return yield* new NotFound({ resource: "draft" });
+
+        return draft;
+      }).pipe(publicly),
+    )
+
+    // ---- uploads (§8 `/v1/uploads`, E20): reserve → PUT parts (R2 multipart) → complete ----
+    .handle("reserveUpload", ({ payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        // The quota decision counts parts, bodies and exports too (§12): refresh them first.
+        yield* requireMailbox(payload.mailboxId, "draft");
+        const stub = mailbox(env, payload.mailboxId);
+        yield* Effect.promise(() => stub.refreshExternalUsage());
+
+        const reserved = (yield* executeMailboxCommand(payload.mailboxId, {
+          _tag: "ReserveUpload",
+          commandId: payload.commandId,
+          filename: payload.filename,
+          contentType: payload.contentType || "application/octet-stream",
+          declaredSize: payload.declaredSize,
+        })) as { uploadId: string; blobKey: string };
+
+        const existing = yield* Effect.promise(() => stub.uploadParts(reserved.uploadId));
+
+        if (!existing.r2UploadId) {
+          const mp = yield* Effect.promise(() =>
+            env.PARTS.createMultipartUpload(reserved.blobKey, {
+              customMetadata: { filename: payload.filename.slice(0, 255) },
+            }),
+          );
+
+          yield* Effect.promise(() => stub.setUploadR2Id(reserved.uploadId, mp.uploadId));
+        }
+
+        return {
+          uploadId: reserved.uploadId,
+          partSize: MAIL_UPLOAD_PART_BYTES,
+          maxParts: 10_000,
+        };
+      }).pipe(publicly),
+    )
+    .handle("completeUpload", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { mailboxId, commandId } = payload;
+        yield* requireMailbox(mailboxId, "draft");
+        const stub = mailbox(env, mailboxId);
+
+        const state = yield* readMailbox<{ blobKey: string; declaredSize: number }>(
+          env,
+          mailboxId,
+          { _tag: "Upload", uploadId: params.uploadId },
+        );
+
+        const { r2UploadId, parts } = yield* Effect.promise(() =>
+          stub.uploadParts(params.uploadId),
+        );
+
+        if (parts.length === 0 && state.declaredSize === 0) {
+          // An empty file has no parts to upload: store the empty object directly (R2 multipart
+          // needs at least one part), then verify and scan like any other upload.
+          if (r2UploadId)
+            yield* Effect.promise(() =>
+              env.PARTS.resumeMultipartUpload(state.blobKey, r2UploadId)
+                .abort()
+                .catch(() => undefined),
+            );
+          yield* Effect.promise(() => env.PARTS.put(state.blobKey, new Uint8Array(0)));
+
+          return yield* command(mailboxId, {
+            _tag: "CompleteUpload",
+            commandId,
+            uploadId: params.uploadId,
+            actualSize: 0,
+          });
+        }
+
+        if (!r2UploadId || parts.length === 0)
+          return yield* new ApiError({ code: "conflict", message: "no parts uploaded" });
+        const mp = env.PARTS.resumeMultipartUpload(state.blobKey, r2UploadId);
+        yield* Effect.promise(() =>
+          mp.complete(parts.map((p) => ({ partNumber: p.n, etag: p.etag }))),
+        );
+        // Verify the ACTUAL stored size against the declaration before scanning (§10).
+        const head = yield* Effect.promise(() => env.PARTS.head(state.blobKey));
+
+        if (!head) return yield* new ApiError({ code: "conflict", message: "upload not stored" });
+
+        return yield* command(mailboxId, {
+          _tag: "CompleteUpload",
+          commandId,
+          uploadId: params.uploadId,
+          actualSize: head.size,
+        });
+      }).pipe(publicly),
+    )
+    .handle("abortUpload", ({ params, payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const { mailboxId, commandId } = payload;
+        yield* requireMailbox(mailboxId, "draft");
+
+        const state = yield* readMailbox<{ blobKey: string }>(env, mailboxId, {
+          _tag: "Upload",
+          uploadId: params.uploadId,
+        });
+
+        const { r2UploadId } = yield* Effect.promise(() =>
+          mailbox(env, mailboxId).uploadParts(params.uploadId),
+        );
+
+        if (r2UploadId)
+          yield* Effect.promise(() =>
+            env.PARTS.resumeMultipartUpload(state.blobKey, r2UploadId)
+              .abort()
+              .catch(() => undefined),
+          );
+
+        return yield* command(mailboxId, {
+          _tag: "AbortUpload",
+          commandId,
+          uploadId: params.uploadId,
+        });
+      }).pipe(publicly),
+    )
+
+    // ---- attachments (E20) ----
+    .handle("createAttachmentLink", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        yield* requireMailbox(params.id, "read");
+
+        const a = yield* Effect.promise(() =>
+          mailbox(env, params.id).attachmentFor(params.deliveryId, params.partId),
+        );
+
+        if (!a) return yield* new NotFound({ resource: "attachment" });
+        yield* requireAttachmentAccess(a.access);
+
+        const token = yield* Effect.promise(() =>
+          downloadToken(env, params.id, params.deliveryId, params.partId, Date.now()),
+        );
+
+        return { downloadUrl: `${env.MAIL_ORIGIN}/render/${token}`, expiresInSeconds: 300 };
+      }).pipe(publicly),
+    )
+    .handle("getAttachmentPreview", ({ params }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        yield* requireMailbox(params.id, "read");
+
+        const a = yield* Effect.promise(() =>
+          mailbox(env, params.id).attachmentFor(params.deliveryId, params.partId),
+        );
+
+        if (!a) return yield* new NotFound({ resource: "attachment" });
+        yield* requireAttachmentAccess(a.access);
+
+        const token = yield* Effect.promise(() =>
+          previewToken(env, params.id, params.deliveryId, params.partId, Date.now()),
+        );
+
+        return { previewUrl: `${env.MAIL_ORIGIN}/render/${token}` };
+      }).pipe(publicly),
+    )
+
+    // ---- plain authority reads ----
+    .handle("getFocusQueue", ({ params }) => authorityRead(params.id, { _tag: "FocusQueue" }))
+    .handle("getBatch", ({ params }) =>
+      authorityRead(params.id, { _tag: "Batch", batchId: params.batchId }),
+    )
+    .handle("getBundle", ({ params }) =>
+      authorityRead(params.id, { _tag: "Bundle", bundleKey: params.bundleKey }),
+    )
+    .handle("listScreenerSenders", ({ params }) =>
+      authorityRead(params.id, { _tag: "ScreenerSenders" }),
+    )
+    .handle("listRecentSearches", ({ params }) =>
+      authorityRead(params.id, { _tag: "RecentSearches" }),
+    )
+    // ---- sender policies (E02) ----
+    .handle("listPolicies", ({ params }) => authorityRead(params.id, { _tag: "Policies" }))
+    .handle("listPolicyHistory", ({ params, query }) => {
+      const subject = clamp(query.subject, 320);
+
+      return authorityRead(
+        params.id,
+        subject ? { _tag: "PolicyHistory", subject } : { _tag: "PolicyHistory" },
+      );
+    })
+    // ---- organization reads (E11–E16) ----
+    .handle("listLabels", ({ params }) => authorityRead(params.id, { _tag: "Labels" }))
+    .handle("listRules", ({ params }) => authorityRead(params.id, { _tag: "Rules" }))
+    .handle("listBoards", ({ params }) => authorityRead(params.id, { _tag: "Boards" }))
+    .handle("getBoard", ({ params }) =>
+      authorityRead(params.id, { _tag: "Board", boardId: params.boardId }),
+    )
+    .handle("listNotes", ({ params, query }) => {
+      const notes: Types.Mutable<Extract<MailboxReadQuery, { _tag: "Notes" }>> = { _tag: "Notes" };
+      const threadId = clamp(query.threadId, 64);
+
+      if (threadId) notes.threadId = threadId;
+
+      if (query.kind === "thread" || query.kind === "sticky" || query.kind === "cover")
+        notes.kind = query.kind;
+
+      return authorityRead(params.id, notes);
+    })
+    .handle("listClips", ({ params, query }) => {
+      const q = clamp(query.q);
+
+      return authorityRead(params.id, q ? { _tag: "Clips", query: q } : { _tag: "Clips" });
+    })
+    // Personal collections (§8 `/v1/collections`, E14) and grants (the revocable large-file links).
+    .handle("listCollections", ({ query }) =>
+      authorityRead(query.mailbox ?? "", { _tag: "Collections" }),
+    )
+    .handle("getCollection", ({ params, query }) =>
+      authorityRead(query.mailbox ?? "", {
+        _tag: "CollectionTimeline",
+        collectionId: params.collectionId,
+      }),
+    )
+    .handle("listGrants", ({ query }) => authorityRead(query.mailbox ?? "", { _tag: "FileLinks" }))
+    // ---- contacts (E16) ----
+    .handle("listContacts", ({ params, query }) => {
+      const q = clamp(query.q);
+
+      return authorityRead(params.id, q ? { _tag: "Contacts", query: q } : { _tag: "Contacts" });
+    })
+    .handle("suggestRecipients", ({ params, query }) =>
+      authorityRead(params.id, {
+        _tag: "SuggestRecipients",
+        prefix: clamp(query.prefix, 128) ?? "",
+        limit: num(query.limit) ?? 10,
+      }),
+    )
+    .handle("getContact", ({ params }) =>
+      authorityRead(params.id, { _tag: "Contact", contactId: params.contactId }),
+    )
+    .handle("getSenderHistory", ({ params, query }) =>
+      authorityRead(params.id, {
+        _tag: "SenderHistory",
+        address: params.address,
+        limit: num(query.limit) ?? 50,
+      }),
+    )
+    .handle("getRecipientHistory", ({ params, query }) =>
+      authorityRead(params.id, {
+        _tag: "RecipientHistory",
+        address: params.address,
+        limit: num(query.limit) ?? 50,
+      }),
+    )
+    // ---- settings reads (E19, E22–E24) ----
+    .handle("listIdentities", ({ params }) => authorityRead(params.id, { _tag: "Identities" }))
+    .handle("listForwardingDestinations", ({ params }) =>
+      authorityRead(params.id, { _tag: "ForwardingDestinations" }),
+    )
+    .handle("getPreferences", ({ params }) => authorityRead(params.id, { _tag: "Preferences" }))
+    // ---- drafts and send jobs (E17/E18) ----
+    .handle("listDrafts", ({ params }) => authorityRead(params.id, { _tag: "Drafts" }, "draft"))
+    .handle("listSendJobs", ({ params, query }) => {
+      const state = clamp(query.state, 32);
+
+      return authorityRead(params.id, state ? { _tag: "SendJobs", state } : { _tag: "SendJobs" });
+    })
+    .handle("getSendJob", ({ params }) =>
+      authorityRead(params.id, { _tag: "SendJob", sendJobId: params.sendJobId }),
+    )
+    .handle("listUploads", ({ params, query }) =>
+      authorityRead(params.id, { _tag: "Uploads", limit: num(query.limit) ?? 100 }),
+    )
+    // ---- attachments (E20) ----
+    .handle("listAttachments", ({ params, query }) => {
+      const attachments: Types.Mutable<Extract<MailboxReadQuery, { _tag: "Attachments" }>> = {
+        _tag: "Attachments",
+        limit: num(query.limit) ?? 100,
+      };
+
+      const contentTypePrefix = clamp(query.type, 64);
+      const from = clamp(query.from, 320);
+      const minSize = num(query.minSize);
+
+      if (contentTypePrefix) attachments.contentTypePrefix = contentTypePrefix;
+
+      if (from) attachments.from = from;
+
+      if (minSize !== undefined) attachments.minSize = minSize;
+
+      return authorityRead(params.id, attachments);
+    }),
+);

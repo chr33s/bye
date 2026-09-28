@@ -1,0 +1,17 @@
+[
+  {
+    "uploadId": "😀",
+    "partSize": 1.5e-323,
+    "maxParts": 8.005486538763272e79
+  },
+  {
+    "uploadId": "\n",
+    "partSize": 1.797693134862315e308,
+    "maxParts": -1.7976931348623135e308
+  },
+  {
+    "uploadId": "ucG7",
+    "partSize": 1.7976931348623155e308,
+    "maxParts": 7e-323
+  }
+]

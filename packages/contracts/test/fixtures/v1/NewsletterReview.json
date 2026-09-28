@@ -1,0 +1,156 @@
+[
+  {
+    "health": {
+      "unknownOps": 4e-323,
+      "heldOps": 1.4580148909961861e41,
+      "syncPending": 2.5e-323,
+      "syncHeld": 1.7976931348623157e308,
+      "oldestSyncPendingAt": null,
+      "openPublication": null,
+      "uncertainCancels": 1.7976931348623137e308,
+      "unmappedEvents": 1.5e-323
+    },
+    "held": [],
+    "publications": [
+      {
+        "id": "Rx5Q",
+        "postId": "😀",
+        "revision": 3.242204920676143e-286,
+        "provider": "\n",
+        "account": "!u/I",
+        "configVersion": "%8c-",
+        "sender": ")iII",
+        "subject": "-1",
+        "fingerprint": "\t",
+        "recipients": 6e-323,
+        "scheduledAt": null,
+        "expiresAt": -8e-323,
+        "state": "sent",
+        "providerRef": "",
+        "observed": "cancelled",
+        "cancel": null,
+        "detail": null
+      },
+      {
+        "id": "",
+        "postId": "\t",
+        "revision": -1.7976931348623135e308,
+        "provider": "\udc00",
+        "account": "",
+        "configVersion": "y\"0 ",
+        "sender": "!;'R",
+        "subject": "-1",
+        "fingerprint": "\udc00",
+        "recipients": 111119329735113780,
+        "scheduledAt": null,
+        "expiresAt": -2.684128975972154e132,
+        "state": "failed",
+        "providerRef": null,
+        "observed": "draft",
+        "cancel": {
+          "_tag": "Requested"
+        },
+        "detail": "\udc00"
+      },
+      {
+        "id": "-1",
+        "postId": "~,",
+        "revision": -1.7976931348623125e308,
+        "provider": "",
+        "account": "\t",
+        "configVersion": "\udc00",
+        "sender": "yD",
+        "subject": "\n",
+        "fingerprint": "Nd5R",
+        "recipients": -1.7976931348623147e308,
+        "scheduledAt": null,
+        "expiresAt": 2.3423133535245082e123,
+        "state": "submitted",
+        "providerRef": "$",
+        "observed": "sending",
+        "cancel": {
+          "_tag": "Requested"
+        },
+        "detail": ""
+      },
+      {
+        "id": "",
+        "postId": ",yN-",
+        "revision": -2.3277173515694017e68,
+        "provider": "uH,i",
+        "account": "wS|~",
+        "configVersion": "\ud800",
+        "sender": "qU.|",
+        "subject": "",
+        "fingerprint": "\udc00",
+        "recipients": -6.7773645543675e-99,
+        "scheduledAt": null,
+        "expiresAt": -9e-323,
+        "state": "approved",
+        "providerRef": "\n",
+        "observed": "scheduled",
+        "cancel": null,
+        "detail": null
+      }
+    ]
+  },
+  {
+    "health": {
+      "unknownOps": -3.9099325857099714e285,
+      "heldOps": -7.90543363300806e-148,
+      "syncPending": 1.7976931348623127e308,
+      "syncHeld": 6.4e-323,
+      "oldestSyncPendingAt": null,
+      "openPublication": "\t",
+      "uncertainCancels": 4.7699894490912025e117,
+      "unmappedEvents": -2.3950430824079013e-268
+    },
+    "held": [
+      {
+        "opId": "",
+        "publicationId": null,
+        "kind": "send",
+        "state": "rejected",
+        "attempts": 5.4e-323,
+        "firstAttemptAt": null,
+        "providerRef": "L!$E",
+        "detail": "xm]g"
+      },
+      {
+        "opId": "/r\\b",
+        "publicationId": "\n",
+        "kind": "cancel",
+        "state": "pending",
+        "attempts": 0,
+        "firstAttemptAt": -5.885623818875498e-165,
+        "providerRef": null,
+        "detail": "\ud800"
+      },
+      {
+        "opId": "erkC",
+        "publicationId": null,
+        "kind": "audience",
+        "state": "rejected",
+        "attempts": -1.9883736884890254e-203,
+        "firstAttemptAt": null,
+        "providerRef": "0-E.",
+        "detail": ""
+      }
+    ],
+    "publications": []
+  },
+  {
+    "health": {
+      "unknownOps": -4e-323,
+      "heldOps": 5.9646275462719795e261,
+      "syncPending": -2.5277136792489233e205,
+      "syncHeld": 5e-323,
+      "oldestSyncPendingAt": -2.1037522999377002e-272,
+      "openPublication": null,
+      "uncertainCancels": 1.7976931348623137e308,
+      "unmappedEvents": -1.79592754612564e38
+    },
+    "held": [],
+    "publications": []
+  }
+]
