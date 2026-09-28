@@ -1,4 +1,4 @@
-import { mailViewLabel } from "@bye/native-shared/views";
+import { avatarToneIndex, mailViewLabel, senderInitials } from "@bye/native-shared/views";
 import { bestEffort } from "../core/degrade.ts";
 import { api, list, query, type ThreadRow, type ViewPage } from "../api.ts";
 import { act, announce, choice, h, section, show } from "../core/dom.ts";
@@ -177,6 +177,14 @@ const threadItem = (row: ThreadRow, s: ListState): HTMLElement => {
           ? `#/bundle/${encodeURIComponent(row.bundleKey!)}`
           : `#/thread/${encodeURIComponent(row.threadId)}`,
       },
+      h(
+        "span",
+        {
+          class: `avatar tone-${avatarToneIndex(row.sender)}`,
+          "aria-hidden": "true",
+        },
+        senderInitials(row.sender),
+      ),
       h("span", { class: "from" }, bundle ? `${row.sender} (${row.bundleCount})` : row.sender),
       h("span", { class: "subject" }, row.subject || "(no subject)"),
       h("span", { class: "snippet" }, row.snippet ?? "", ...badges),

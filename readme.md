@@ -15,6 +15,15 @@ https://github.com/user-attachments/assets/ba2b19e1-0675-4500-9c8d-58ff4973fe1c
 
 Source for the demo reel: [`demo-reel/`](./demo-reel)
 
+<table>
+  <tr>
+    <td><img height="480" alt="web-mobile" src="https://github.com/user-attachments/assets/9469b2d2-8df2-4032-b735-c5d81b171b8c" /></td>
+    <td><img height="480" alt="web-desktop" src="https://github.com/user-attachments/assets/2f2847fd-899b-4cc0-95c2-a899bb222183" /></td>
+    <td><img height="480" alt="mobile-ios" src="https://github.com/user-attachments/assets/6ed3c46d-8687-4de6-913f-a82b22f0bad6" /></td>
+    <td><img height="480" alt="mobile-android" src="https://github.com/user-attachments/assets/90db78b8-382e-499a-8866-ef5433259750" /></td>
+  </tr>
+</table>
+
 ---
 
 The product and architecture are specified in [`spec.md`](./spec.md); this repository implements that design on Cloudflare primitives. Alchemy v2 beta defines the deployment, which has not yet been run against Cloudflare.

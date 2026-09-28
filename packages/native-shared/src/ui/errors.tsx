@@ -45,7 +45,7 @@ export class ErrorBoundary extends React.Component<{ children: React.ReactNode }
   override render(): React.ReactNode {
     if (!this.state.failed) return this.props.children;
     return (
-      <SafeAreaView style={s.screen}>
+      <SafeAreaView style={s.safe}>
         <Text style={[s.pad, s.text]} accessibilityRole="alert">
           Something went wrong. Your drafts are saved on this device.
         </Text>

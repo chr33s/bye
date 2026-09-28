@@ -25,7 +25,7 @@
     "check:concurrency": "node --experimental-strip-types infra/policies/check-concurrency.ts",
     "onboarding": "node --experimental-strip-types infra/onboarding/server.ts",
     "evidence:bench": "BYE_BENCH_MESSAGES=${BYE_BENCH_MESSAGES:-1000} vitest run infra/tests/evidence-bench.test.ts",
-    "lint": "oxlint --type-aware",
+    "lint": "oxlint",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check"
   },

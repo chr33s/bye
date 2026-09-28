@@ -10,6 +10,7 @@ coverage/
 apps/mobile/ios/build/
 apps/mobile/android/.gradle/
 apps/mobile/android/app/build/
+apps/mobile/android/app/.cxx/
 apps/mobile/android/build/
 apps/mobile/node_modules/
 apps/mobile/ios/Pods/

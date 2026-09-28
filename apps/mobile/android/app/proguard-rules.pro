@@ -16,3 +16,9 @@
 # Home-screen widget provider is instantiated by the system from the manifest.
 -keep class com.byemobile.ByeWidgetProvider { *; }
 -keepclassmembers class * { @com.facebook.react.bridge.ReactMethod *; }
+# React Native's native libraries look up these classes through JNI at load time (InspectorFlags
+# loads libreact_devsupportjni even in release). R8 can't see JNI references, so keep them.
+-keep class com.facebook.react.devsupport.** { *; }
+-keep class com.facebook.jni.** { *; }
+-keep @com.facebook.proguard.annotations.DoNotStrip class * { *; }
+-keepclassmembers class * { @com.facebook.proguard.annotations.DoNotStrip *; }

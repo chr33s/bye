@@ -36,3 +36,29 @@ export const MAIL_VIEW_NAV: ReadonlyArray<MailViewNav> = [
 export const mailViewLabel = (view: string): string | undefined =>
   MAIL_VIEW_NAV.find((n) => n.view === view)?.label ??
   (view === "everything" ? "Everything" : undefined);
+
+/** Avatar palette (brand accents on ink); the tone is stable per sender so a row keeps its colour. */
+export const AVATAR_TONES: ReadonlyArray<{ readonly bg: string; readonly fg: string }> = [
+  { bg: "#2f5d50", fg: "#f6f1e7" },
+  { bg: "#d5613f", fg: "#1d1b16" },
+  { bg: "#f2c94c", fg: "#1d1b16" },
+  { bg: "#4a5fd0", fg: "#f6f1e7" },
+  { bg: "#e8a0bf", fg: "#1d1b16" },
+];
+
+/** "Sunny Vacations <a@b>" → "SV"; falls back to the address' first letter. */
+export const senderInitials = (sender: string): string => {
+  const name = sender.replace(/<[^>]*>/, "").trim() || sender.replace(/[<>]/g, "");
+  const words = name.split(/[\s@._-]+/).filter(Boolean);
+  const letters = words.length > 1 ? words.slice(0, 2).map((w) => w[0]) : [words[0]?.[0] ?? "?"];
+  return letters.join("").toUpperCase();
+};
+
+export const avatarToneIndex = (sender: string): number => {
+  let n = 0;
+  for (const ch of sender.toLowerCase()) n = (n * 31 + ch.charCodeAt(0)) >>> 0;
+  return n % AVATAR_TONES.length;
+};
+
+export const avatarTone = (sender: string): { readonly bg: string; readonly fg: string } =>
+  AVATAR_TONES[avatarToneIndex(sender)]!;

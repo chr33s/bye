@@ -1,7 +1,13 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, Text, View } from "react-native";
 import type { ByeClient } from "../client.ts";
-import { MAIL_VIEW_NAV, type MailView } from "../views.ts";
+import {
+  AVATAR_TONES,
+  avatarToneIndex,
+  MAIL_VIEW_NAV,
+  senderInitials,
+  type MailView,
+} from "../views.ts";
 import type { MailThreadSummaryWire } from "../wire.ts";
 import { Button } from "./Button.tsx";
 import { s } from "./theme.ts";
@@ -186,8 +192,24 @@ export const MailList = ({ client, mailboxId, view, onView, onOpen, refreshKey }
               onPress={() => onOpen(item.thread.threadId)}
               style={[s.row, item.thread.newForYou && s.rowUnseen]}
             >
+              <View
+                style={[
+                  s.avatar,
+                  { backgroundColor: AVATAR_TONES[avatarToneIndex(item.thread.sender)]!.bg },
+                ]}
+                accessibilityElementsHidden
+              >
+                <Text
+                  style={[
+                    s.avatarText,
+                    { color: AVATAR_TONES[avatarToneIndex(item.thread.sender)]!.fg },
+                  ]}
+                >
+                  {senderInitials(item.thread.sender)}
+                </Text>
+              </View>
               <View style={{ flex: 1 }}>
-                <Text style={s.text} numberOfLines={1}>
+                <Text style={s.sender} numberOfLines={1}>
                   {item.thread.bundleCount > 1
                     ? `${item.thread.sender} (${item.thread.bundleCount})`
                     : item.thread.sender}

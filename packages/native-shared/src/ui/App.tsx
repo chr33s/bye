@@ -1,5 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, Linking, Pressable, SafeAreaView, Text, View } from "react-native";
+import {
+  AppState,
+  Linking,
+  Platform as RNPlatform,
+  Pressable,
+  SafeAreaView,
+  StatusBar,
+  Text,
+  View,
+} from "react-native";
 import { isAuthCallback } from "../auth/authorize.ts";
 import type { SessionClient, SessionState } from "../auth/session.ts";
 import { toLocalDate, ymd } from "../calendar-form.ts";
@@ -332,10 +341,10 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
     if (leaving) await scopedStore(platform.storage, leaving).clear();
   };
 
-  if (!booted) return <SafeAreaView style={s.screen} />;
+  if (!booted) return <SafeAreaView style={s.safe} />;
   if (servers || !instance) {
     return (
-      <SafeAreaView style={s.screen}>
+      <SafeAreaView style={s.safe}>
         <Servers
           key={`${servers?.initialUrl ?? ""}|${servers?.notice ?? ""}`}
           saved={saved}
@@ -351,10 +360,10 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
       </SafeAreaView>
     );
   }
-  if (!ready) return <SafeAreaView style={s.screen} />;
+  if (!ready) return <SafeAreaView style={s.safe} />;
   if (!me || !client || !drafts) {
     return (
-      <SafeAreaView style={s.screen}>
+      <SafeAreaView style={s.safe}>
         <SignIn
           session={session}
           server={instance.baseUrl}
@@ -469,7 +478,7 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
   })();
 
   return (
-    <SafeAreaView style={s.screen} key={scope}>
+    <SafeAreaView style={s.safe} key={scope}>
       <View style={[s.pad, { paddingVertical: 4 }]}>
         <Text style={s.muted} accessibilityLabel={`Server ${instance.baseUrl}`}>
           {hostOf(instance.baseUrl)}
@@ -509,6 +518,12 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
 /** The app root every shell renders: global error hook plus a boundary around the whole tree. */
 export const ByeApp = ({ platform }: { platform: Platform }) => {
   useEffect(installNativeErrorHandler, []);
+  // Dark status bar text on Paper (mobile only; desktop has no status bar).
+  useEffect(() => {
+    if (RNPlatform.OS === "ios" || RNPlatform.OS === "android")
+      StatusBar.setBarStyle("dark-content");
+    if (RNPlatform.OS === "android") StatusBar.setBackgroundColor(colors.bg);
+  }, []);
   return (
     <ErrorBoundary>
       <ByeAppRoot platform={platform} />
