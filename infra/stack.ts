@@ -11,6 +11,7 @@ import {
   queueIds,
   Queues,
 } from "./resources/queues.ts";
+import { type DomainHost, domainStageMismatch, hostConfig } from "./resources/domain.ts";
 import { classifyStage, mailRoutingZone } from "./resources/stage.ts";
 import { makeSigMirror } from "./resources/sigmirror.ts";
 import {
@@ -55,9 +56,15 @@ export default Alchemy.Stack(
     if (classified._tag === "Invalid") return yield* Effect.die(new Error(classified.reason));
     const stage = classified.stage;
 
-    const appDomain = (yield* optional("APP_DOMAIN")) || undefined;
-    const publicDomain = (yield* optional("PUBLIC_DOMAIN")) || undefined;
-    const mailZone = (yield* optional("MAIL_ZONE")) || undefined;
+    // Unset origins and hostnames default from DOMAIN per stage: prod uses DOMAIN itself, staging
+    // uses staging.DOMAIN (infra/resources/domain.ts). The defaults are computed from STAGE, so it
+    // must name this stage.
+    const mismatch = (yield* domainStageMismatch)(stageName);
+    if (mismatch !== undefined) return yield* Effect.die(new Error(mismatch));
+    const domainHost = (name: DomainHost) => hostConfig(Config.String(name), name);
+    const appDomain = (yield* domainHost("APP_DOMAIN")) || undefined;
+    const publicDomain = (yield* domainHost("PUBLIC_DOMAIN")) || undefined;
+    const mailZone = (yield* domainHost("MAIL_ZONE")) || undefined;
     // Onboarding installations (spec.md §15.11): Worker names fixed at install time so the
     // workers.dev origins are known up front. Keep it set for the installation's lifetime:
     // changing or removing it renames the Workers, which replaces them and their DO namespaces.

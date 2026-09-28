@@ -6,7 +6,7 @@ import { sameCredentialDestinations, type ValidatedInstance } from "./discovery.
 // instance key. Records are keyed by normalized base URL + validated issuer; display names and
 // account emails never identify an instance.
 
-export const HOSTED_INSTANCE_URL = "https://app.bye.email";
+export const HOSTED_INSTANCE_URL = "https://app.bye.software";
 const REGISTRY_KEY = "bye:instances";
 
 interface RegistryState {

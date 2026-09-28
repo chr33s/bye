@@ -42,6 +42,8 @@ export interface DeployExecutor {
  * onboarding: MX/Email Routing is the separate, post-owner incoming-email activation.
  */
 export const FORCED_EMPTY = [
+  // The operator's base domain must never become an installation's hosts (resources/domain.ts).
+  "DOMAIN",
   "PUBLIC_DOMAIN",
   "MAIL_ZONE",
   "BYE_MX_CUTOVER",

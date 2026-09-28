@@ -52,7 +52,7 @@ describe("CLI target precedence", () => {
   it("then the saved default, then hosted on first use", () => {
     expect(resolveTarget(saved, {})).toMatchObject({ apiUrl: A, source: "saved", token: "tok_a" });
     expect(resolveTarget(EMPTY_CONFIG, {})).toMatchObject({
-      apiUrl: "https://app.bye.email",
+      apiUrl: "https://app.bye.software",
       source: "hosted",
       token: undefined,
     });

@@ -26,6 +26,7 @@ import { ConfigCache, Directory, Exports, Originals, Parts, Published } from "./
 export { COMPATIBILITY } from "./compat.ts";
 import { COMPATIBILITY } from "./compat.ts";
 import { devServer } from "./dev.ts";
+import { originConfig } from "./domain.ts";
 
 /** Independent reconciliation (§6): catalog probe every 5 minutes; retention sweep daily. */
 export const CORE_CRONS = ["*/5 * * * *", "17 3 * * *"] as const;
@@ -53,8 +54,8 @@ export const SubscribeRateLimit = Cloudflare.RateLimit("SubscribeRateLimit", {
  * `fetch` (§15.5). Management credentials (CLOUDFLARE_API_TOKEN) are never bound.
  */
 export const coreEnv = {
-  APP_ORIGIN: Config.String("APP_ORIGIN"),
-  MAIL_ORIGIN: Config.String("MAIL_RENDER_ORIGIN"),
+  APP_ORIGIN: originConfig(Config.String("APP_ORIGIN"), "APP_ORIGIN"),
+  MAIL_ORIGIN: originConfig(Config.String("MAIL_RENDER_ORIGIN"), "MAIL_RENDER_ORIGIN"),
   DIRECTORY: Directory,
   ORIGINALS: Originals,
   PARTS: Parts,
@@ -179,12 +180,12 @@ export const coreEnv = {
  * through a narrow service binding to MailCore, which rechecks grants per request (§11).
  */
 export const publicEnvBase = {
-  APP_ORIGIN: Config.String("APP_ORIGIN"),
+  APP_ORIGIN: originConfig(Config.String("APP_ORIGIN"), "APP_ORIGIN"),
   PUBLISHED: Published,
   PUBLIC_RATE_LIMIT: PublicRateLimit,
   SUBSCRIBE_RATE_LIMIT: SubscribeRateLimit,
   // Render origin (same value MailCore binds as MAIL_ORIGIN): published posts' proxied images.
-  MAIL_ORIGIN: Config.String("MAIL_RENDER_ORIGIN"),
+  MAIL_ORIGIN: originConfig(Config.String("MAIL_RENDER_ORIGIN"), "MAIL_RENDER_ORIGIN"),
 };
 
 export { PRIVATE_BINDINGS, PUBLIC_SERVICE_BINDINGS } from "./bindings.ts";

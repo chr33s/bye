@@ -8,6 +8,7 @@
 // Usage: node --experimental-strip-types infra/policies/check-config.ts   (exit 1 lists missing names)
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { domainDefaults, parseDomain } from "../resources/domain.ts";
 import { SCANNER_DEPLOY_ENV, scannerSignatureSource } from "../resources/scanner-source.ts";
 import { classifyStage } from "../resources/stage.ts";
 
@@ -20,8 +21,8 @@ export interface ConfigName {
 const DECLARATION =
   /Config\.(String|Redacted|Number|Boolean|Url|Integer)\(\s*"([A-Z0-9_]+)"\s*\)(\s*\.pipe\(\s*Config\.withDefault)?/g;
 
-/** The stack's `optional("NAME")` helper (a String with an empty default). */
-const OPTIONAL_READ = /\boptional\(\s*"([A-Z0-9_]+)"\s*\)/g;
+/** The stack's `optional("NAME")` and `domainHost("NAME")` helpers (Strings that may resolve empty). */
+const OPTIONAL_READ = /\b(?:optional|domainHost)\(\s*"([A-Z0-9_]+)"\s*\)/g;
 
 export const scanConfig = (source: string): ReadonlyArray<ConfigName> => [
   ...[...source.matchAll(DECLARATION)].map((m) => ({
@@ -73,7 +74,8 @@ export const requiredConfig = (
  * Declared names deliberately NOT mapped into CI deploy jobs: evidence-only switches that are set
  * by hand on a dedicated `dev-*` evidence stage (EVIDENCE.md §14.2), never by the pipeline, and
  * the workers.dev installation name and first-account bootstrap token that only Cloudflare
- * onboarding sets (infra/onboarding).
+ * onboarding sets (infra/onboarding). DOMAIN is mapped only into the staging/prod release and
+ * drift jobs: it has no defaults for preview stages, whose per-PR hosts come from PREVIEW_DOMAIN.
  */
 export const CI_UNMAPPED: ReadonlyArray<string> = [
   "BYE_FAULT_INGRESS",
@@ -176,11 +178,32 @@ export const unsandboxedMail = (
   ];
 };
 
+/** The environment the stack sees: absent names filled from DOMAIN (infra/resources/domain.ts). */
+export const withDomainDefaults = (
+  env: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string | undefined>> => ({ ...env, ...domainDefaults(env) });
+
 export const missingConfig = (
   env: Readonly<Record<string, string | undefined>>,
   names = requiredConfig(),
-): ReadonlyArray<string> =>
-  names.filter((c) => !env[c.name] || env[c.name]!.trim() === "").map((c) => c.name);
+): ReadonlyArray<string> => {
+  const resolved = withDomainDefaults(env);
+  return names
+    .filter((c) => !resolved[c.name] || resolved[c.name]!.trim() === "")
+    .map((c) => c.name);
+};
+
+/** A malformed DOMAIN (a scheme, port or path instead of a bare hostname). */
+export const domainProblems = (
+  env: Readonly<Record<string, string | undefined>>,
+): ReadonlyArray<string> => {
+  try {
+    parseDomain(env.DOMAIN);
+    return [];
+  } catch (e) {
+    return [e instanceof Error ? e.message : String(e)];
+  }
+};
 
 /**
  * HMAC webhook secrets verified in the `t=<unix>,v1=<hex>` scheme. The worker refuses every
@@ -259,6 +282,9 @@ export const missingPreviewAttestation = (
 };
 
 if (import.meta.main) {
+  const domain = domainProblems(process.env);
+  for (const problem of domain) console.error(`config: ${problem}`);
+  if (domain.length) process.exit(1);
   const missing = missingConfig(process.env);
   for (const name of missing) console.error(`config: ${name} is not set`);
   const forbidden = forbiddenConfig(process.env);

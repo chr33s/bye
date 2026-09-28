@@ -19,7 +19,7 @@ const plan = (action: "noop" | "update" = "noop"): ExportedPlan => ({
 });
 
 const env = {
-  APP_ORIGIN: "https://app.bye.email",
+  APP_ORIGIN: "https://app.bye.software",
   SESSION_KEY: "s3cret-value",
   CLOUDFLARE_ACCOUNT_ID: "acct",
   STATE_BACKEND: "http",

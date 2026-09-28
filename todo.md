@@ -61,7 +61,7 @@ Everything that could be fixed in code has been removed from this list. What rem
 - [ ] **Android:** create the upload keystore, set `BYE_UPLOAD_STORE_FILE`, `BYE_UPLOAD_STORE_PASSWORD`, `BYE_UPLOAD_KEY_ALIAS`, `BYE_UPLOAD_KEY_PASSWORD` and `BYE_BUILD_NUMBER`, and enroll in Play App Signing. Run `pnpm --filter <mobile> android:release` once to confirm R8 passes with the new keep rules.
 - [ ] **Apple:**
   - Set `DEVELOPMENT_TEAM` and Distribution signing on the app, the widget, the share extension and the macOS target.
-  - Register the App IDs `email.bye.app(.widget|.share)` and `email.bye.desktop`, the app group `group.email.bye`, and the associated domain (serve an AASA file on `app.bye.email`).
+  - Register the App IDs `email.bye.app(.widget|.share)` and `email.bye.desktop`, the app group `group.email.bye`, and the associated domain (serve an AASA file on `app.bye.software`).
   - Replace `REPLACE_WITH_TEAM_ID` in `apps/mobile/ios/ExportOptions.plist`.
   - Set up macOS notarization. There is no macOS archive script yet.
   - Check that Debug builds still attach now that the hardened runtime is on.

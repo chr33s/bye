@@ -46,6 +46,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ matrix.stage == 'prod' && secrets.PROD_CLOUDFLARE_ACCOUNT_ID || matrix.stage != 'prod' && secrets.NONPROD_CLOUDFLARE_ACCOUNT_ID || '' }}
       CLOUDFLARE_API_TOKEN: ${{ matrix.stage == 'prod' && secrets.PROD_CLOUDFLARE_API_TOKEN || matrix.stage != 'prod' && secrets.NONPROD_CLOUDFLARE_API_TOKEN || '' }}
       MAIL_SANDBOX_DOMAINS: ""
+      # Same per-stage DOMAIN defaults as the release jobs (infra/resources/domain.ts).
+      DOMAIN: ${{ vars.DOMAIN }}
       APP_DOMAIN: ${{ vars.APP_DOMAIN }}
       PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN }}
       APP_ORIGIN: ${{ vars.APP_ORIGIN }}

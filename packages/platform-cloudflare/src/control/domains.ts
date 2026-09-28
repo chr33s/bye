@@ -79,7 +79,7 @@ export const DEFAULT_MAIL_DNS: Omit<MailDnsProfile, "dkimPublicKey"> = {
   ],
   spfInclude: "_spf.mx.cloudflare.net",
   dkimSelector: "bye1",
-  dmarcReportAddress: "dmarc-reports@bye.email",
+  dmarcReportAddress: "dmarc-reports@bye.software",
 };
 
 const isSpf = (r: DnsRecord) => r.type === "TXT" && /^"?v=spf1\b/i.test(r.content);

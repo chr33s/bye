@@ -447,7 +447,10 @@ jobs:
       # Prod state credentials exist only in the prod-plan/prod environments.
       BYE_STATE_URL: ${{ inputs.stage == 'prod' && vars.PROD_BYE_STATE_URL || inputs.stage != 'prod' && vars.BYE_STATE_URL || '' }}
       BYE_STATE_TOKEN: ${{ inputs.stage == 'prod' && secrets.PROD_BYE_STATE_TOKEN || inputs.stage != 'prod' && secrets.BYE_STATE_TOKEN || '' }}
-      # Shared stages use their environment's reviewed custom domains.
+      # Shared stages use their environment's reviewed custom domains. With only vars.DOMAIN set,
+      # each one defaults per stage: prod app.<DOMAIN>, staging app.staging.<DOMAIN>
+      # (infra/resources/domain.ts). An explicit var wins.
+      DOMAIN: ${{ vars.DOMAIN }}
       APP_DOMAIN: ${{ vars.APP_DOMAIN }}
       PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN }}
       APP_ORIGIN: ${{ vars.APP_ORIGIN }}
@@ -525,10 +528,10 @@ jobs:
       # reports failure, and the canary step would then roll back a healthy release.
       - name: Probe prerequisites
         env:
-          PROBE_BASE_URL: ${{ vars.APP_ORIGIN }}
+          PROBE_BASE_URL: ${{ vars.APP_ORIGIN || vars.DOMAIN && (inputs.stage == 'prod' && format('https://app.{0}', vars.DOMAIN) || format('https://app.staging.{0}', vars.DOMAIN)) || '' }}
         run: |
           [ -n "$PROBE_TOKEN" ] || { echo "::error::PROBE_TOKEN is not set for ${STAGE}"; exit 1; }
-          [ -n "$PROBE_BASE_URL" ] || { echo "::error::vars.APP_ORIGIN (probe base URL) is not set for ${STAGE}"; exit 1; }
+          [ -n "$PROBE_BASE_URL" ] || { echo "::error::vars.APP_ORIGIN or vars.DOMAIN (probe base URL) is not set for ${STAGE}"; exit 1; }
       - run: node --experimental-strip-types infra/state/verify-worker.ts
       - name: Acquire stage lease
         run: |
@@ -559,7 +562,7 @@ jobs:
         run: node --experimental-strip-types infra/state/output.ts MailboxPlatform "$STAGE" coreWorkerName=PROBE_WORKER_NAME coreVersionId=PROBE_VERSION_ID >> "$GITHUB_ENV"
       - name: Post-deploy probes (HTTP, queue round trip, DO alarm, Workflow checkpoint)
         env:
-          PROBE_BASE_URL: ${{ vars.APP_ORIGIN }}
+          PROBE_BASE_URL: ${{ vars.APP_ORIGIN || vars.DOMAIN && (inputs.stage == 'prod' && format('https://app.{0}', vars.DOMAIN) || format('https://app.staging.{0}', vars.DOMAIN)) || '' }}
         run: |
           # A failed probe is a canary decision (next step); a usage error (exit 2) is not.
           set +e

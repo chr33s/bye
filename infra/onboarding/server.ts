@@ -1,6 +1,7 @@
 // Onboarding HTTP service (spec.md §15.11). Node, because deployments run the Alchemy CLI.
 //
 //   BYE_ONBOARDING_ORIGIN=https://onboard.example.com   public origin (OAuth redirect, CSRF check)
+//                                                         (default https://onboarding.<DOMAIN>)
 //   BYE_ONBOARDING_DATA_DIR=/var/lib/bye-onboarding      private store and execution homes
 //   BYE_ONBOARDING_KEYS=v1:<64 hex>                       credential encryption key ring
 //   BYE_ONBOARDING_OPERATOR_HEADER=cf-access-authenticated-user-email
@@ -21,6 +22,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
+import { domainDefaults } from "../resources/domain.ts";
 import { ACCESS_JWT_HEADER, accessVerifier } from "./access.ts";
 import { cloudflareReader } from "./cloudflare.ts";
 import { processExecutor } from "./executor.ts";
@@ -310,7 +312,8 @@ export const handler = ({
 };
 
 if (import.meta.main) {
-  const env = process.env;
+  // An absent BYE_ONBOARDING_ORIGIN defaults to https://onboarding.<DOMAIN> (resources/domain.ts).
+  const env = { ...process.env, ...domainDefaults(process.env) };
   const need = (k: string) => {
     const v = env[k];
     if (!v) {

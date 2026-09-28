@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { build } from "rolldown";
+import { domainDefaults } from "../../infra/resources/domain.ts";
 
 // Builds the PWA into apps/web/dist, served by MailCore static assets. No secrets are compiled into
 // the bundle (§15.4 API and clients); the only build-time values are public ones:
@@ -9,6 +10,9 @@ import { build } from "rolldown";
 //                       Turnstile; warned about, never fatal.
 //   MAIL_RENDER_ORIGIN  message render origin; the only non-Turnstile origin frames may load.
 //   APP_ORIGIN          the app origin; its wss: form is listed for the live socket.
+//   DOMAIN              base domain; on prod an unset APP_ORIGIN/MAIL_RENDER_ORIGIN defaults to
+//                       https://app.<DOMAIN> / https://mail.<DOMAIN>, on staging to
+//                       https://app.staging.<DOMAIN> / https://mail.staging.<DOMAIN>.
 //   BYE_WEB_STRICT=1    (or STAGE=prod|staging) fail when an origin is missing or not https.
 //
 // Output: content-hashed app.<hash>.js / styles.<hash>.css (immutable), a fixed-name sw.js whose
@@ -19,8 +23,10 @@ import { build } from "rolldown";
 const root = new URL(".", import.meta.url).pathname;
 const dist = `${root}dist`;
 const maps = `${root}sourcemaps`;
-const env = process.env;
-const strict = env["BYE_WEB_STRICT"] === "1" || ["prod", "staging"].includes(env["STAGE"] ?? "");
+const persistent = ["prod", "staging"].includes(process.env["STAGE"] ?? "");
+// Unset origins default from DOMAIN and STAGE exactly as the stack does (infra/resources/domain.ts).
+const env = { ...process.env, ...domainDefaults(process.env) };
+const strict = env["BYE_WEB_STRICT"] === "1" || persistent;
 
 const need = (name: string, required = strict): string => {
   const value = (env[name] ?? "").trim();

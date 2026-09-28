@@ -5,9 +5,9 @@ import type { CoreEnv } from "./env.ts";
 // renders on MAIL_ORIGIN.
 
 export interface Origins {
-  /** Bare service domain, e.g. `bye.email` (World handles, `world@`, `no-reply@`). */
+  /** Bare service domain, e.g. `bye.software` (World handles, `world@`, `no-reply@`). */
   readonly serviceDomain: string;
-  /** Public site origin, e.g. `https://bye.email`. */
+  /** Public site origin, e.g. `https://bye.software`. */
   readonly publicOrigin: string;
   readonly appOrigin: string;
   readonly mailOrigin: string;

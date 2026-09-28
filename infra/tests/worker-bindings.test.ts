@@ -38,9 +38,11 @@ describe("worker binding contract (§15.4)", () => {
     // Both read the same stage config name, so the two workers can never disagree on the origin.
     const source = readFileSync(join(import.meta.dirname, "../resources/workers.ts"), "utf8");
     const publicBlock = source.slice(source.indexOf("export const publicEnvBase"));
-    expect(publicBlock).toMatch(/MAIL_ORIGIN: Config\.String\("MAIL_RENDER_ORIGIN"\)/);
+    expect(publicBlock).toMatch(
+      /MAIL_ORIGIN: originConfig\(Config\.String\("MAIL_RENDER_ORIGIN"\), "MAIL_RENDER_ORIGIN"\)/,
+    );
     expect(source.slice(0, source.indexOf("export const publicEnvBase"))).toMatch(
-      /MAIL_ORIGIN: Config\.String\("MAIL_RENDER_ORIGIN"\)/,
+      /MAIL_ORIGIN: originConfig\(Config\.String\("MAIL_RENDER_ORIGIN"\), "MAIL_RENDER_ORIGIN"\)/,
     );
   });
 });
