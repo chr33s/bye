@@ -54,16 +54,16 @@ importers:
         version: 4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1)
       '@effect/vitest':
         specifier: 4.0.0-rc.117
-        version: 4.0.0-rc.117(effect@4.0.0-rc.117)(vitest@5.0.1(@types/node@24.13.6)(jsdom@30.1.1)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1)))
+        version: 4.0.0-rc.117(effect@4.0.0-rc.117)(vitest@5.0.1(@types/node@26.6.2)(jsdom@30.1.1)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1)))
       '@oxlint/plugins':
         specifier: 1.85.0
         version: 1.85.0
       '@types/node':
-        specifier: 24.13.6
-        version: 24.13.6
+        specifier: 26.6.2
+        version: 26.6.2
       alchemy:
         specifier: 2.0.0-beta.79
-        version: 2.0.0-beta.79(@effect/platform-bun@4.0.0-rc.117(effect@4.0.0-rc.117))(@effect/platform-node@4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1))(@types/node@24.13.6)(effect@4.0.0-rc.117)(typescript@7.0.2)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1))(vitest@5.0.1(@types/node@24.13.6)(jsdom@30.1.1)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1)))(ws@8.21.3)
+        version: 2.0.0-beta.79(@effect/platform-bun@4.0.0-rc.117(effect@4.0.0-rc.117))(@effect/platform-node@4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1))(@types/node@26.6.2)(effect@4.0.0-rc.117)(typescript@7.0.2)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1))(vitest@5.0.1(@types/node@26.6.2)(jsdom@30.1.1)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1)))(ws@8.21.3)
       miniflare:
         specifier: 4.20260730.0
         version: 4.20260730.0
@@ -84,7 +84,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 5.0.1
-        version: 5.0.1(@types/node@24.13.6)(jsdom@30.1.1)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1))
+        version: 5.0.1(@types/node@26.6.2)(jsdom@30.1.1)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1))
 
   apps/cli:
     dependencies:
@@ -1729,11 +1729,8 @@ packages:
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
 
-  '@types/node@24.10.1':
-    resolution: {integrity: sha512-GNWcUTRBgIRJD5zj+Tq0fKOJ5XZajIiBroOF0yvj2bSU1WvNdYS/dn9UxwsujGW4JX06dnHyjV2y9rRaybH0iQ==}
-
-  '@types/node@24.13.6':
-    resolution: {integrity: sha512-SGrw/h3KPFshy3OE6ZL53LMBG5vGQQ8/gIpiqz/kRZhPJ7HgwCEs8LBuNtWLa8dvGZVpSF7+Bf+c11HUrCb/yg==}
+  '@types/node@26.6.2':
+    resolution: {integrity: sha512-X1P21scMv4zGKLYqjdGjaKa7COa0RKVYYZZN/NfvLQ1JegxFhdhpZG/Lyn8AXx6CDUavKAd11v6BvfpkDByK8g==}
 
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
@@ -2484,11 +2481,8 @@ packages:
     engines: {node: '>=16.20.0'}
     hasBin: true
 
-  undici-types@7.16.0:
-    resolution: {integrity: sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw==}
-
-  undici-types@7.18.2:
-    resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
+  undici-types@8.9.0:
+    resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
 
   undici@7.28.0:
     resolution: {integrity: sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==}
@@ -2711,7 +2705,7 @@ packages:
 
 snapshots:
 
-  '@alchemy.run/cloudflare-runtime@2.0.0-beta.79(@distilled.cloud/cloudflare@1.0.0-rc.12(effect@4.0.0-rc.117))(@effect/platform-bun@4.0.0-rc.117(effect@4.0.0-rc.117))(@effect/platform-node@4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1))(@types/node@24.13.6)(effect@4.0.0-rc.117)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1))':
+  '@alchemy.run/cloudflare-runtime@2.0.0-beta.79(@distilled.cloud/cloudflare@1.0.0-rc.12(effect@4.0.0-rc.117))(@effect/platform-bun@4.0.0-rc.117(effect@4.0.0-rc.117))(@effect/platform-node@4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1))(@types/node@26.6.2)(effect@4.0.0-rc.117)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1))':
     dependencies:
       '@alchemy.run/node-utils': 2.0.0-beta.79
       '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20260901.1)
@@ -2721,7 +2715,7 @@ snapshots:
       effect: 4.0.0-rc.117
       magic-string: 0.30.21
       mime: 4.1.0
-      sharp: 0.35.4(@types/node@24.13.6)
+      sharp: 0.35.4(@types/node@26.6.2)
       unenv: 2.0.0-rc.24
       workerd: 1.20260901.1
       yauzl: 3.4.0
@@ -2729,7 +2723,7 @@ snapshots:
       '@effect/platform-bun': 4.0.0-rc.117(effect@4.0.0-rc.117)
       '@effect/platform-node': 4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1)
       rolldown: 1.2.5
-      vite: 8.3.0(@types/node@24.13.6)(yaml@2.9.1)
+      vite: 8.3.0(@types/node@26.6.2)(yaml@2.9.1)
     transitivePeerDependencies:
       - '@types/node'
       - proxy-agent
@@ -3107,10 +3101,10 @@ snapshots:
     dependencies:
       effect: 4.0.0-rc.117
 
-  '@effect/vitest@4.0.0-rc.117(effect@4.0.0-rc.117)(vitest@5.0.1(@types/node@24.13.6)(jsdom@30.1.1)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1)))':
+  '@effect/vitest@4.0.0-rc.117(effect@4.0.0-rc.117)(vitest@5.0.1(@types/node@26.6.2)(jsdom@30.1.1)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1)))':
     dependencies:
       effect: 4.0.0-rc.117
-      vitest: 5.0.1(@types/node@24.13.6)(jsdom@30.1.1)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1))
+      vitest: 5.0.1(@types/node@26.6.2)(jsdom@30.1.1)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1))
 
   '@electric-sql/pglite-socket@0.0.20(@electric-sql/pglite@0.3.15)':
     dependencies:
@@ -3862,17 +3856,13 @@ snapshots:
 
   '@types/estree@1.0.9': {}
 
-  '@types/node@24.10.1':
+  '@types/node@26.6.2':
     dependencies:
-      undici-types: 7.16.0
-
-  '@types/node@24.13.6':
-    dependencies:
-      undici-types: 7.18.2
+      undici-types: 8.9.0
 
   '@types/ws@8.18.1':
     dependencies:
-      '@types/node': 24.10.1
+      '@types/node': 26.6.2
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -3934,20 +3924,20 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@vitest/mocker@5.0.1(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1))':
+  '@vitest/mocker@5.0.1(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       '@vitest/spy': 5.0.1
       estree-walker: 3.0.3
       magic-string: 1.4.2
     optionalDependencies:
-      vite: 8.3.0(@types/node@24.13.6)(yaml@2.9.1)
+      vite: 8.3.0(@types/node@26.6.2)(yaml@2.9.1)
 
   '@vitest/spy@5.0.1': {}
 
-  alchemy@2.0.0-beta.79(@effect/platform-bun@4.0.0-rc.117(effect@4.0.0-rc.117))(@effect/platform-node@4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1))(@types/node@24.13.6)(effect@4.0.0-rc.117)(typescript@7.0.2)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1))(vitest@5.0.1(@types/node@24.13.6)(jsdom@30.1.1)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1)))(ws@8.21.3):
+  alchemy@2.0.0-beta.79(@effect/platform-bun@4.0.0-rc.117(effect@4.0.0-rc.117))(@effect/platform-node@4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1))(@types/node@26.6.2)(effect@4.0.0-rc.117)(typescript@7.0.2)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1))(vitest@5.0.1(@types/node@26.6.2)(jsdom@30.1.1)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1)))(ws@8.21.3):
     dependencies:
-      '@alchemy.run/cloudflare-runtime': 2.0.0-beta.79(@distilled.cloud/cloudflare@1.0.0-rc.12(effect@4.0.0-rc.117))(@effect/platform-bun@4.0.0-rc.117(effect@4.0.0-rc.117))(@effect/platform-node@4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1))(@types/node@24.13.6)(effect@4.0.0-rc.117)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1))
+      '@alchemy.run/cloudflare-runtime': 2.0.0-beta.79(@distilled.cloud/cloudflare@1.0.0-rc.12(effect@4.0.0-rc.117))(@effect/platform-bun@4.0.0-rc.117(effect@4.0.0-rc.117))(@effect/platform-node@4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1))(@types/node@26.6.2)(effect@4.0.0-rc.117)(rolldown@1.2.5)(typescript@7.0.2)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1))
       '@alchemy.run/floci': 2.0.0-beta.79(effect@4.0.0-rc.117)
       '@alchemy.run/node-utils': 2.0.0-beta.79
       '@alchemy.run/sigil': 0.0.0-alpha.11
@@ -3965,7 +3955,7 @@ snapshots:
       '@distilled.cloud/stripe': 1.0.0-rc.12(effect@4.0.0-rc.117)
       '@effect/sql-d1': 4.0.0-rc.117(effect@4.0.0-rc.117)
       '@effect/sql-sqlite-do': 4.0.0-rc.117(effect@4.0.0-rc.117)
-      '@effect/vitest': 4.0.0-rc.117(effect@4.0.0-rc.117)(vitest@5.0.1(@types/node@24.13.6)(jsdom@30.1.1)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1)))
+      '@effect/vitest': 4.0.0-rc.117(effect@4.0.0-rc.117)(vitest@5.0.1(@types/node@26.6.2)(jsdom@30.1.1)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1)))
       '@libsql/client': 0.17.4
       '@octokit/rest': 22.0.1
       '@octokit/webhooks': 14.2.0
@@ -3985,7 +3975,7 @@ snapshots:
     optionalDependencies:
       '@effect/platform-bun': 4.0.0-rc.117(effect@4.0.0-rc.117)
       '@effect/platform-node': 4.0.0-rc.117(effect@4.0.0-rc.117)(redis@6.2.1)
-      vite: 8.3.0(@types/node@24.13.6)(yaml@2.9.1)
+      vite: 8.3.0(@types/node@26.6.2)(yaml@2.9.1)
       ws: 8.21.3
     transitivePeerDependencies:
       - '@types/node'
@@ -4485,7 +4475,7 @@ snapshots:
       '@img/sharp-win32-ia32': 0.35.2
       '@img/sharp-win32-x64': 0.35.2
 
-  sharp@0.35.4(@types/node@24.13.6):
+  sharp@0.35.4(@types/node@26.6.2):
     dependencies:
       '@img/colour': 1.1.0
       detect-libc: 2.1.2
@@ -4516,7 +4506,7 @@ snapshots:
       '@img/sharp-win32-arm64': 0.35.4
       '@img/sharp-win32-ia32': 0.35.4
       '@img/sharp-win32-x64': 0.35.4
-      '@types/node': 24.13.6
+      '@types/node': 26.6.2
 
   shebang-command@2.0.0:
     dependencies:
@@ -4609,9 +4599,7 @@ snapshots:
       '@typescript/typescript-win32-arm64': 7.0.2
       '@typescript/typescript-win32-x64': 7.0.2
 
-  undici-types@7.16.0: {}
-
-  undici-types@7.18.2: {}
+  undici-types@8.9.0: {}
 
   undici@7.28.0: {}
 
@@ -4629,7 +4617,7 @@ snapshots:
     optionalDependencies:
       typescript: 7.0.2
 
-  vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1):
+  vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -4637,14 +4625,14 @@ snapshots:
       rolldown: 1.2.11
       tinyglobby: 0.2.17
     optionalDependencies:
-      '@types/node': 24.13.6
+      '@types/node': 26.6.2
       fsevents: 2.3.3
       yaml: 2.9.1
 
-  vitest@5.0.1(@types/node@24.13.6)(jsdom@30.1.1)(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1)):
+  vitest@5.0.1(@types/node@26.6.2)(jsdom@30.1.1)(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.1(vite@8.3.0(@types/node@24.13.6)(yaml@2.9.1))
+      '@vitest/mocker': 5.0.1(vite@8.3.0(@types/node@26.6.2)(yaml@2.9.1))
       chai: 6.2.2
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -4655,10 +4643,10 @@ snapshots:
       tinybench: 6.1.4
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
-      vite: 8.3.0(@types/node@24.13.6)(yaml@2.9.1)
+      vite: 8.3.0(@types/node@26.6.2)(yaml@2.9.1)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@types/node': 24.13.6
+      '@types/node': 26.6.2
       jsdom: 30.1.1
     transitivePeerDependencies:
       - msw
