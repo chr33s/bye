@@ -9,28 +9,44 @@
 /* Begin PBXBuildFile section */
 		0673C829980A3AA6C680C497 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B984B300713DC67C658011CD /* Foundation.framework */; };
 		0C80B921A6F3F58F76C31292 /* libPods-ByeMobile.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-ByeMobile.a */; };
+		11CAEE822558277E5ACBD908 /* ByeNotify.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 654F617B64C6E88628CFC26A /* ByeNotify.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
+		1606AEA8E5CBAE4184077266 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 92922C2EEE86FD532C69A947 /* PrivacyInfo.xcprivacy */; };
 		1918D3D5FC8470B0B5614EBB /* ByeWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 19E916EC8DE8979676C4FC65 /* ByeWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		212FCA91E88783DF010DB9D8 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B984B300713DC67C658011CD /* Foundation.framework */; };
 		37DEA9B2A2F39E5BF6F7B803 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 85BD064BFBF54C923578CA60 /* PrivacyInfo.xcprivacy */; };
+		4E144E45499D6C657F538747 /* ByePushCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0F7748FA98B4E8469D81B7 /* ByePushCrypto.swift */; };
+		5E90872C3A5F21A53AD8EA31 /* ByePush.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE7E381DFA7760ADFBB80A35 /* ByePush.swift */; };
 		68E287BFB9A064B512B75177 /* ByeWidgetBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFDA905E45D8512120079A15 /* ByeWidgetBridge.swift */; };
 		7255F8A76EF38B67E65F5A8A /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 29367ADE0DB5695444FE7E43 /* PrivacyInfo.xcprivacy */; };
 		74D324F74E5CC4587DB36661 /* ByeSecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB7BE4A5A5D9FF3490F01EB5 /* ByeSecureStore.swift */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
+		7CB1E7F108D79ABB05BA1055 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6827264657D28D2D9A24AEF8 /* Foundation.framework */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
+		822001195183FBA4705632BB /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FA24BE9AF23C00903A739DCE /* UserNotifications.framework */; };
 		9B9DEBE05EB3F6BA24E328BB /* ByeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33FCF1AE644E1E8577D048C8 /* ByeWidget.swift */; };
 		9BD6A9946B288E24D3B938D5 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D68DDDCA7568693687089AD /* SwiftUI.framework */; };
 		A1B2C3D40000000000000002 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000001 /* SceneDelegate.swift */; };
+		A3989E9F88D6BBFABA7C5568 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA00B7525CA1A7683C37CFB7 /* NotificationService.swift */; };
 		A8F60FA782E3253888861489 /* ByeShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1CED6C0A0439D5B853E31ACF /* ByeShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AAD32A164B1E54B0C64E02C5 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C51AF4FB1A2D81FE94B124BD /* ShareViewController.swift */; };
+		B20207155192721ABEF8B048 /* ByePush.m in Sources */ = {isa = PBXBuildFile; fileRef = 07F44E473BEAD8679FBFD8D0 /* ByePush.m */; };
 		C0C962DC8FE627C9F2FB93C1 /* ByeWidgetBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 5BFB31DBDCDD7D1D6D58A94A /* ByeWidgetBridge.m */; };
 		CC277323FBA774ED8750F7E1 /* ByeSecureStore.m in Sources */ = {isa = PBXBuildFile; fileRef = 32882F1939FBA5D0A9F65DBF /* ByeSecureStore.m */; };
+		D169456954915398950AB98E /* ByePushCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0F7748FA98B4E8469D81B7 /* ByePushCrypto.swift */; };
 		DBE0369BBDB494A9BB292E5B /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0631239F62240D58030494E /* WidgetKit.framework */; };
 		EA263358C5BCDD0AC1731726 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1D29ED657D8B2685F2C07DD2 /* UniformTypeIdentifiers.framework */; };
 		F5E4ED0739A4612E16AD8F06 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		110652F1DB97915995C3738E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0E1E012BFA6BB56DEADA3640;
+			remoteInfo = ByeNotify;
+		};
 		417E001E67136BC08C8E604F /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
@@ -56,6 +72,7 @@
 			files = (
 				1918D3D5FC8470B0B5614EBB /* ByeWidget.appex in Embed Foundation Extensions */,
 				A8F60FA782E3253888861489 /* ByeShare.appex in Embed Foundation Extensions */,
+				11CAEE822558277E5ACBD908 /* ByeNotify.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -63,6 +80,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		07F44E473BEAD8679FBFD8D0 /* ByePush.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = ByePush.m; path = ByeMobile/ByePush.m; sourceTree = "<group>"; };
 		13B07F961A680F5B00A75B9A /* ByeMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ByeMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = ByeMobile/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = ByeMobile/Info.plist; sourceTree = "<group>"; };
@@ -74,25 +92,34 @@
 		308F4A8096CE96AF5304E12C /* ByeMobile.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ByeMobile/ByeMobile.entitlements; sourceTree = "<group>"; };
 		32882F1939FBA5D0A9F65DBF /* ByeSecureStore.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = ByeMobile/ByeSecureStore.m; sourceTree = "<group>"; };
 		33FCF1AE644E1E8577D048C8 /* ByeWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeWidget.swift; sourceTree = "<group>"; };
+		3A0F7748FA98B4E8469D81B7 /* ByePushCrypto.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByePushCrypto.swift; sourceTree = "<group>"; };
 		3B4392A12AC88292D35C810B /* Pods-ByeMobile.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ByeMobile.debug.xcconfig"; path = "Target Support Files/Pods-ByeMobile/Pods-ByeMobile.debug.xcconfig"; sourceTree = "<group>"; };
 		3BCF18BE56F4AB5B29FDF05C /* ByeWidget.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ByeWidget.entitlements; sourceTree = "<group>"; };
+		444F561CB1B89FD1B774DBC3 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-ByeMobile.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ByeMobile.release.xcconfig"; path = "Target Support Files/Pods-ByeMobile/Pods-ByeMobile.release.xcconfig"; sourceTree = "<group>"; };
 		5BFB31DBDCDD7D1D6D58A94A /* ByeWidgetBridge.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = ByeMobile/ByeWidgetBridge.m; sourceTree = "<group>"; };
 		5D68DDDCA7568693687089AD /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/SwiftUI.framework; sourceTree = DEVELOPER_DIR; };
 		5DCACB8F33CDC322A6C60F78 /* libPods-ByeMobile.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-ByeMobile.a"; sourceTree = BUILT_PRODUCTS_DIR; };
+		654F617B64C6E88628CFC26A /* ByeNotify.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ByeNotify.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		6827264657D28D2D9A24AEF8 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS14.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = ByeMobile/AppDelegate.swift; sourceTree = "<group>"; };
 		7AAC33FE0767C2E743D458C0 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = ByeMobile/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		85BD064BFBF54C923578CA60 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		875D16FACF412A2FE9D575E4 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		8A34535627E413CB2471B548 /* ByeShare.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ByeShare.entitlements; sourceTree = "<group>"; };
+		92922C2EEE86FD532C69A947 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		98B6A89A33F33B6050CFD381 /* ByeNotify.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ByeNotify.entitlements; sourceTree = "<group>"; };
 		A0631239F62240D58030494E /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/WidgetKit.framework; sourceTree = DEVELOPER_DIR; };
 		A1B2C3D40000000000000001 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SceneDelegate.swift; path = ByeMobile/SceneDelegate.swift; sourceTree = "<group>"; };
 		B984B300713DC67C658011CD /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		C51AF4FB1A2D81FE94B124BD /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		CA00B7525CA1A7683C37CFB7 /* NotificationService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		DB7BE4A5A5D9FF3490F01EB5 /* ByeSecureStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeMobile/ByeSecureStore.swift; sourceTree = "<group>"; };
 		DFDA905E45D8512120079A15 /* ByeWidgetBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeMobile/ByeWidgetBridge.swift; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
+		FA24BE9AF23C00903A739DCE /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS14.0.sdk/System/Library/Frameworks/UserNotifications.framework; sourceTree = DEVELOPER_DIR; };
+		FE7E381DFA7760ADFBB80A35 /* ByePush.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ByePush.swift; path = ByeMobile/ByePush.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -110,6 +137,15 @@
 			files = (
 				0673C829980A3AA6C680C497 /* Foundation.framework in Frameworks */,
 				EA263358C5BCDD0AC1731726 /* UniformTypeIdentifiers.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F7776E4C552639B0237E2AD7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7CB1E7F108D79ABB05BA1055 /* Foundation.framework in Frameworks */,
+				822001195183FBA4705632BB /* UserNotifications.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -140,6 +176,8 @@
 				5BFB31DBDCDD7D1D6D58A94A /* ByeWidgetBridge.m */,
 				32882F1939FBA5D0A9F65DBF /* ByeSecureStore.m */,
 				308F4A8096CE96AF5304E12C /* ByeMobile.entitlements */,
+				FE7E381DFA7760ADFBB80A35 /* ByePush.swift */,
+				07F44E473BEAD8679FBFD8D0 /* ByePush.m */,
 			);
 			name = ByeMobile;
 			sourceTree = "<group>";
@@ -154,6 +192,19 @@
 			);
 			name = ByeShare;
 			path = ByeShare;
+			sourceTree = "<group>";
+		};
+		242169642AE02D23EE5FD3CD /* ByeNotify */ = {
+			isa = PBXGroup;
+			children = (
+				CA00B7525CA1A7683C37CFB7 /* NotificationService.swift */,
+				3A0F7748FA98B4E8469D81B7 /* ByePushCrypto.swift */,
+				444F561CB1B89FD1B774DBC3 /* Info.plist */,
+				98B6A89A33F33B6050CFD381 /* ByeNotify.entitlements */,
+				92922C2EEE86FD532C69A947 /* PrivacyInfo.xcprivacy */,
+			);
+			name = ByeNotify;
+			path = ByeNotify;
 			sourceTree = "<group>";
 		};
 		2D16E6871FA4F8E400B85C8A /* Frameworks */ = {
@@ -183,6 +234,7 @@
 				BBD78D7AC51CEA395F1C20DB /* Pods */,
 				FE3AF6EDEC72B57B714571F9 /* ByeWidget */,
 				173D531209F01657616052CB /* ByeShare */,
+				242169642AE02D23EE5FD3CD /* ByeNotify */,
 			);
 			indentWidth = 2;
 			sourceTree = "<group>";
@@ -195,6 +247,7 @@
 				13B07F961A680F5B00A75B9A /* ByeMobile.app */,
 				19E916EC8DE8979676C4FC65 /* ByeWidget.appex */,
 				1CED6C0A0439D5B853E31ACF /* ByeShare.appex */,
+				654F617B64C6E88628CFC26A /* ByeNotify.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -215,6 +268,8 @@
 				A0631239F62240D58030494E /* WidgetKit.framework */,
 				5D68DDDCA7568693687089AD /* SwiftUI.framework */,
 				1D29ED657D8B2685F2C07DD2 /* UniformTypeIdentifiers.framework */,
+				6827264657D28D2D9A24AEF8 /* Foundation.framework */,
+				FA24BE9AF23C00903A739DCE /* UserNotifications.framework */,
 			);
 			name = iOS;
 			sourceTree = "<group>";
@@ -234,6 +289,23 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		0E1E012BFA6BB56DEADA3640 /* ByeNotify */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FC131928FC85373AC3F10F7F /* Build configuration list for PBXNativeTarget "ByeNotify" */;
+			buildPhases = (
+				0A15A404CEE4C838DA9326EF /* Sources */,
+				F7776E4C552639B0237E2AD7 /* Frameworks */,
+				7146DC29940C174AA0038D8E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ByeNotify;
+			productName = ByeNotify;
+			productReference = 654F617B64C6E88628CFC26A /* ByeNotify.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		13B07F861A680F5B00A75B9A /* ByeMobile */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 13B07F931A680F5B00A75B9A /* Build configuration list for PBXNativeTarget "ByeMobile" */;
@@ -252,6 +324,7 @@
 			dependencies = (
 				B442E53C1F8F8FEFF7041B0F /* PBXTargetDependency */,
 				76D80AE0C192544A38111997 /* PBXTargetDependency */,
+				E461EB5C907759EC8288EB7F /* PBXTargetDependency */,
 			);
 			name = ByeMobile;
 			productName = ByeMobile;
@@ -321,6 +394,7 @@
 				13B07F861A680F5B00A75B9A /* ByeMobile */,
 				8A118F7F8C41C8DB01EA9F19 /* ByeWidget */,
 				29E2EA6E50CAE1F33EABB99C /* ByeShare */,
+				0E1E012BFA6BB56DEADA3640 /* ByeNotify */,
 			);
 		};
 /* End PBXProject section */
@@ -341,6 +415,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				7255F8A76EF38B67E65F5A8A /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7146DC29940C174AA0038D8E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1606AEA8E5CBAE4184077266 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -430,6 +512,15 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		0A15A404CEE4C838DA9326EF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A3989E9F88D6BBFABA7C5568 /* NotificationService.swift in Sources */,
+				4E144E45499D6C657F538747 /* ByePushCrypto.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		13B07F871A680F5B00A75B9A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -440,6 +531,9 @@
 				74D324F74E5CC4587DB36661 /* ByeSecureStore.swift in Sources */,
 				C0C962DC8FE627C9F2FB93C1 /* ByeWidgetBridge.m in Sources */,
 				CC277323FBA774ED8750F7E1 /* ByeSecureStore.m in Sources */,
+				5E90872C3A5F21A53AD8EA31 /* ByePush.swift in Sources */,
+				B20207155192721ABEF8B048 /* ByePush.m in Sources */,
+				D169456954915398950AB98E /* ByePushCrypto.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -473,6 +567,12 @@
 			name = ByeWidget;
 			target = 8A118F7F8C41C8DB01EA9F19 /* ByeWidget */;
 			targetProxy = A9BEAF318DDAF65599C91710 /* PBXContainerItemProxy */;
+		};
+		E461EB5C907759EC8288EB7F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ByeNotify;
+			target = 0E1E012BFA6BB56DEADA3640 /* ByeNotify */;
+			targetProxy = 110652F1DB97915995C3738E /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -559,6 +659,30 @@
 				VERSIONING_SYSTEM = "apple-generic";
 			};
 			name = Release;
+		};
+		811B471AEA3E87BC2EB84EEC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = ByeNotify/ByeNotify.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ByeNotify/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = email.bye.app.notify;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
 		};
 		83CBBA201A601CBA00E9B192 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -740,6 +864,31 @@
 			};
 			name = Debug;
 		};
+		B6EE7EB830CACDC7BF6BDC31 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = ByeNotify/ByeNotify.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ByeNotify/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = email.bye.app.notify;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		BADC862B718683C54F2B3993 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -824,6 +973,15 @@
 			buildConfigurations = (
 				BADC862B718683C54F2B3993 /* Release */,
 				9BAB3AE2E8D91E9733D94C38 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FC131928FC85373AC3F10F7F /* Build configuration list for PBXNativeTarget "ByeNotify" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B6EE7EB830CACDC7BF6BDC31 /* Release */,
+				811B471AEA3E87BC2EB84EEC /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

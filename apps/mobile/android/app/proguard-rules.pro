@@ -13,6 +13,9 @@
 -keep class com.byemobile.ByeNativePackage { *; }
 -keep class com.byemobile.ByeSecureStoreModule { *; }
 -keep class com.byemobile.ByeWidgetBridgeModule { *; }
+-keep class com.byemobile.ByePushModule { *; }
+# FCM starts the messaging service from the manifest.
+-keep class com.byemobile.ByeMessagingService { *; }
 # Home-screen widget provider is instantiated by the system from the manifest.
 -keep class com.byemobile.ByeWidgetProvider { *; }
 -keepclassmembers class * { @com.facebook.react.bridge.ReactMethod *; }

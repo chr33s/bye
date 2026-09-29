@@ -320,12 +320,20 @@ export const fetchHandler = ({
         case "/api/authorize":
           return send(200, await service.startAuthorization(op, session), setCookie);
         case "/api/install": {
-          // Only ids and the label: zone name, hostname and stage are derived server-side.
-          const result = await service.install(op, {
+          // Only ids, the label and the push choice: zone name, hostname and stage are derived
+          // server-side.
+          const target = {
             accountId: str(body, "accountId"),
             zoneId: str(body, "zoneId"),
             label: Predicate.isString(body.label) ? body.label : "bye",
-          });
+          };
+
+          const result = await service.install(
+            op,
+            Predicate.isBoolean(body.pushNotifications)
+              ? { ...target, pushNotifications: body.pushNotifications }
+              : target,
+          );
 
           return send(result.status === "deploying" ? 202 : 200, result);
         }
@@ -336,6 +344,11 @@ export const fetchHandler = ({
           return send(200, await service.status(op));
         case "/api/reattach":
           return send(200, await service.reattach(op, str(body, "installationId")));
+        case "/api/push":
+          if (!Predicate.isBoolean(body.enabled))
+            throw new OnboardingError("invalid", "enabled must be true or false");
+
+          return send(200, await service.setPushNotifications(op, body.enabled));
         case "/api/review":
           return send(200, await service.review(op));
         case "/api/approve":

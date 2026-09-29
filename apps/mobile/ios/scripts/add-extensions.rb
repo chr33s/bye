@@ -1,4 +1,5 @@
-# Adds the WidgetKit and Share extensions plus the widget bridge to ByeMobile.xcodeproj.
+# Adds the WidgetKit, Share and Notification Service extensions plus the widget and push bridges
+# to ByeMobile.xcodeproj.
 # Idempotent. Run with CocoaPods' Ruby:
 #   GEM_HOME="$(brew --prefix cocoapods)/libexec" "$(brew --prefix ruby)/bin/ruby" scripts/add-extensions.rb
 require "xcodeproj"
@@ -20,7 +21,7 @@ end
 
 # App: bridge sources, bridging header, entitlements, bundle id.
 app_group = project.main_group["ByeMobile"]
-%w[ByeWidgetBridge.swift ByeWidgetBridge.m].each do |name|
+%w[ByeWidgetBridge.swift ByeWidgetBridge.m ByePush.swift ByePush.m].each do |name|
   ref = ensure_file(project, app_group, name)
   app.source_build_phase.add_file_reference(ref, true)
 end
@@ -70,6 +71,12 @@ end
 
 extension(project, app, name: "ByeWidget", type: :app_extension, sources: ["ByeWidget.swift"], bundle_id: "email.bye.app.widget", frameworks: %w[WidgetKit SwiftUI])
 extension(project, app, name: "ByeShare", type: :app_extension, sources: ["ShareViewController.swift"], bundle_id: "email.bye.app.share", frameworks: %w[UniformTypeIdentifiers])
+# Notification Service Extension: decrypts pushes relayed by Bye's push gateway (spec P1.7).
+extension(project, app, name: "ByeNotify", type: :app_extension, sources: ["NotificationService.swift", "ByePushCrypto.swift"], bundle_id: "email.bye.app.notify", frameworks: %w[UserNotifications])
+
+# The app registers the public half of the keys the extension decrypts with: same source file.
+crypto = ensure_file(project, project.main_group["ByeNotify"], "ByePushCrypto.swift", "ByeNotify")
+app.source_build_phase.add_file_reference(crypto, true) unless app.source_build_phase.files_references.include?(crypto)
 
 project.save
 puts "ByeMobile.xcodeproj: #{project.targets.map(&:name).join(', ')}"

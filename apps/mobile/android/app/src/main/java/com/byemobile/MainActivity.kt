@@ -18,11 +18,13 @@ class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     shareToDeepLink(intent)
     super.onCreate(savedInstanceState)
+    ByePushModule.handleIntent(intent)
   }
 
   override fun onNewIntent(intent: Intent) {
     shareToDeepLink(intent)
     super.onNewIntent(intent)
+    ByePushModule.handleIntent(intent)
   }
 
   /**

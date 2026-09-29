@@ -17,7 +17,8 @@
     "./views": "./src/views.ts",
     "./platform": "./src/ui/host.ts",
     "./routes": "./src/routes.ts",
-    "./app": "./src/ui/App.tsx"
+    "./app": "./src/ui/App.tsx",
+    "./push": "./src/push.ts"
   },
   "dependencies": {
     "@bye/domain": "workspace:*",

@@ -32,6 +32,7 @@ import { issuerOf } from "./discovery.ts";
 import {
   authorizeParams,
   closeLiveSockets,
+  releaseCredential,
   consentPage,
   currentSession,
   escapeHtml,
@@ -93,10 +94,13 @@ const rotatedCookie = async (request: Request, env: CoreEnv): Promise<Record<str
   return { "set-cookie": sessionCookie(next.token) };
 };
 
-/** Device auth whose revocations (logout, refresh-token reuse, races) also close live sockets. */
+/**
+ * Device auth whose revocations (logout, refresh-token reuse, races) also close live sockets and
+ * drop the session's push registrations.
+ */
 const deviceAuth = (env: CoreEnv) =>
   new ControlDeviceAuth(env.DIRECTORY, kernelClock, (userId, sessionId) =>
-    closeLiveSockets(env, userId, sessionId),
+    releaseCredential(env, userId, sessionId),
   );
 
 const AUTHORIZE_PARAMS: ReadonlySet<string> = new Set([
@@ -391,7 +395,7 @@ export const authRoutes: ReadonlyArray<Route> = [
 
       if (cred?.kind === "session") {
         await auth.revokeSession(cred.session.user_id, cred.session.id);
-        await closeLiveSockets(env, cred.session.user_id, cred.session.id);
+        await releaseCredential(env, cred.session.user_id, cred.session.id);
       }
     }
 

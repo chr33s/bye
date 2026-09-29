@@ -31,6 +31,7 @@ import {
   SESSION_COOKIE,
 } from "@bye/platform-cloudflare";
 import { kernelClock } from "../durable-host.ts";
+import { revokeCredentialPush } from "../push.ts";
 import type { CoreEnv } from "../env.ts";
 import { errorResponse, json, type Params, readJson, type RouteHandler, runHttp } from "../http.ts";
 import {
@@ -479,6 +480,21 @@ export const requireUser = (scope: "read" | "admin" = "read") =>
 
     return principal;
   });
+
+/**
+ * Everything a revoked credential leaves behind: its live sockets and the push registrations it
+ * made (spec P1.7). Called on sign-out and every revocation of one credential; best effort.
+ */
+export const releaseCredential = async (
+  env: CoreEnv,
+  userId: string,
+  credentialId: string,
+): Promise<void> => {
+  await Promise.all([
+    closeLiveSockets(env, userId, credentialId),
+    revokeCredentialPush(env, credentialId),
+  ]);
+};
 
 /**
  * Close live change-feed sockets opened with a revoked credential (§8, DS09) on every authority

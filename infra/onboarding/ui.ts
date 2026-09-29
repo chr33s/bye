@@ -51,6 +51,8 @@ export const ONBOARDING_PAGE = `<!doctype html>
         <span class="row"><input id="label" type="text" value="bye" size="16" autocomplete="off" spellcheck="false" aria-describedby="label-help"> <span>.</span> <span id="zone-name"></span></span></p>
       <p id="label-help" class="muted">Lowercase letters, digits and hyphens.</p>
       <p>Your Bye:<br><strong id="preview"></strong></p>
+      <p><label><input id="push" type="checkbox" checked aria-describedby="push-help"> Push notifications</label><br>
+        <span id="push-help" class="muted">Notifications in browsers and the Bye apps. The apps get them through Bye's push service, encrypted so it can't read them. You can change this later.</span></p>
       <button id="create-btn">Create Bye</button>
     </div>
     <div id="no-zones" hidden>
@@ -117,6 +119,12 @@ export const ONBOARDING_PAGE = `<!doctype html>
       <p class="muted">Holds this instance's generated secrets so you can redeploy without this service. It contains no Cloudflare credentials and can be downloaded only once.</p>
       <button id="kit-btn" class="secondary">Download recovery kit</button>
       <p id="kit-issued" class="muted"></p>
+      <div id="push-box" hidden>
+        <h3>Push notifications</h3>
+        <p><label><input id="push-setting" type="checkbox"> Send push notifications to browsers and the Bye apps</label></p>
+        <p class="muted">Changing this redeploys Bye after you review the plan. Turning it off stops all notifications; turning it back on restores existing devices.</p>
+        <button id="push-apply" class="secondary" disabled>Apply</button>
+      </div>
       <h3>Cloudflare connection</h3>
       <p id="auth-status"></p>
       <button id="disconnect" class="secondary">Disconnect Cloudflare</button>
@@ -168,7 +176,7 @@ ul.plain li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
 
 export const ONBOARDING_SCRIPT = `const $ = (id) => document.getElementById(id);
 const SECTIONS = ["s-connect", "s-resume", "s-account", "s-domain", "s-progress", "s-review", "s-done"];
-const ui = { accounts: null, accountId: null, zones: null, review: null, approvalId: null, reasons: [], target: null, sawProgress: false, resumable: null, skipResume: false };
+const ui = { pushShown: null, accounts: null, accountId: null, zones: null, review: null, approvalId: null, reasons: [], target: null, sawProgress: false, resumable: null, skipResume: false };
 const el = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
 const fill = (node, items) => { node.replaceChildren(...items); };
 const showError = (msg) => { $("error").textContent = msg || ""; };
@@ -215,6 +223,9 @@ function renderManage(s) {
   $("release").textContent = s.pinnedRelease ? "Release " + s.pinnedRelease.version + " (" + s.pinnedRelease.commit.slice(0, 12) + ")" : "Release unavailable: " + s.releaseProblem;
   $("kit-btn").hidden = !i.accountId || !!i.recoveryKitIssuedAt;
   $("kit-issued").textContent = i.recoveryKitIssuedAt ? "Recovery kit downloaded " + i.recoveryKitIssuedAt.replace("T", " ").slice(0, 16) + " UTC." : "";
+  $("push-box").hidden = !i.accountId;
+  if (ui.pushShown !== i.pushNotifications) { $("push-setting").checked = i.pushNotifications; ui.pushShown = i.pushNotifications; }
+  $("push-apply").disabled = $("push-setting").checked === i.pushNotifications || a.status !== "connected";
   $("auth-status").textContent = { none: "Not connected.", connected: "Connected.", expired: "Authorization expired.", disconnected: "Disconnected. Your deployed resources and data are unchanged." }[a.status];
   $("disconnect").hidden = a.status !== "connected";
   $("manage-connect").hidden = a.status === "connected" || a.status === "none";
@@ -355,11 +366,24 @@ $("create-btn").onclick = async () => {
   $("h-progress").textContent = "Creating Bye at " + $("label").value.trim().toLowerCase() + "." + (z ? z.name : "");
   renderSteps("planning", null, $("label").value.trim().toLowerCase() + "." + (z ? z.name : ""));
   try {
-    const r = await api("/api/install", { accountId: ui.accountId, zoneId: $("zone").value, label: $("label").value.trim().toLowerCase() });
+    const r = await api("/api/install", { accountId: ui.accountId, zoneId: $("zone").value, label: $("label").value.trim().toLowerCase(), pushNotifications: $("push").checked });
     if (r.status === "needs-review") ui.reasons = r.reasons || [];
   } catch (e) { showError(e.message); }
   $("create-btn").disabled = false;
   refresh();
+};
+$("push-setting").onchange = () => { $("push-apply").disabled = $("push-setting").checked === ui.pushShown; };
+// A configuration change like any other: record it, then review and approve the redeploy.
+$("push-apply").onclick = async () => {
+  const on = $("push-setting").checked;
+  $("push-apply").disabled = true;
+  try {
+    await api("/api/push", { enabled: on });
+    ui.pushShown = on;
+    ui.reasons = ["Push notifications are turned " + (on ? "on" : "off") + ". Deploy the change to apply it."];
+    show("s-review"); fill($("review-reasons"), ui.reasons.map((r) => el("li", r))); showError("");
+    $("review-btn").click();
+  } catch (e) { showError(e.message); $("push-apply").disabled = false; }
 };
 $("disconnect").onclick = async () => {
   if (!confirm("Disconnect Cloudflare? Active deployment work stops and stored credentials are deleted. Resources and data stay in your account.")) return;

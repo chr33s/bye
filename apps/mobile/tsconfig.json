@@ -12,6 +12,7 @@
       "@bye/native-shared/app": ["../../packages/native-shared/src/ui/App.tsx"],
       "@bye/native-shared/auth": ["../../packages/native-shared/src/auth/index.ts"],
       "@bye/native-shared/platform": ["../../packages/native-shared/src/ui/host.ts"],
+      "@bye/native-shared/push": ["../../packages/native-shared/src/push.ts"],
       "react-native": ["./node_modules/react-native/types_generated/index.d.ts"],
       "@react-native/virtualized-lists": [
         "./node_modules/@react-native/virtualized-lists/types_generated/index.d.ts"

@@ -1,6 +1,7 @@
 import type { SessionClient } from "../auth/session.ts";
 import type { KeyValueStore } from "../drafts.ts";
 import type { ProbeFetch, ValidatedInstance } from "../instance/discovery.ts";
+import type { DevicePushToken } from "../push.ts";
 
 /**
  * Native capabilities each host (iOS, Android, macOS, Windows) supplies to the shared app. The
@@ -39,6 +40,24 @@ export interface Platform {
     publish(snapshot: WidgetSnapshot): void;
     takePendingShare(): Promise<string | null>;
   };
+  /** OS notifications (APNs on iOS, FCM on Android) through Bye's push gateway; optional. */
+  readonly push?: PushBridge;
+}
+
+export interface PushBridge {
+  /** Shown in the account's list of devices receiving push (e.g. "iPhone app"). */
+  readonly label: string;
+  /**
+   * Ask for notification permission (the OS prompts once) and answer the device token with this
+   * device's Web Push keys; null when the user declined or the OS has no push service.
+   */
+  requestToken(): Promise<DevicePushToken | null>;
+  /** The OS rotated the token: registrations should be refreshed. */
+  onTokenRefresh(listener: () => void): () => void;
+  /** The URL of a notification whose tap launched the app, once. */
+  initialOpen(): Promise<string | null>;
+  /** The URL of a notification tapped while the app runs. */
+  onOpen(listener: (url: string) => void): () => void;
 }
 
 export interface WidgetSnapshot {

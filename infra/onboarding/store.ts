@@ -111,6 +111,12 @@ export interface Installation {
   /** Domain for the owner's address (initially the zone); never activates mail routing. */
   readonly ownerAddressDomain?: string | null;
   readonly installIntent?: InstallIntent | null;
+  /**
+   * Push notifications (Web Push to browsers; the iOS/Android apps through Bye's push gateway).
+   * Absent means on. Off deploys without a VAPID key, so the instance offers no push; the sealed
+   * key is kept, so turning it back on revives existing subscriptions.
+   */
+  readonly pushNotifications?: boolean;
   /** Review awaiting the operator because the standard plan could not be auto-approved. */
   readonly pendingReviewId?: string | null;
 }

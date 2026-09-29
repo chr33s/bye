@@ -43,6 +43,7 @@ export interface NativeHostOptions {
   readonly clientId?: string;
   readonly widgets?: Platform["widgets"];
   readonly urls?: Platform["urls"];
+  readonly push?: Platform["push"];
 }
 
 export const makeNativePlatform = (options: NativeHostOptions): Platform => {
@@ -75,5 +76,6 @@ export const makeNativePlatform = (options: NativeHostOptions): Platform => {
     },
     ...(options.widgets ? { widgets: options.widgets } : {}),
     ...(options.urls ? { urls: options.urls } : {}),
+    ...(options.push ? { push: options.push } : {}),
   };
 };

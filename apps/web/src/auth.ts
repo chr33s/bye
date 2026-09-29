@@ -198,6 +198,15 @@ export const clearLocalData = async (): Promise<void> => {
     // ignore
   }
 
+  // The server drops this session's push registration on logout; the browser's subscription goes
+  // too, so a later account on this browser starts without a stale one.
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration();
+    await (await registration?.pushManager?.getSubscription())?.unsubscribe();
+  } catch {
+    // no worker or no push support
+  }
+
   await new Promise<void>((resolve) => {
     try {
       const request = indexedDB.deleteDatabase("bye-drafts");

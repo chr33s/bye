@@ -1,8 +1,9 @@
 import { Match } from "effect";
+import { toBase64Url, utf8 } from "@bye/domain";
 import { isForbiddenProxyTarget } from "@bye/mail-codec";
 import {
-  type ApnsConfig,
-  type FcmServiceAccount,
+  apnsConfigFrom,
+  fcmAccountFrom,
   type PushResult,
   sendApns,
   sendFcm,
@@ -42,6 +43,10 @@ export interface PushDeviceRow {
   readonly label: string;
   readonly created_at: number;
   readonly last_success_at: number | null;
+  /** APNs environment of the token: 1 sandbox, 0 production, null when the client didn't say. */
+  readonly apns_sandbox: number | null;
+  /** The credential that registered it; null for registrations from before that was recorded. */
+  readonly session_id: string | null;
 }
 
 export class RetryablePushFailure extends Error {
@@ -59,28 +64,61 @@ const vapidKeys = (env: CoreEnv): VapidKeys | null =>
       }
     : null;
 
-const apnsConfig = (env: CoreEnv): ApnsConfig | null =>
-  env.APNS_KEY_P8 && env.APNS_KEY_ID && env.APNS_TEAM_ID && env.APNS_TOPIC
-    ? {
-        privateKeyPem: env.APNS_KEY_P8,
-        keyId: env.APNS_KEY_ID,
-        teamId: env.APNS_TEAM_ID,
-        topic: env.APNS_TOPIC,
-        production: !env.APP_ORIGIN.includes(".test"),
-      }
-    : null;
-
-const fcmAccount = (env: CoreEnv): FcmServiceAccount | null => {
-  if (!env.FCM_SERVICE_ACCOUNT) return null;
-
-  try {
-    return JSON.parse(env.FCM_SERVICE_ACCOUNT) as FcmServiceAccount;
-  } catch {
-    return null;
-  }
-};
-
 type Sender = (device: PushDeviceRow, request: NotificationRequest) => Promise<PushResult | null>;
+
+/**
+ * What a provider that can read the payload is shown (spec P1.7): APNs and FCM carry notifications
+ * in the clear to Apple/Google, so they get the kind of event only — never a sender, subject or
+ * address. Web Push payloads are end-to-end encrypted to the device (RFC 8291), including through
+ * the native push gateway, so they carry the full content.
+ */
+export const providerVisibleText = (kind: string): { title: string; body: string } =>
+  kind.startsWith("mail.")
+    ? { title: "bye", body: "New mail" }
+    : kind.includes("invitation")
+      ? { title: "bye", body: "Calendar invitation" }
+      : kind.includes("reminder")
+        ? { title: "bye", body: "Reminder" }
+        : { title: "bye", body: "New notification" };
+
+/**
+ * Web Push text limits. The whole encrypted message must fit one push-service record, and Bye's
+ * push gateway accepts at most 2800 bytes; at 4 bytes per character in the worst case, these keep
+ * the JSON payload well under that.
+ */
+export const PUSH_TEXT_LIMITS = { title: 120, body: 240, url: 1024, collapseId: 64 } as const;
+
+const clip = (value: string, max: number) =>
+  value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+
+/**
+ * Whether an APNs token belongs to the sandbox: as registered, or, when the client didn't say
+ * (older builds, rows from before it was recorded), the old rule of sandbox on `.test` origins.
+ */
+const apnsSandbox = (env: CoreEnv, device: PushDeviceRow): boolean =>
+  device.apns_sandbox === null ? env.APP_ORIGIN.includes(".test") : device.apns_sandbox === 1;
+
+/**
+ * A tag for grouping notifications about one resource that reveals nothing about it: SHA-256 of
+ * the instance and resource ID, base64url, 32 characters (within APNs' 64-byte collapse-id limit).
+ */
+export const opaqueTag = async (origin: string, resource: string): Promise<string> =>
+  toBase64Url(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", utf8(`${origin}\n${resource}`))),
+  ).slice(0, 32);
+
+/**
+ * The https link a Web Push notification opens. `bye://` deep links name no server, so browsers
+ * can't open them and a phone signed in to several servers couldn't tell which one; they become
+ * the same route on this instance's app origin (`bye://calendar/event/x` → `<origin>/#/calendar/event/x`).
+ */
+export const appLink = (origin: string, url: string): string => {
+  if (url.startsWith(`${origin}/`)) return url;
+
+  if (url.startsWith("bye://")) return `${origin}/#/${url.slice("bye://".length)}`;
+
+  return `${origin}/`;
+};
 
 /**
  * Transport selection per device kind; null = the kind is not configured in this environment.
@@ -94,16 +132,26 @@ export const makePushSender = (
   doh: DohFetch = (u, i) => fetch(u, i),
 ): Sender => {
   const vapid = vapidKeys(env);
-  const apns = apnsConfig(env);
-  const fcm = fcmAccount(env);
+  // Production per device: the registration says which APNs environment issued its token.
+  const apns = apnsConfigFrom(env, true);
+  const fcm = fcmAccountFrom(env);
   const f = fetchFn as never;
 
   return async (device, request) => {
     const note = {
-      title: request.title,
-      body: request.body,
+      title: clip(request.title, PUSH_TEXT_LIMITS.title),
+      body: clip(request.body, PUSH_TEXT_LIMITS.body),
       url: request.url,
-      collapseId: request.resource,
+      collapseId: request.resource.slice(0, PUSH_TEXT_LIMITS.collapseId),
+    };
+
+    // Apple and Google see the kind of event and the app, nothing else: no sender, subject, thread
+    // or route (P1.7). Notifications about the same thread or event still replace each other,
+    // through an opaque tag.
+    const opaque = {
+      ...providerVisibleText(request.kind),
+      url: `${env.APP_ORIGIN}/`,
+      collapseId: await opaqueTag(env.APP_ORIGIN, request.resource),
     };
 
     switch (device.kind) {
@@ -121,7 +169,11 @@ export const makePushSender = (
         return sendWebPush(
           f,
           { endpoint: device.endpoint, p256dh: device.p256dh, auth: device.auth },
-          { ...note, kind: request.kind },
+          {
+            ...note,
+            url: appLink(env.APP_ORIGIN, request.url).slice(0, PUSH_TEXT_LIMITS.url),
+            kind: request.kind.slice(0, 64),
+          },
           vapid,
           {
             topic: request.resource,
@@ -129,12 +181,18 @@ export const makePushSender = (
           },
         );
       case "apns":
-        return apns ? sendApns(f, apns, device.endpoint, note) : null;
+        return apns
+          ? sendApns(f, { ...apns, production: !apnsSandbox(env, device) }, device.endpoint, opaque)
+          : null;
       case "fcm":
-        return fcm ? sendFcm(f, fcm, device.endpoint, note) : null;
+        return fcm ? sendFcm(f, fcm, device.endpoint, opaque) : null;
     }
   };
 };
+
+/** SQL: the row's `session_id` is a live browser session or device session (binds `now` ×3). */
+const LIVE_SESSION = `(EXISTS (SELECT 1 FROM sessions s WHERE s.id = push_devices.session_id AND s.revoked_at IS NULL AND s.expires_at > ?)
+  OR EXISTS (SELECT 1 FROM device_sessions d WHERE d.id = push_devices.session_id AND d.revoked_at IS NULL AND d.idle_expires_at > ? AND d.absolute_expires_at > ?))`;
 
 /**
  * Deliver to every enabled device of the user. At most once per (dedupeKey, device). Dead
@@ -148,16 +206,19 @@ export const deliverNotification = async (
 ): Promise<{ readonly delivered: number }> => {
   const db = env.DIRECTORY;
 
+  const now = Date.now();
+
+  // A registration lives only as long as the credential that made it (P1.7). Sign-out and
+  // revocation delete rows; this also skips those whose session simply expired.
   const devices = await db
     .prepare(
-      "SELECT id, user_id, kind, endpoint, p256dh, auth, label, created_at, last_success_at FROM push_devices WHERE user_id = ? AND enabled = 1 AND disabled_at IS NULL",
+      `SELECT id, user_id, kind, endpoint, p256dh, auth, label, created_at, last_success_at, apns_sandbox, session_id FROM push_devices WHERE user_id = ? AND enabled = 1 AND disabled_at IS NULL AND (session_id IS NULL OR ${LIVE_SESSION})`,
     )
-    .bind(request.userId)
+    .bind(request.userId, now, now, now)
     .all<PushDeviceRow>();
 
   let delivered = 0;
   let retry = false;
-  const now = Date.now();
 
   for (const device of devices.results) {
     const claim = await db
@@ -206,6 +267,8 @@ export const deliverNotification = async (
             .bind(request.dedupeKey, device.id)
             .run();
         },
+        // The message was refused (too large, malformed): the device is fine.
+        Dropped: async () => undefined,
         Rejected: async () => {
           await db
             .prepare(
@@ -247,7 +310,38 @@ export interface PushRegistration {
   readonly p256dh?: string;
   readonly auth?: string;
   readonly label?: string;
+  readonly sandbox?: boolean;
 }
+
+/**
+ * Remove the user's registrations whose session has ended (expired rather than signed out, so
+ * nothing deleted them). Run where registrations are listed or counted, so an expired browser
+ * shows push as off and dead rows never fill the device limit; delivery skips them anyway.
+ */
+export const pruneEndedRegistrations = async (env: CoreEnv, userId: string): Promise<void> => {
+  const now = Date.now();
+
+  await env.DIRECTORY.prepare(
+    `DELETE FROM push_devices WHERE user_id = ? AND session_id IS NOT NULL AND NOT (${LIVE_SESSION})`,
+  )
+    .bind(userId, now, now, now)
+    .run();
+};
+
+/**
+ * A revoked credential (sign-out, device revoke, refresh-token reuse) takes the push registrations
+ * it made with it (spec P1.7): a signed-out device must stop receiving notifications even when it
+ * never got the chance to unregister. Best effort, like closing its live sockets.
+ */
+export const revokeCredentialPush = async (env: CoreEnv, credentialId: string): Promise<void> => {
+  try {
+    await env.DIRECTORY.prepare("DELETE FROM push_devices WHERE session_id = ?")
+      .bind(credentialId)
+      .run();
+  } catch {
+    console.warn(JSON.stringify({ level: "warn", op: "push.revoke-failed" }));
+  }
+};
 
 /** Validate a device registration. Web Push endpoints must be public HTTPS (no SSRF targets). */
 export const validateRegistration = (r: PushRegistration): string | null => {

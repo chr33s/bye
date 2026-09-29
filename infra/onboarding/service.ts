@@ -6,7 +6,7 @@
 // Nothing here deletes resources or state, changes DNS, MX or mail routing (only MailCore's
 // custom hostname), or exposes management tokens.
 import { Match } from "effect";
-import { createPublicKey, generateKeyPairSync, randomBytes } from "node:crypto";
+import { createECDH, createPublicKey, generateKeyPairSync, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { addInstanceLink } from "../../packages/native-shared/src/instance/handoff.ts";
 import type { ExportedPlan } from "../policies/plan-normalize.ts";
@@ -83,9 +83,11 @@ export const DISABLED_SECRETS = ["TURNSTILE_SECRET"] as const;
 /**
  * Generated key pairs: the DKIM private key (PKCS#8 PEM) that signs outbound personal mail. Its
  * public half (MAIL_DKIM_PUBLIC_KEY) is derived from it and published by incoming-email
- * activation at `bye1._domainkey.<domain>`.
+ * activation at `bye1._domainkey.<domain>`. The VAPID private key (RFC 8292, base64url P-256
+ * scalar) signs Web Push for browsers and, through Bye's push gateway, the native apps; its public
+ * half (VAPID_PUBLIC_KEY) is derived from it.
  */
-export const GENERATED_KEYPAIRS = ["MAIL_DKIM_PRIVATE_KEY"] as const;
+export const GENERATED_KEYPAIRS = ["MAIL_DKIM_PRIVATE_KEY", "VAPID_PRIVATE_KEY"] as const;
 
 export const SECRET_NAMES: ReadonlyArray<string> = [
   ...GENERATED_SECRETS,
@@ -101,7 +103,38 @@ export const generateRuntimeSecrets = () => ({
     publicKeyEncoding: { type: "spki", format: "pem" },
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
   }).privateKey,
+  VAPID_PRIVATE_KEY: vapidPrivateKey(),
 });
+
+/** Push notifications are on unless the operator turned them off. */
+export const pushEnabled = (inst: Installation): boolean => inst.pushNotifications !== false;
+
+export interface InstallInput {
+  readonly accountId: string;
+  readonly zoneId: string;
+  readonly label: string;
+  /** Omitted keeps the installation's current choice (on for a new one). */
+  readonly pushNotifications?: boolean;
+}
+
+/** A fresh VAPID key: the raw 32-byte P-256 scalar, base64url (what the Worker's sender imports). */
+const vapidPrivateKey = (): string => {
+  const ecdh = createECDH("prime256v1");
+  ecdh.generateKeys();
+  const scalar = ecdh.getPrivateKey();
+
+  // Always 32 bytes: a short scalar (leading zero byte) would not import as a JWK `d`.
+  return encode(Buffer.concat([Buffer.alloc(32 - scalar.length), scalar]), "base64url");
+};
+
+/** The VAPID application-server key for a private scalar: uncompressed point, base64url. */
+export const vapidPublicKey = (privateKey: string): string => {
+  const ecdh = createECDH("prime256v1");
+  ecdh.setPrivateKey(Buffer.from(privateKey, "base64url"));
+
+  // Uncompressed point (0x04 ‖ X ‖ Y), Node's default format.
+  return encode(ecdh.getPublicKey(), "base64url");
+};
 
 /** Non-secret runtime configuration derived from an installation. */
 interface RuntimeConfig {
@@ -117,6 +150,7 @@ interface RuntimeConfig {
   NEWSLETTER_QUALIFIED?: string;
   MAIL_DKIM_PUBLIC_KEY?: string;
   MAIL_TRAFFIC_CLASSES?: string;
+  VAPID_PUBLIC_KEY?: string;
   SCANNER_SIGNATURES?: string;
   SCANNER_IMAGE?: string;
   MIME_IMAGE?: string;
@@ -202,6 +236,11 @@ export interface RecoveryKit {
   readonly urls: InstanceUrls;
   /** Stack configuration for a deploy without this service (secrets included). */
   readonly env: Readonly<Record<string, string>>;
+  /**
+   * Push notifications: whether they are on, and the VAPID public key to set as VAPID_PUBLIC_KEY
+   * to turn them on. `env` always holds the VAPID private key, so subscriptions survive a redeploy.
+   */
+  readonly push: { readonly enabled: boolean; readonly vapidPublicKey: string };
   readonly notes: ReadonlyArray<string>;
 }
 
@@ -371,6 +410,7 @@ export interface StatusView {
     readonly ready: boolean;
     readonly readyAt: string | null;
     readonly recoveryKitIssuedAt: string | null;
+    readonly pushNotifications: boolean;
   };
   readonly pinnedRelease: { readonly version: string; readonly commit: string } | null;
   readonly releaseProblem: string | null;
@@ -817,10 +857,7 @@ export class OnboardingService {
    * approves by policy and starts the deployment. Otherwise the plan waits in `needs-review`.
    * Zone name and hostname are derived here from Cloudflare, never taken from the browser.
    */
-  async install(
-    operatorId: string,
-    input: { readonly accountId: string; readonly zoneId: string; readonly label: string },
-  ): Promise<InstallResult> {
+  async install(operatorId: string, input: InstallInput): Promise<InstallResult> {
     const inst = await this.installation(operatorId);
 
     if (this.installing.has(inst.id))
@@ -837,7 +874,7 @@ export class OnboardingService {
   private async runInstall(
     operatorId: string,
     initial: Installation,
-    input: { readonly accountId: string; readonly zoneId: string; readonly label: string },
+    input: InstallInput,
   ): Promise<InstallResult> {
     const label = normalizeLabel(input.label);
 
@@ -851,7 +888,14 @@ export class OnboardingService {
 
     if (active && initial.urls)
       return { status: "deploying", operationId: active.id, appUrl: initial.urls.app };
-    const inst = await this.bindTarget(initial, input.accountId, input.zoneId, label);
+    const bound = await this.bindTarget(initial, input.accountId, input.zoneId, label);
+
+    // The choice is part of the configuration (and so of the reviewed digest) from the first plan.
+    const inst =
+      input.pushNotifications === undefined || input.pushNotifications === pushEnabled(bound)
+        ? bound
+        : await this.recordPush(bound, input.pushNotifications);
+
     const resolved = this.deps.release.resolve();
 
     if (!resolved.ok)
@@ -1143,10 +1187,21 @@ export class OnboardingService {
       config.MAIL_TRAFFIC_CLASSES = "transactional,personal";
     }
 
+    // Push notifications: on, the public half is derived for /v1/push/vapid-key; off, no key is
+    // deployed (the sealed one is kept for turning it back on).
+    const push =
+      pushEnabled(inst) && secrets.VAPID_PRIVATE_KEY
+        ? {
+            VAPID_PRIVATE_KEY: secrets.VAPID_PRIVATE_KEY,
+            VAPID_PUBLIC_KEY: vapidPublicKey(secrets.VAPID_PRIVATE_KEY),
+          }
+        : { VAPID_PRIVATE_KEY: "", VAPID_PUBLIC_KEY: "" };
+
     return {
       ...config,
       ...secrets,
       ...Object.fromEntries(DISABLED_SECRETS.map((k) => [k, ""])),
+      ...push,
     };
   }
 
@@ -1210,14 +1265,75 @@ export class OnboardingService {
       .map((name) => `required stack configuration ${name} has no onboarding value`);
   }
 
-  // ── Review and approval ──────────────────────────────────────────────────────────────────
+  /**
+   * Generated secrets added after an installation was bound (currently the VAPID key) are created
+   * on its next review and sealed with the rest, so existing installations gain them on upgrade.
+   * The DKIM key is deliberately not backfilled: it changes which mail an instance sends.
+   */
+  private async completeSecrets(inst: Installation): Promise<Installation> {
+    if (!inst.runtimeSecrets) return inst;
+    const secrets = open<Record<string, string>>(this.deps.keys, inst.runtimeSecrets, inst.id);
 
-  async review(operatorId: string): Promise<Review> {
+    if (secrets.VAPID_PRIVATE_KEY) return inst;
+
+    const next: Installation = {
+      ...(await this.fresh(inst.id)),
+      runtimeSecrets: seal(
+        this.deps.keys,
+        { ...secrets, VAPID_PRIVATE_KEY: vapidPrivateKey() },
+        inst.id,
+      ),
+    };
+
+    await this.deps.store.putInstallation(next);
+    await this.event(inst.id, "secrets.generated", "VAPID key for push notifications");
+
+    return next;
+  }
+
+  private async recordPush(inst: Installation, enabled: boolean): Promise<Installation> {
+    const next: Installation = { ...(await this.fresh(inst.id)), pushNotifications: enabled };
+    await this.deps.store.putInstallation(next);
+    await this.event(
+      inst.id,
+      "settings.push",
+      `push notifications ${enabled ? "on" : "off"} (applies with the next deployment)`,
+    );
+
+    return next;
+  }
+
+  /**
+   * Turn push notifications on or off for a bound installation. Like any configuration change it
+   * takes effect through a reviewed deployment; the caller reviews next.
+   */
+  async setPushNotifications(operatorId: string, enabled: boolean): Promise<StatusView> {
     const inst = await this.installation(operatorId);
 
     if (inst.boundAt === null)
       throw new OnboardingError("invalid", "choose where Bye should live first");
-    const token = await this.accessToken(inst);
+
+    if (await this.activeOperation(inst.id))
+      throw new OnboardingError(
+        "conflict",
+        "a deployment is already in progress for this installation",
+        "Wait for it to finish, then change the setting",
+      );
+
+    if (pushEnabled(inst) !== enabled) await this.recordPush(inst, enabled);
+
+    return this.status(operatorId);
+  }
+
+  // ── Review and approval ──────────────────────────────────────────────────────────────────
+
+  async review(operatorId: string): Promise<Review> {
+    const bound = await this.installation(operatorId);
+
+    if (bound.boundAt === null)
+      throw new OnboardingError("invalid", "choose where Bye should live first");
+
+    const token = await this.accessToken(bound);
     const resolved = this.deps.release.resolve();
 
     if (!resolved.ok)
@@ -1225,15 +1341,24 @@ export class OnboardingService {
 
     // A plan now would race the running apply (the hosted deployer runs one job at a time), and
     // its result would be stale when the apply finishes anyway.
-    if (await this.activeOperation(inst.id))
+    if (await this.activeOperation(bound.id))
       throw new OnboardingError(
         "conflict",
         "a deployment is already in progress for this installation",
         "Wait for it to finish, then review again",
       );
-    const blockers: Array<string> = [...(await this.prerequisites(inst, token))];
+
+    const blockers: Array<string> = [
+      ...(await this.prerequisites(bound, token)),
+      // The VAPID names are always present (empty when push is off), so this doesn't depend on
+      // whether the key exists yet.
+      ...this.requiredConfigGaps(resolved.release.dir, this.config(bound)),
+    ];
+
+    // A missing key is created only for a plan that can go ahead (nothing running, no blockers),
+    // just before the configuration digest: this review is what approves and deploys it.
+    const inst = blockers.length === 0 ? await this.completeSecrets(bound) : bound;
     const config = this.config(inst);
-    blockers.push(...this.requiredConfigGaps(resolved.release.dir, config));
 
     // A hosted plan first provisions the deployer in the account: that is a write. It happens
     // only for a target that passes its prerequisites, is recorded before it starts, and fixes
@@ -1940,6 +2065,7 @@ export class OnboardingService {
         ready: inst.ready,
         readyAt: inst.readyAt,
         recoveryKitIssuedAt: inst.recoveryKitIssuedAt ?? null,
+        pushNotifications: pushEnabled(inst),
       },
       pinnedRelease: resolved.ok
         ? { version: resolved.release.ref.version, commit: resolved.release.ref.commit }
@@ -2001,17 +2127,38 @@ export class OnboardingService {
    * Cloudflare credentials. Issuance is recorded before the kit is returned.
    */
   async recoveryKit(operatorId: string): Promise<RecoveryKit> {
-    const inst = await this.installation(operatorId);
+    const bound = await this.installation(operatorId);
 
-    if (inst.boundAt === null || !inst.runtimeSecrets || !inst.urls || !inst.stateRef)
+    if (bound.boundAt === null || !bound.runtimeSecrets || !bound.urls || !bound.stateRef)
       throw new OnboardingError("invalid", "choose where Bye should live first");
 
-    if (inst.recoveryKitIssuedAt)
+    if (bound.recoveryKitIssuedAt)
       throw new OnboardingError(
         "conflict",
-        `the recovery kit was already issued at ${inst.recoveryKitIssuedAt}`,
+        `the recovery kit was already issued at ${bound.recoveryKitIssuedAt}`,
         "It is issued only once; use the copy you saved",
       );
+
+    // The kit is issued once, so it must hold every key existing subscriptions depend on. Creating
+    // one changes the configuration, so not while a deployment is running or awaiting approval.
+    const missingKey = !open<Record<string, string>>(this.deps.keys, bound.runtimeSecrets, bound.id)
+      .VAPID_PRIVATE_KEY;
+
+    if (missingKey && (bound.pendingReviewId || (await this.activeOperation(bound.id))))
+      throw new OnboardingError(
+        "conflict",
+        "a deployment is in progress or awaiting approval",
+        "Finish or cancel it, then download the recovery kit",
+      );
+
+    const inst = await this.completeSecrets(bound);
+
+    const vapidKey = open<Record<string, string>>(
+      this.deps.keys,
+      inst.runtimeSecrets!,
+      inst.id,
+    ).VAPID_PRIVATE_KEY!;
+
     const issuedAt = this.iso();
     await this.deps.store.putInstallation({
       ...(await this.fresh(inst.id)),
@@ -2033,20 +2180,24 @@ export class OnboardingService {
       ownerAddressDomain: inst.ownerAddressDomain ?? null,
       stage: inst.stage!,
       stack: "MailboxPlatform",
-      state: inst.stateRef,
+      state: bound.stateRef,
       release: inst.deployedRelease,
-      urls: inst.urls,
+      urls: bound.urls,
       env: {
         STAGE: inst.stage!,
         CLOUDFLARE_ACCOUNT_ID: inst.accountId!,
         STATE_BACKEND: "cloudflare",
         ...this.config(inst),
+        // Kept even while push is off (VAPID_PUBLIC_KEY is then empty, so push stays off).
+        VAPID_PRIVATE_KEY: vapidKey,
       },
+      push: { enabled: pushEnabled(inst), vapidPublicKey: vapidPublicKey(vapidKey) },
       notes: [
         "Store this file like a password: it contains the instance's session, signing and probe secrets.",
         "Keep BYE_WORKERS_DEV_NAME, APP_DOMAIN and every secret unchanged on redeploys; changing the name replaces the Workers and their Durable Object data, and changing SESSION_KEY signs everyone out.",
         'To manage the installation without the onboarding service, deploy the recorded release with these values and a scoped Cloudflare API token (infra/RUNBOOK.md, "Cloudflare deployment token"); follow "Onboarding installations" and "Interrupted deploy" there.',
         "Alchemy state lives in your account (Cloudflare state store); resources and data are unaffected by losing the onboarding service.",
+        "Push notifications need both VAPID keys. When `push.enabled` is false, VAPID_PUBLIC_KEY is empty; set it to `push.vapidPublicKey` to turn push on with the same key, so existing devices keep working.",
       ],
     };
   }

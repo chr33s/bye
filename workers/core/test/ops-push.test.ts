@@ -5,7 +5,9 @@ import { handleFetch } from "../src/api.ts";
 import { kernelClock } from "../src/durable-host.ts";
 import {
   deliverNotification,
+  appLink,
   makePushSender,
+  opaqueTag,
   type NotificationRequest,
   type PushDeviceRow,
   RetryablePushFailure,
@@ -276,6 +278,8 @@ describe("push notifications", () => {
       label: "",
       created_at: 0,
       last_success_at: null,
+      apns_sandbox: 0,
+      session_id: "ses_1",
     };
 
     const doh = (ip: string) => async (url: string) =>
@@ -303,5 +307,294 @@ describe("push notifications", () => {
     const pub = makePushSender(h.env, fetchFn, doh("93.184.216.34"));
     expect((await pub(device, note("evt-r", "usr_1")))?._tag).toBe("Delivered");
     expect(sent[0]?.redirect).toBe("manual");
+  });
+  it("[E23] Web Push links open on this instance's origin, bye:// deep links included", () => {
+    const origin = "https://app.bye.test";
+    expect(appLink(origin, `${origin}/#/thread/thr_1`)).toBe(`${origin}/#/thread/thr_1`);
+    expect(appLink(origin, "bye://calendar/event/evt_1?occurrence=k")).toBe(
+      `${origin}/#/calendar/event/evt_1?occurrence=k`,
+    );
+    expect(appLink(origin, "https://evil.test/#/x")).toBe(`${origin}/`);
+    expect(appLink(origin, "")).toBe(`${origin}/`);
+  });
+
+  it("[P1.7] APNs and FCM see the kind of event only; sandbox tokens go to the sandbox host", async () => {
+    const ec = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+      "sign",
+    ])) as CryptoKeyPair;
+
+    const rsa = (await crypto.subtle.generateKey(
+      {
+        name: "RSASSA-PKCS1-v1_5",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["sign"],
+    )) as CryptoKeyPair;
+
+    const pem = async (key: CryptoKey) =>
+      `-----BEGIN PRIVATE KEY-----\n${Buffer.from(
+        (await crypto.subtle.exportKey("pkcs8", key)) as ArrayBuffer,
+      ).toString("base64")}\n-----END PRIVATE KEY-----`;
+
+    Object.assign(h.env, {
+      APNS_KEY_P8: await pem(ec.privateKey),
+      APNS_KEY_ID: "KEY1",
+      APNS_TEAM_ID: "TEAM1",
+      APNS_TOPIC: "email.bye.app",
+      FCM_SERVICE_ACCOUNT: JSON.stringify({
+        project_id: "bye",
+        client_email: "push@bye.iam",
+        private_key: await pem(rsa.privateKey),
+      }),
+    });
+
+    const sent: Array<{ url: string; body: string; collapse: string | null }> = [];
+
+    const fetchFn = (async (u: string | URL | Request, init?: RequestInit) => {
+      const url = new Request(u).url;
+      sent.push({
+        url,
+        body: await new Response(init?.body ?? null).text(),
+        collapse: new Headers(init?.headers).get("apns-collapse-id"),
+      });
+
+      return url.includes("oauth2")
+        ? new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }))
+        : new Response(null, { status: 200 });
+    }) as typeof fetch;
+
+    const send = makePushSender(h.env, fetchFn);
+
+    const device = (kind: "apns" | "fcm", sandbox: number | null): PushDeviceRow => ({
+      id: `pd_${kind}${sandbox}`,
+      user_id: "usr_1",
+      kind,
+      endpoint: kind === "apns" ? "ab".repeat(32) : "f".repeat(40),
+      p256dh: null,
+      auth: null,
+      label: "",
+      created_at: 0,
+      last_success_at: null,
+      apns_sandbox: sandbox,
+      session_id: "ses_1",
+    });
+
+    const secret = { ...note("evt-p", "usr_1"), title: "boss@corp.example", body: "Layoffs" };
+    expect((await send(device("apns", 1), secret))?._tag).toBe("Delivered");
+    expect((await send(device("apns", 0), secret))?._tag).toBe("Delivered");
+    expect((await send(device("fcm", 0), secret))?._tag).toBe("Delivered");
+    // Environment not given (older clients, older rows): the old rule, `.test` → sandbox.
+    expect((await send(device("apns", null), secret))?._tag).toBe("Delivered");
+    const pushes = sent.filter((r) => !r.url.includes("oauth2"));
+    expect(pushes.map((r) => new URL(r.url).host)).toEqual([
+      "api.sandbox.push.apple.com",
+      "api.push.apple.com",
+      "fcm.googleapis.com",
+      "api.sandbox.push.apple.com",
+    ]);
+
+    // Notifications about one thread still replace each other, through a tag that hides the thread.
+    const tag = await opaqueTag(h.env.APP_ORIGIN, "thr_1");
+    expect(tag).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(tag).not.toBe(await opaqueTag(h.env.APP_ORIGIN, "thr_2"));
+    expect(pushes[0]!.collapse).toBe(await opaqueTag(h.env.APP_ORIGIN, note("x", "u").resource));
+
+    for (const r of pushes) {
+      expect(r.body).not.toContain("boss@corp.example");
+      expect(r.body).not.toContain("Layoffs");
+      // Nor which conversation: the link is the app root.
+      expect(r.body).not.toContain("thr_1");
+      expect(r.body).not.toContain("#/");
+      expect(r.body).toContain("New mail");
+    }
+  });
+
+  it("[P1.7] ended sessions' registrations are pruned when listed, freeing the device limit", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    await call(h, ana.cookie, "POST", "/v1/push/subscriptions", webpush(1));
+    await h.env.DIRECTORY.prepare("UPDATE sessions SET expires_at = 0").run();
+
+    const again = await new ControlAuth(
+      h.env.DIRECTORY,
+      kernelClock,
+      await authConfig(h.env),
+    ).issueSession(ana.userId, "test", true);
+
+    const cookie = `__Host-session=${again.token}`;
+    expect((await call(h, cookie, "GET", "/v1/push/subscriptions")).body.items).toEqual([]);
+  });
+
+  it("[P1.7] a browser removes its registration by endpoint; re-registering keeps a known APNs environment", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    await call(h, ana.cookie, "POST", "/v1/push/subscriptions", webpush(1));
+    await call(h, ana.cookie, "POST", "/v1/push/subscriptions", webpush(2));
+
+    const removed = await call(h, ana.cookie, "POST", "/v1/push/subscriptions/unregister", {
+      endpoint: webpush(1).endpoint,
+    });
+
+    expect(removed.status).toBe(200);
+    const left = await call(h, ana.cookie, "GET", "/v1/push/subscriptions");
+    expect(left.body.items.map((d: { label: string }) => d.label)).toEqual(["browser 2"]);
+    // Unknown endpoints are fine (already gone).
+    expect(
+      (
+        await call(h, ana.cookie, "POST", "/v1/push/subscriptions/unregister", {
+          endpoint: "https://push.example.net/sub/none",
+        })
+      ).status,
+    ).toBe(200);
+
+    const apns = { kind: "apns", endpoint: "cd".repeat(32) };
+    await call(h, ana.cookie, "POST", "/v1/push/subscriptions", { ...apns, sandbox: true });
+    await call(h, ana.cookie, "POST", "/v1/push/subscriptions", apns);
+
+    const row = await h.env.DIRECTORY.prepare(
+      "SELECT apns_sandbox FROM push_devices WHERE kind = 'apns'",
+    ).first<{ apns_sandbox: number | null }>();
+
+    expect(row?.apns_sandbox).toBe(1);
+  });
+
+  it("[P1.7] registrations of expired sessions get nothing", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    await call(h, ana.cookie, "POST", "/v1/push/subscriptions", webpush(1));
+    const sends: Array<string> = [];
+
+    const sender = async (device: PushDeviceRow) => {
+      sends.push(device.id);
+
+      return { _tag: "Delivered" as const };
+    };
+
+    expect(await deliverNotification(h.env, note("evt-live", ana.userId), sender)).toEqual({
+      delivered: 1,
+    });
+    await h.env.DIRECTORY.prepare("UPDATE sessions SET expires_at = 0").run();
+    expect(await deliverNotification(h.env, note("evt-dead", ana.userId), sender)).toEqual({
+      delivered: 0,
+    });
+    expect(sends).toHaveLength(1);
+  });
+
+  it("[P1.7] APNs registrations record their environment only when the client says", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    const apns = (n: number) => ({ kind: "apns", endpoint: `${n}`.repeat(64) });
+    await call(h, ana.cookie, "POST", "/v1/push/subscriptions", { ...apns(1), sandbox: true });
+    await call(h, ana.cookie, "POST", "/v1/push/subscriptions", { ...apns(2), sandbox: false });
+    await call(h, ana.cookie, "POST", "/v1/push/subscriptions", apns(3));
+
+    const rows = await h.env.DIRECTORY.prepare(
+      "SELECT apns_sandbox FROM push_devices ORDER BY endpoint",
+    ).all<{ apns_sandbox: number | null }>();
+
+    expect(rows.results.map((r) => r.apns_sandbox)).toEqual([1, 0, null]);
+  });
+
+  it("[P1.7] a payload the push service calls too large never disables the device", async () => {
+    const ana = await signup(h, "ana@bye.test");
+    await call(h, ana.cookie, "POST", "/v1/push/subscriptions", webpush(1));
+    const tooLarge = async () => ({ _tag: "Dropped" as const, status: 413 });
+
+    for (let i = 0; i < 8; i++)
+      await deliverNotification(h.env, note(`evt-big-${i}`, ana.userId), tooLarge);
+
+    const row = await h.env.DIRECTORY.prepare("SELECT enabled, failures FROM push_devices").first<{
+      enabled: number;
+      failures: number;
+    }>();
+
+    expect(row).toEqual({ enabled: 1, failures: 0 });
+  });
+
+  it("[P1.7] long senders and subjects are clipped to fit the push gateway", async () => {
+    Object.assign(h.env, {
+      VAPID_PUBLIC_KEY:
+        "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8",
+      VAPID_PRIVATE_KEY: "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw",
+    });
+
+    const sizes: Array<number> = [];
+
+    const fetchFn = (async (_u: string | URL | Request, init?: RequestInit) => {
+      sizes.push((await new Response(init?.body ?? null).arrayBuffer()).byteLength);
+
+      return new Response(null, { status: 201 });
+    }) as typeof fetch;
+
+    const doh = async () =>
+      new Response(JSON.stringify({ Status: 0, Answer: [{ type: 1, data: "93.184.216.34" }] }));
+
+    const send = makePushSender(h.env, fetchFn, doh);
+
+    const device: PushDeviceRow = {
+      id: "pd_1",
+      user_id: "usr_1",
+      kind: "webpush",
+      endpoint: "https://push.example.net/sub/1",
+      p256dh:
+        "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+      auth: "BTBZMqHH6r4Tts7J_aSIgg",
+      label: "",
+      created_at: 0,
+      last_success_at: null,
+      apns_sandbox: 0,
+      session_id: "ses_1",
+    };
+
+    // Four-byte characters: the worst case for UTF-8 size.
+    const huge = { ...note("evt-huge", "usr_1"), title: "𝔸".repeat(3000), body: "𝔹".repeat(3000) };
+    expect((await send(device, huge))?._tag).toBe("Delivered");
+    expect(sizes[0]).toBeLessThanOrEqual(2800);
+  });
+
+  it("[P1.7] a registration follows its credential: sign-out removes it, rotation moves it", async () => {
+    const ana = await signup(h, "ana@bye.test");
+
+    const other = await new ControlAuth(
+      h.env.DIRECTORY,
+      kernelClock,
+      await authConfig(h.env),
+    ).issueSession(ana.userId, "second browser", true);
+
+    const second = `__Host-session=${other.token}`;
+    await call(h, ana.cookie, "POST", "/v1/push/subscriptions", webpush(1));
+    await call(h, second, "POST", "/v1/push/subscriptions", webpush(2));
+
+    const sessions = async () =>
+      (
+        await h.env.DIRECTORY.prepare(
+          "SELECT endpoint, session_id FROM push_devices ORDER BY endpoint",
+        ).all<{ endpoint: string; session_id: string | null }>()
+      ).results;
+
+    expect((await sessions()).map((r) => r.session_id)).toEqual([
+      expect.any(String),
+      other.session.id,
+    ]);
+
+    // Rotation moves them in the same transaction that revokes the old session.
+    const rotated = await new ControlAuth(
+      h.env.DIRECTORY,
+      kernelClock,
+      await authConfig(h.env),
+    ).rotateSession(other.token);
+
+    expect((await sessions())[1]?.session_id).toBe(rotated.session.id);
+
+    const logout = await handleFetch(
+      new Request(`${h.env.APP_ORIGIN}/auth/logout`, {
+        method: "POST",
+        headers: { cookie: ana.cookie, origin: h.env.APP_ORIGIN },
+      }),
+      h.env,
+      ctx,
+    );
+
+    expect(logout.status).toBe(200);
+    expect((await sessions()).map((r) => r.endpoint)).toEqual(["https://push.example.net/sub/2"]);
   });
 });

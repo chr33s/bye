@@ -586,10 +586,10 @@ describe("calendar API", () => {
     await h.namespaces.CALENDARS.instance(ana.calendarId).alarm();
     await h.drain();
     expect(pushes).toHaveLength(1);
-    expect(pushes[0]).toMatchObject({
-      aps: { alert: { title: "Dentist", body: "Starts in 30 minutes" } },
-    });
-    expect(pushes[0]!.url).toMatch(/^bye:\/\/calendar\/event\//);
+    // APNs sees the kind of event only (P1.7); the event title stays on the server.
+    expect(pushes[0]).toMatchObject({ aps: { alert: { title: "bye", body: "Reminder" } } });
+    expect(JSON.stringify(pushes[0])).not.toContain("Dentist");
+    expect(pushes[0]!.url).toBe(`${h.env.APP_ORIGIN}/`);
 
     const deliveries = await h.d1
       .prepare("SELECT dedupe_key FROM push_deliveries")

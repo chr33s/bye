@@ -573,6 +573,28 @@ export class ByeClient {
       { query: { tz } },
     );
 
+  // ---- push (E23, P1.7) ----
+
+  /** The instance's Web Push application-server key; 404 when push isn't configured there. */
+  pushVapidKey = () => this.request<{ publicKey: string }>("GET", "/v1/push/vapid-key");
+
+  registerPush = (registration: {
+    readonly kind: "webpush";
+    readonly endpoint: string;
+    readonly keys: { readonly p256dh: string; readonly auth: string };
+    readonly label: string;
+  }) => this.request<{ id: string }>("POST", "/v1/push/subscriptions", registration);
+
+  /** This account's push registrations (endpoints are never returned). */
+  pushDevices = () =>
+    this.request<{ items: ReadonlyArray<{ readonly id: string; readonly enabled: boolean }> }>(
+      "GET",
+      "/v1/push/subscriptions",
+    );
+
+  removePush = (id: string) =>
+    this.request<{ ok: true }>("DELETE", `/v1/push/subscriptions/${encodeURIComponent(id)}`);
+
   // ---- devices (A03, DS) ----
 
   devices = () => this.request<{ items: ReadonlyArray<DeviceSessionWire> }>("GET", "/v1/devices");

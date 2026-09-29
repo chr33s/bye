@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   apnsProviderToken,
+  classifyApns,
+  classifyFcm,
   classifyPushStatus,
+  decryptWebPush,
   encryptWebPush,
   fcmAccessToken,
   resetPushTokenCaches,
@@ -9,6 +12,7 @@ import {
   sendFcm,
   sendWebPush,
   vapidAuthorization,
+  verifyVapid,
 } from "@bye/platform-cloudflare";
 
 const b64u = (bytes: Uint8Array) =>
@@ -56,6 +60,33 @@ const ecPrivateJwk = (pub: string, d: string) => {
 };
 
 describe("Web Push (RFC 8291 / RFC 8292)", () => {
+  it("[E23] decrypts the RFC 8291 Appendix A message (the native shells' algorithm)", async () => {
+    const plain = await decryptWebPush(
+      {
+        publicKey: fromB64u(V.uaPublic) as Uint8Array<ArrayBuffer>,
+        privateKey: fromB64u(V.uaPrivate) as Uint8Array<ArrayBuffer>,
+        auth: fromB64u(V.auth) as Uint8Array<ArrayBuffer>,
+      },
+      fromB64u(V.body) as Uint8Array<ArrayBuffer>,
+    );
+
+    expect(new TextDecoder().decode(plain)).toBe(V.plaintext);
+  });
+
+  it("[E23] verifies VAPID as a push service: key, audience and expiry", async () => {
+    const keys = { publicKey: V.asPublic, privateKey: V.asPrivate, subject: "mailto:ops@bye.test" };
+    const now = Date.UTC(2026, 8, 30);
+    const auth = await vapidAuthorization("https://push.bye.test/v1/relay/x", keys, now);
+    expect(await verifyVapid(auth, "https://push.bye.test", now)).toBe(V.asPublic);
+    expect(await verifyVapid(auth, "https://other.test", now)).toBeNull();
+    expect(await verifyVapid(auth, "https://push.bye.test", now + 25 * 3600_000)).toBeNull();
+    expect(
+      await verifyVapid(auth.replace(V.asPublic, V.uaPublic), "https://push.bye.test", now),
+    ).toBeNull();
+    expect(await verifyVapid(null, "https://push.bye.test", now)).toBeNull();
+    expect(await verifyVapid("vapid t=a.b.c, k=zz", "https://push.bye.test", now)).toBeNull();
+  });
+
   it("[E23] encrypts exactly as RFC 8291 Appendix A", async () => {
     const body = await encryptWebPush(
       { p256dh: V.uaPublic, auth: V.auth },
@@ -346,5 +377,73 @@ describe("native push adapters", () => {
         0,
       ),
     ).rejects.toThrow("401");
+  });
+});
+
+describe("provider outcomes by whose fault they are (P1.7)", () => {
+  it("[P1.7] APNs: token faults count against the device; configuration faults are retried", () => {
+    expect(classifyApns(200, "")).toEqual({ _tag: "Delivered" });
+    expect(classifyApns(410, "Unregistered")).toEqual({ _tag: "Gone" });
+    expect(classifyApns(400, "BadDeviceToken")).toEqual({ _tag: "Rejected", status: 400 });
+
+    // A wrong bundle ID or key would fail every device at once: never the device's fault.
+    for (const [status, reason] of [
+      [400, "TopicDisallowed"],
+      [400, "BadTopic"],
+      [400, "DeviceTokenNotForTopic"],
+      [403, "InvalidProviderToken"],
+      [403, "ExpiredProviderToken"],
+      [429, "TooManyProviderTokenUpdates"],
+      [503, "ServiceUnavailable"],
+    ] as const)
+      expect(classifyApns(status, reason)._tag).toBe("Retry");
+    expect(classifyApns(413, "PayloadTooLarge")._tag).toBe("Dropped");
+    expect(classifyApns(400, "BadCollapseId")._tag).toBe("Dropped");
+  });
+
+  it("[P1.7] FCM: dead and foreign tokens are gone; credential and quota faults are retried", () => {
+    expect(classifyFcm(404, "UNREGISTERED")._tag).toBe("Gone");
+    expect(classifyFcm(403, "SENDER_ID_MISMATCH")._tag).toBe("Gone");
+    expect(classifyFcm(400, "INVALID_ARGUMENT")._tag).toBe("Rejected");
+    expect(classifyFcm(401, "THIRD_PARTY_AUTH_ERROR")._tag).toBe("Retry");
+    expect(classifyFcm(403, "PERMISSION_DENIED")._tag).toBe("Retry");
+    expect(classifyFcm(429, "QUOTA_EXCEEDED")._tag).toBe("Retry");
+    expect(classifyFcm(413, "")._tag).toBe("Dropped");
+  });
+
+  it("[P1.7] Web Push: 413 drops the message; 401/403 are about the subscription", () => {
+    expect(classifyPushStatus(413)._tag).toBe("Dropped");
+    expect(classifyPushStatus(403)._tag).toBe("Rejected");
+  });
+
+  it("[P1.7] reads the APNs reason from the response", async () => {
+    resetPushTokenCaches();
+
+    const key = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+      "sign",
+    ])) as { privateKey: Parameters<typeof crypto.subtle.exportKey>[1] };
+
+    const pem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(
+      (await crypto.subtle.exportKey("pkcs8", key.privateKey)) as ArrayBuffer,
+    ).toString("base64")}\n-----END PRIVATE KEY-----`;
+
+    const config = {
+      teamId: "T",
+      keyId: "K",
+      privateKeyPem: pem,
+      topic: "wrong.app",
+      production: true,
+    };
+
+    const answer = (reason: string) => async () =>
+      new Response(JSON.stringify({ reason }), { status: 400 });
+
+    const note = { title: "t", body: "b", url: "https://app.bye.test/", collapseId: "c" };
+    expect((await sendApns(answer("TopicDisallowed"), config, "ab".repeat(32), note))._tag).toBe(
+      "Retry",
+    );
+    expect((await sendApns(answer("BadDeviceToken"), config, "ab".repeat(32), note))._tag).toBe(
+      "Rejected",
+    );
   });
 });

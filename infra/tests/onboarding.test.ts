@@ -49,6 +49,7 @@ import {
   OnboardingError,
   OnboardingService,
   type ReleaseSource,
+  vapidPublicKey,
 } from "../onboarding/service.ts";
 import { ONBOARDING_PAGE } from "../onboarding/ui.ts";
 import { QUALIFICATION_FILE, releaseQualification } from "../onboarding/release.ts";
@@ -1278,6 +1279,10 @@ describe("standard install: Cloudflare account → Bye hostname → Create Bye",
     expect(config.MAIL_DKIM_PUBLIC_KEY).toMatch(/^[A-Za-z0-9+/]+=*$/);
     expect(config.MAIL_DKIM_PUBLIC_KEY).toBe(dkimPublicKey(config.MAIL_DKIM_PRIVATE_KEY!));
     expect(config).not.toHaveProperty("PERSONAL_MAIL_API_KEY");
+    // Push: a VAPID pair generated once; the public half is derived for /v1/push/vapid-key.
+    expect(config.VAPID_PRIVATE_KEY).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(config.VAPID_PUBLIC_KEY).toMatch(/^B[A-Za-z0-9_-]{86}$/);
+    expect(config.VAPID_PUBLIC_KEY).toBe(vapidPublicKey(config.VAPID_PRIVATE_KEY!));
 
     for (const k of ["PUBLIC_DOMAIN", "MAIL_ZONE", "BYE_MX_CUTOVER", "CF_DNS_API_TOKEN"])
       expect(config[k] ?? "").toBe("");
@@ -1914,5 +1919,202 @@ describe("hosted onboarding: provisioning the deployer is a write (spec §44)", 
     });
     expect(executor.planCalls).toBe(0);
     expect((await w.store.getInstallation(inst.id))!.provisionedAt ?? null).toBeNull();
+  });
+});
+
+describe("push notifications (E23, P1.7)", () => {
+  // New Worker configuration plans as an update of the app Worker (review, then revalidation).
+  const configUpdate = (w: World) => {
+    const update = (ctx: ExecutionContext) =>
+      planOf(ctx.stage, {
+        ...Object.fromEntries(RESOURCES.map(([id]) => [id, "noop" as const])),
+        [RESOURCES[0]![0]]: "update",
+      });
+
+    w.executor.plans.push(update, update);
+  };
+
+  it("are on by default; turned off at Create Bye, no VAPID key is deployed but one is kept", async () => {
+    const w = world({ verifiedScopes: true });
+    await connect(w);
+    w.health = healthyInstance(`https://bye.${ZONE.name}`);
+
+    const result = await w.service.install("op@example.com", {
+      accountId: ACCOUNT.id,
+      zoneId: ZONE.id,
+      label: "bye",
+      pushNotifications: false,
+    });
+
+    // Turning push off is still a standard first install.
+    expect(result.status).toBe("deploying");
+
+    if (result.status === "deploying") await w.service.settled(result.operationId);
+
+    const config = w.executor.applies[0]!.config;
+    expect(config.VAPID_PRIVATE_KEY).toBe("");
+    expect(config.VAPID_PUBLIC_KEY).toBe("");
+    const inst = await w.service.installation("op@example.com");
+    expect(
+      open<Record<string, string>>(KEYS, inst.runtimeSecrets!, inst.id).VAPID_PRIVATE_KEY,
+    ).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect((await w.service.status("op@example.com")).installation.pushNotifications).toBe(false);
+
+    const other = world({ verifiedScopes: true });
+    await createBye(other);
+    expect((await other.service.status("op@example.com")).installation.pushNotifications).toBe(
+      true,
+    );
+    expect(other.executor.applies[0]!.config.VAPID_PUBLIC_KEY).toMatch(/^B[A-Za-z0-9_-]{86}$/);
+  });
+
+  it("turning them on later redeploys through a review, with the key kept from before", async () => {
+    const w = world({ verifiedScopes: true });
+    await connect(w);
+    w.health = healthyInstance(`https://bye.${ZONE.name}`);
+
+    const first = await w.service.install("op@example.com", {
+      accountId: ACCOUNT.id,
+      zoneId: ZONE.id,
+      label: "bye",
+      pushNotifications: false,
+    });
+
+    if (first.status === "deploying") await w.service.settled(first.operationId);
+
+    const kept = await w.service.installation("op@example.com");
+
+    const key = open<Record<string, string>>(
+      KEYS,
+      kept.runtimeSecrets!,
+      kept.id,
+    ).VAPID_PRIVATE_KEY!;
+
+    const status = await w.service.setPushNotifications("op@example.com", true);
+    expect(status.installation.pushNotifications).toBe(true);
+    configUpdate(w);
+    const review = await w.service.review("op@example.com");
+    const approval = await w.service.approve("op@example.com", review.id, review.digest);
+    await w.service.settled((await w.service.deploy("op@example.com", approval.id)).id);
+
+    const config = w.executor.applies.at(-1)!.config;
+    expect(config.VAPID_PRIVATE_KEY).toBe(key);
+    expect(config.VAPID_PUBLIC_KEY).toBe(vapidPublicKey(key));
+    expect(w.executor.applies[0]!.config.VAPID_PUBLIC_KEY).toBe("");
+  });
+
+  it("the recovery kit always carries the VAPID key, even with push off or before a backfill", async () => {
+    const w = world();
+    await connect(w);
+    const inst = await w.service.bind("op@example.com", ACCOUNT.id, "dev-trial01");
+
+    const { VAPID_PRIVATE_KEY: _vapid, ...older } = open<Record<string, string>>(
+      KEYS,
+      inst.runtimeSecrets!,
+      inst.id,
+    );
+
+    await w.store.putInstallation({
+      ...(await w.service.installation("op@example.com")),
+      runtimeSecrets: seal(KEYS, older, inst.id),
+    });
+
+    await w.service.setPushNotifications("op@example.com", false);
+    const kit = await w.service.recoveryKit("op@example.com");
+    const after = await w.service.installation("op@example.com");
+
+    const key = open<Record<string, string>>(
+      KEYS,
+      after.runtimeSecrets!,
+      after.id,
+    ).VAPID_PRIVATE_KEY!;
+
+    expect(key).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(kit.env.VAPID_PRIVATE_KEY).toBe(key);
+    expect(kit.env.VAPID_PUBLIC_KEY).toBe("");
+    expect(kit.push).toEqual({ enabled: false, vapidPublicKey: vapidPublicKey(key) });
+  });
+
+  it("a missing VAPID key isn't created for the recovery kit while a deployment awaits approval", async () => {
+    const w = world();
+    await connect(w);
+    const inst = await w.service.bind("op@example.com", ACCOUNT.id, "dev-trial01");
+
+    const { VAPID_PRIVATE_KEY: _vapid, ...older } = open<Record<string, string>>(
+      KEYS,
+      inst.runtimeSecrets!,
+      inst.id,
+    );
+
+    await w.store.putInstallation({
+      ...(await w.service.installation("op@example.com")),
+      runtimeSecrets: seal(KEYS, older, inst.id),
+      pendingReviewId: "review-1",
+    });
+
+    await expect(w.service.recoveryKit("op@example.com")).rejects.toMatchObject({
+      code: "conflict",
+    });
+
+    const after = await w.service.installation("op@example.com");
+    expect(open<Record<string, string>>(KEYS, after.runtimeSecrets!, after.id)).toEqual(older);
+    expect(after.recoveryKitIssuedAt ?? null).toBeNull();
+  });
+
+  it("a missing VAPID key isn't created for a review that is blocked", async () => {
+    const w = world();
+    await connect(w);
+    const inst = await w.service.bind("op@example.com", ACCOUNT.id, "dev-trial01");
+
+    const { VAPID_PRIVATE_KEY: _vapid, ...older } = open<Record<string, string>>(
+      KEYS,
+      inst.runtimeSecrets!,
+      inst.id,
+    );
+
+    await w.store.putInstallation({
+      ...(await w.service.installation("op@example.com")),
+      runtimeSecrets: seal(KEYS, older, inst.id),
+    });
+
+    // The release needs a value onboarding doesn't supply: the review is blocked.
+    Object.assign(w.release, { requiredConfig: () => ["SOMETHING_ONBOARDING_LACKS"] });
+    const review = await w.service.review("op@example.com");
+    expect(review.blockers.join(" ")).toContain("SOMETHING_ONBOARDING_LACKS");
+
+    const after = await w.service.installation("op@example.com");
+    expect(open<Record<string, string>>(KEYS, after.runtimeSecrets!, after.id)).toEqual(older);
+  });
+
+  it("an installation bound before VAPID keys existed gains one on its next review (DKIM is not backfilled)", async () => {
+    const w = world();
+    const { inst } = await ready(w);
+    const secrets = open<Record<string, string>>(KEYS, inst.runtimeSecrets!, inst.id);
+    const { VAPID_PRIVATE_KEY: _vapid, MAIL_DKIM_PRIVATE_KEY: _dkim, ...older } = secrets;
+
+    await w.store.putInstallation({
+      ...(await w.service.installation("op@example.com")),
+      runtimeSecrets: seal(KEYS, older, inst.id),
+    });
+
+    configUpdate(w);
+    const review = await w.service.review("op@example.com");
+    const approval = await w.service.approve("op@example.com", review.id, review.digest);
+    await w.service.settled((await w.service.deploy("op@example.com", approval.id)).id);
+
+    const after = await w.service.installation("op@example.com");
+    const backfilled = open<Record<string, string>>(KEYS, after.runtimeSecrets!, after.id);
+    expect(backfilled.VAPID_PRIVATE_KEY).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(backfilled.MAIL_DKIM_PRIVATE_KEY).toBeUndefined();
+    expect(backfilled.SESSION_KEY).toBe(secrets.SESSION_KEY);
+
+    const config = w.executor.applies.at(-1)!.config;
+    expect(config.VAPID_PUBLIC_KEY).toBe(vapidPublicKey(backfilled.VAPID_PRIVATE_KEY!));
+    // A second review keeps the key it generated.
+    await w.service.review("op@example.com");
+    const again = await w.service.installation("op@example.com");
+    expect(
+      open<Record<string, string>>(KEYS, again.runtimeSecrets!, again.id).VAPID_PRIVATE_KEY,
+    ).toBe(backfilled.VAPID_PRIVATE_KEY);
   });
 });

@@ -29,6 +29,12 @@ import {
   InstanceRegistry,
   scopedStore,
 } from "../instance/registry.ts";
+import {
+  notificationTarget,
+  pushEnabled,
+  registerDevicePush,
+  unregisterDevicePush,
+} from "../push.ts";
 import { DEFAULT_ROUTE, type NativeRoute, parseRoute } from "../routes.ts";
 import { sealedStore } from "../sealed-store.ts";
 import type { MeWire } from "../wire.ts";
@@ -91,6 +97,12 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
   const [route, setRoute] = useState<NativeRoute>(DEFAULT_ROUTE);
   const [refreshKey, setRefreshKey] = useState(0);
   const sessionRef = useRef<SessionClient | undefined>(undefined);
+  // A notification tapped for another saved server: its route opens once that server's account is
+  // loaded, and never on any other server.
+  const pendingRoute = useRef<{ readonly instanceKey: string; readonly route: string } | null>(
+    null,
+  );
+  const [pushOn, setPushOn] = useState(false);
 
   const probe = useCallback(
     (url: string) =>
@@ -194,6 +206,59 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
     return new DraftStore(platform.draftKey ? sealedStore(scoped, platform.draftKey) : scoped);
   }, [platform.storage, platform.draftKey, scope, instance]);
 
+  // Push registration state is per account on this device, cleared with the account on sign-out.
+  const pushStore = useMemo(
+    () => (scope && instance ? scopedStore(platform.storage, scope, instance.key) : null),
+    [platform.storage, scope, instance],
+  );
+
+  const pushDeps = useMemo(
+    () =>
+      client && pushStore && platform.push
+        ? { client, store: pushStore, gatewayFetch: nativeFetch, label: platform.push.label }
+        : null,
+    [client, pushStore, platform.push],
+  );
+
+  // Keep an enabled registration current: on sign-in and whenever the OS rotates the token. The
+  // OS prompt only appears from the Settings switch; here permission was already granted.
+  useEffect(() => {
+    if (!pushDeps || !platform.push) {
+      setPushOn(false);
+      return;
+    }
+    let live = true;
+    const bridge = platform.push;
+    const refresh = async () => {
+      const enabled = await pushEnabled(pushDeps.store);
+      if (live) setPushOn(enabled);
+      if (!enabled) return;
+      const token = await bridge.requestToken();
+      if (token && live) await registerDevicePush(pushDeps, token);
+    };
+    void refresh().catch(() => undefined);
+    const unsubscribe = bridge.onTokenRefresh(() => void refresh().catch(() => undefined));
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, [pushDeps, platform.push]);
+
+  const setPush = async (on: boolean) => {
+    if (!pushDeps || !platform.push) return;
+    if (!on) {
+      await unregisterDevicePush(pushDeps.client, pushDeps.store);
+      setPushOn(false);
+      return;
+    }
+    const token = await platform.push.requestToken();
+    if (!token) throw new Error("Notifications are turned off for bye in this device's settings.");
+    const outcome = await registerDevicePush(pushDeps, token);
+    if (outcome._tag === "Unsupported")
+      throw new Error("This server doesn't send push notifications.");
+    setPushOn(true);
+  };
+
   const open = useCallback((url: string | null) => {
     const hash = url ? deepLinkToRoute(url) : null;
     if (hash) setRoute(parseRoute(hash));
@@ -228,6 +293,33 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
     };
   }, [booted, platform.urls]);
 
+  // A tapped notification names its server in its URL: open the route there, switching to that
+  // saved server first if needed. Unknown servers are ignored (a notification never adds one).
+  const onNotification = useRef<(url: string | null) => Promise<void>>(async () => undefined);
+  onNotification.current = async (url) => {
+    if (!url) return;
+    const target = notificationTarget(url, await registry.list());
+    if (!target) return;
+    if (target.instanceKey === instance?.key && me) {
+      setRoute(parseRoute(target.route));
+      return;
+    }
+    pendingRoute.current = target;
+    if (target.instanceKey === instance?.key) return;
+    try {
+      await selectInstance(target.instanceKey);
+    } catch {
+      pendingRoute.current = null;
+    }
+  };
+
+  useEffect(() => {
+    if (!booted || !platform.push) return;
+    const handle = (url: string | null) => void onNotification.current(url);
+    void platform.push.initialOpen().then(handle);
+    return platform.push.onOpen(handle);
+  }, [booted, platform.push]);
+
   // Share-extension handoff and refresh on foreground.
   useEffect(() => {
     if (!booted) return;
@@ -249,13 +341,24 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
     }
     let live = true;
     client.me().then(
-      (m) => live && setMe(m),
+      (m) => {
+        if (!live) return;
+        setMe(m);
+        // Only a route for this server is consumed; one for the server being switched to waits.
+        const pending = pendingRoute.current;
+        if (pending && pending.instanceKey === instance?.key) {
+          pendingRoute.current = null;
+          setRoute(parseRoute(pending.route));
+        }
+      },
+      // A failed load (often a stale request from the server being left) keeps the route: it is
+      // tied to its server, and opens once that server's account loads.
       () => live && setMe(null),
     );
     return () => {
       live = false;
     };
-  }, [client, ready, session, sessionState]);
+  }, [client, instance, ready, session, sessionState]);
 
   // Home-screen widget: next event, the active timer (C07) and the Imbox's new-for-you count,
   // refreshed on foreground, labelled with its server. Results from a context the user has left
@@ -470,6 +573,7 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
             server={instance.baseUrl}
             onSignOut={() => void signOut()}
             onManageServers={() => setServers({})}
+            {...(platform.push ? { push: { enabled: pushOn, onChange: setPush } } : {})}
             {...(instance.routes.accountDeletionWeb && platform.openUrl
               ? {
                   onDeleteAccount: () =>

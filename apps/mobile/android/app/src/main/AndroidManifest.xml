@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13+: asked for from the Settings switch, never at launch. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
       android:name=".MainApplication"
@@ -42,6 +44,14 @@
             <data android:mimeType="text/plain" />
         </intent-filter>
       </activity>
+      <!-- FCM delivery (P1.7): decrypts gateway-relayed pushes and shows them. -->
+      <service
+        android:name=".ByeMessagingService"
+        android:exported="false">
+        <intent-filter>
+            <action android:name="com.google.firebase.MESSAGING_EVENT" />
+        </intent-filter>
+      </service>
       <!-- Home-screen widget (C10): renders the snapshot published by ByeWidgetBridge. -->
       <receiver
         android:name=".ByeWidgetProvider"

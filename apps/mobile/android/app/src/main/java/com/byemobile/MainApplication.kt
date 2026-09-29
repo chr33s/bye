@@ -14,7 +14,7 @@ class MainApplication : Application(), ReactApplication {
       context = applicationContext,
       packageList =
         PackageList(this).packages.apply {
-          // App-local modules: device-session secure store and home-screen widget bridge.
+          // App-local modules: device-session secure store, home-screen widget and push bridges.
           add(ByeNativePackage())
         },
     )
@@ -22,6 +22,8 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // Before any FCM message is handled (the messaging service can start the app).
+    ByePushModule.initializeFirebase(this)
     loadReactNative(this)
   }
 }

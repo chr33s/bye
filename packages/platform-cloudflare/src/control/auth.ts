@@ -852,6 +852,15 @@ export class ControlAuth {
         now + SESSION_TTL_MS,
         s.step_up_at,
       ),
+      // Push registrations follow the successor in the same transaction, so no delivery ever sees
+      // them bound to a revoked session (spec P1.7).
+      q(
+        this.db,
+        "UPDATE push_devices SET session_id = ? WHERE session_id = ? AND EXISTS (SELECT 1 FROM sessions WHERE id = ?)",
+        id,
+        s.id,
+        id,
+      ),
     ]);
 
     if (changesOf(results[0]) === 0) return reject("unauthenticated", "session invalid");

@@ -100,6 +100,13 @@ def byeUploadKeyAlias = byeSecret("BYE_UPLOAD_KEY_ALIAS")
 def byeUploadKeyPassword = byeSecret("BYE_UPLOAD_KEY_PASSWORD")
 def byeHasUploadKey = byeUploadStoreFile && byeUploadStorePassword && byeUploadKeyAlias && byeUploadKeyPassword
 def byeWantsRelease = gradle.startParameter.taskNames.any { it.toLowerCase().contains("release") }
+
+/**
+ * Push (FCM, spec P1.7): the Firebase project of the app publisher, from gradle properties or the
+ * environment, never a committed google-services.json. Unset = a build without push (the Settings
+ * switch reports it). Only Bye's push gateway holds the matching service account.
+ */
+def byeFirebase = { String name -> (byeSecret(name) ?: "").replace("\\", "\\\\").replace("\"", "\\\"") }
 if (byeWantsRelease && !byeHasUploadKey) {
     throw new GradleException(
         "Release signing is not configured. Set BYE_UPLOAD_STORE_FILE, BYE_UPLOAD_STORE_PASSWORD, " +
@@ -113,12 +120,19 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.byemobile"
+    buildFeatures {
+        buildConfig true
+    }
     defaultConfig {
         applicationId "email.bye.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode byeVersionCode
         versionName byePackageVersion
+        buildConfigField "String", "FIREBASE_APP_ID", "\"${byeFirebase("BYE_FIREBASE_APP_ID")}\""
+        buildConfigField "String", "FIREBASE_PROJECT_ID", "\"${byeFirebase("BYE_FIREBASE_PROJECT_ID")}\""
+        buildConfigField "String", "FIREBASE_API_KEY", "\"${byeFirebase("BYE_FIREBASE_API_KEY")}\""
+        buildConfigField "String", "FIREBASE_SENDER_ID", "\"${byeFirebase("BYE_FIREBASE_SENDER_ID")}\""
     }
     signingConfigs {
         debug {
@@ -153,6 +167,9 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    // FCM for push (ByeMessagingService); configured at runtime from BuildConfig, no gms plugin.
+    implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
+    implementation("com.google.firebase:firebase-messaging")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

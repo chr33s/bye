@@ -19,8 +19,26 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     reactNativeDelegate = delegate
     reactNativeFactory = factory
 
+    // Taps on a notification that launched the app arrive on the notification-center delegate,
+    // so it is set before launch finishes.
+    ByePushHub.shared.start()
+
     // The window and React root view are created per scene in SceneDelegate.
     return true
+  }
+
+  func application(
+    _ application: UIApplication,
+    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+  ) {
+    ByePushHub.shared.didRegister(deviceToken)
+  }
+
+  func application(
+    _ application: UIApplication,
+    didFailToRegisterForRemoteNotificationsWithError error: Error
+  ) {
+    ByePushHub.shared.didFail(error)
   }
 
   func application(

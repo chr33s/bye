@@ -37,6 +37,12 @@ describe("onboarding server", () => {
     disconnect: vi.fn(async () => {
       throw new Error("secret-bearing internal detail");
     }),
+    setPushNotifications: vi.fn(async (_op: string, enabled: boolean) => ({ enabled })),
+    install: vi.fn(async (_op: string, _input: { readonly accountId: string }) => ({
+      status: "needs-review",
+      reviewId: "r",
+      reasons: [],
+    })),
   };
 
   const call = async (
@@ -188,6 +194,38 @@ describe("onboarding server", () => {
     const r = await call("GET", "/oauth/callback?state=x&code=y");
     expect(r.status).toBe(303);
     expect(r.headers.location).toBe("/?error=state%20mismatch");
+  });
+
+  it("OB06: the push setting and the install choice take booleans only", async () => {
+    const json = { origin: ORIGIN, "content-type": "application/json" };
+    const on = await call("POST", "/api/push", json, JSON.stringify({ enabled: true }));
+    expect(on.status).toBe(200);
+    expect(service.setPushNotifications).toHaveBeenCalledWith("op@example.com", true);
+    const bad = await call("POST", "/api/push", json, JSON.stringify({ enabled: "yes" }));
+    expect(bad.status).toBe(400);
+    expect(service.setPushNotifications).toHaveBeenCalledTimes(1);
+
+    await call(
+      "POST",
+      "/api/install",
+      json,
+      JSON.stringify({
+        accountId: "acc1",
+        zoneId: "zone1",
+        label: "bye",
+        pushNotifications: false,
+      }),
+    );
+    await call(
+      "POST",
+      "/api/install",
+      json,
+      JSON.stringify({ accountId: "acc1", zoneId: "zone1", label: "bye", pushNotifications: "no" }),
+    );
+    expect(service.install.mock.calls.map((c) => c[1])).toEqual([
+      { accountId: "acc1", zoneId: "zone1", label: "bye", pushNotifications: false },
+      { accountId: "acc1", zoneId: "zone1", label: "bye" },
+    ]);
   });
 
   it("OB06: service errors map to statuses with a next action; internal errors leak nothing", async () => {

@@ -65,7 +65,7 @@ export const checkWorkerBundle = async (
 if (import.meta.main) {
   let failed = false;
 
-  for (const worker of ["core", "public", "sigmirror"]) {
+  for (const worker of ["core", "public", "sigmirror", "push-gateway"]) {
     const result = await checkWorkerBundle(`workers/${worker}/src/index.ts`);
     console.log(
       `bundle ${worker}: ${(result.bytes / 1024).toFixed(0)} KiB, imports ${result.imports.join(", ") || "(none)"}`,

@@ -8,7 +8,7 @@ import { Button } from "./Button.tsx";
 import { s } from "./theme.ts";
 
 /**
- * Settings (E23, E24, A03/DS): remote images, signed-in devices with revoke,
+ * Settings (E23, E24, A03/DS): notifications on this device, remote images, signed-in devices with revoke,
  * the selected server, sign out, and account deletion on that server. Sign-out, removing a server
  * and deleting an account are separate actions and are never described as one another.
  */
@@ -19,6 +19,7 @@ export const Settings = ({
   onSignOut,
   onManageServers,
   onDeleteAccount,
+  push,
 }: {
   client: ByeClient;
   mailboxId: string;
@@ -28,6 +29,8 @@ export const Settings = ({
   onManageServers: () => void;
   /** Opens the server's own deletion page for this account; absent when the server has none. */
   onDeleteAccount?: () => void;
+  /** Notifications for this account on this device; absent where the app has no push bridge. */
+  push?: { readonly enabled: boolean; readonly onChange: (on: boolean) => Promise<void> };
 }) => {
   const [prefs, setPrefs] = useState<JsonObject>({});
   const [devices, setDevices] = useState<ReadonlyArray<DeviceSessionWire>>([]);
@@ -56,6 +59,23 @@ export const Settings = ({
       <Text style={s.h1} accessibilityRole="header">
         Settings
       </Text>
+      {push ? (
+        <View style={[s.row, { paddingHorizontal: 0 }]}>
+          <Text style={[s.text, { flex: 1 }]}>
+            {`Notifications on this device (from ${server.replace(/^https:\/\//, "")})`}
+          </Text>
+          <Switch
+            accessibilityLabel="Notifications on this device"
+            value={push.enabled}
+            onValueChange={(v) =>
+              void push.onChange(v).then(
+                () => setStatus(""),
+                (e: unknown) => setStatus(e instanceof Error ? e.message : String(e)),
+              )
+            }
+          />
+        </View>
+      ) : null}
       <View style={[s.row, { paddingHorizontal: 0 }]}>
         <Text style={[s.text, { flex: 1 }]}>Load remote images (through the privacy proxy)</Text>
         <Switch

@@ -12,7 +12,7 @@ import {
   weekStart,
   ymd,
 } from "../src/lib/calendar.ts";
-import { ASSETS, servesFromShell, SHELL } from "../src/lib/sw-policy.ts";
+import { ASSETS, clickTarget, pushNotice, servesFromShell, SHELL } from "../src/lib/sw-policy.ts";
 import { JSDOM } from "jsdom";
 import { ByeApiError } from "@bye/native-shared";
 import { bestEffort, degrade } from "../src/core/degrade.ts";
@@ -430,6 +430,33 @@ describe("service worker caching policy", () => {
     ])
       expect(servesFromShell("GET", `${origin}${path}`, origin)).toBe(false);
     expect(SHELL).toMatch(/^bye-shell-/);
+  });
+
+  it("[E23] turns a push payload into a notice that opens only this app", () => {
+    expect(
+      pushNotice(
+        JSON.stringify({
+          title: "Ana",
+          body: "Lunch?",
+          url: `${origin}/#/thread/thr_1`,
+          kind: "mail.delivery",
+          collapseId: "thr_1",
+        }),
+        origin,
+      ),
+    ).toEqual({ title: "Ana", body: "Lunch?", url: `${origin}/#/thread/thr_1`, tag: "thr_1" });
+    // Malformed or empty payloads still show something (a silent push costs the permission).
+    expect(pushNotice("not json", origin)).toEqual({
+      title: "bye",
+      body: "You have a new notification",
+      url: `${origin}/`,
+      tag: "bye",
+    });
+    expect(pushNotice(JSON.stringify({ title: 7, url: "https://evil.test/x" }), origin).url).toBe(
+      `${origin}/`,
+    );
+    expect(clickTarget("/#/calendar", origin)).toBe(`${origin}/#/calendar`);
+    expect(clickTarget("javascript:alert(1)", origin)).toBe(`${origin}/`);
   });
 
   it("[X01] serves the static shell (network first, cache fallback)", () => {

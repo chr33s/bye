@@ -25,7 +25,7 @@ import {
   type RouteHandler,
 } from "../http.ts";
 import { ok, publicly } from "../httpapi.ts";
-import { type PushRegistration, validateRegistration } from "../push.ts";
+import { pruneEndedRegistrations, type PushRegistration, validateRegistration } from "../push.ts";
 import { storeExternalCredential } from "../transports.ts";
 import { requireUser } from "./common.ts";
 import { decodeAs } from "./decode.ts";
@@ -257,6 +257,7 @@ export const OpsHandlers = HttpApiBuilder.group(CoreApi, "ops", (handlers) =>
       Effect.gen(function* () {
         const { env } = yield* Invocation;
         const principal = yield* requireScope("read");
+        yield* Effect.promise(() => pruneEndedRegistrations(env, principal.userId));
 
         const rows = yield* Effect.promise(() =>
           env.DIRECTORY.prepare(
@@ -306,12 +307,16 @@ export const OpsHandlers = HttpApiBuilder.group(CoreApi, "ops", (handlers) =>
 
         if (auth !== undefined) registration.auth = auth;
 
+        if (b.sandbox !== undefined) registration.sandbox = b.sandbox;
+
         const invalid = validateRegistration(registration);
 
         if (invalid) return yield* badRequest(invalid);
         const id = `pd_${crypto.randomUUID()}`;
 
         const result = yield* Effect.promise(async () => {
+          await pruneEndedRegistrations(env, principal.userId);
+
           const count = await env.DIRECTORY.prepare(
             "SELECT COUNT(*) AS n FROM push_devices WHERE user_id = ? AND enabled = 1 AND endpoint <> ?",
           )
@@ -321,8 +326,9 @@ export const OpsHandlers = HttpApiBuilder.group(CoreApi, "ops", (handlers) =>
           if ((count?.n ?? 0) >= MAX_DEVICES_PER_USER) return null;
 
           return env.DIRECTORY.prepare(
-            `INSERT INTO push_devices (id, user_id, kind, endpoint, p256dh, auth, label, enabled, created_at, failures) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
-           ON CONFLICT (user_id, endpoint) DO UPDATE SET kind = excluded.kind, p256dh = excluded.p256dh, auth = excluded.auth, label = excluded.label, enabled = 1, failures = 0, disabled_at = NULL
+            // Bound to the registering credential: revoking it removes the registration (P1.7).
+            `INSERT INTO push_devices (id, user_id, kind, endpoint, p256dh, auth, label, enabled, created_at, failures, session_id, apns_sandbox) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)
+           ON CONFLICT (user_id, endpoint) DO UPDATE SET kind = excluded.kind, p256dh = excluded.p256dh, auth = excluded.auth, label = excluded.label, enabled = 1, failures = 0, disabled_at = NULL, session_id = excluded.session_id, apns_sandbox = COALESCE(excluded.apns_sandbox, push_devices.apns_sandbox)
            RETURNING id`,
           )
             .bind(
@@ -334,6 +340,10 @@ export const OpsHandlers = HttpApiBuilder.group(CoreApi, "ops", (handlers) =>
               registration.auth ?? null,
               registration.label ?? "",
               Date.now(),
+              principal.sessionId,
+              registration.kind === "apns" && registration.sandbox !== undefined
+                ? Number(registration.sandbox)
+                : null,
             )
             .first<{ id: string }>();
         });
@@ -360,6 +370,20 @@ export const OpsHandlers = HttpApiBuilder.group(CoreApi, "ops", (handlers) =>
 
         if (r.meta.changes !== 1)
           return yield* new ApiError({ code: "not_found", message: "device not found" });
+
+        return ok;
+      }).pipe(publicly),
+    )
+    .handle("unregisterPushEndpoint", ({ payload }) =>
+      Effect.gen(function* () {
+        const { env } = yield* Invocation;
+        const principal = yield* requireUser();
+
+        yield* Effect.promise(() =>
+          env.DIRECTORY.prepare("DELETE FROM push_devices WHERE user_id = ? AND endpoint = ?")
+            .bind(principal.userId, payload.endpoint)
+            .run(),
+        );
 
         return ok;
       }).pipe(publicly),

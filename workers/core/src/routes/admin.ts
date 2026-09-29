@@ -52,7 +52,7 @@ import {
   zoneTokenConfigured,
 } from "../zone-token.ts";
 import {
-  closeLiveSockets,
+  releaseCredential,
   ctl,
   personalOrgOf,
   requireUser,
@@ -1144,7 +1144,7 @@ export const AdminHandlers = HttpApiBuilder.group(CoreApi, "admin", (handlers) =
         const principal = yield* requireUser();
 
         const devices = new ControlDeviceAuth(env.DIRECTORY, kernelClock, (userId, sessionId) =>
-          closeLiveSockets(env, userId, sessionId),
+          releaseCredential(env, userId, sessionId),
         );
 
         const revoked = yield* Effect.promise(() =>

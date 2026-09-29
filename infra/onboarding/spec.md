@@ -411,6 +411,15 @@ The system must never auto-approve an unexpected resource type merely because it
 
 Maintain a reviewed allowlist for the standard first-install resource graph or derive it from the repository inventory with a test that fails when the graph changes without review.
 
+### Push notifications
+
+The "Where should Bye live?" step has a **Push notifications** checkbox, on by default. It changes no DNS, Email Routing or other account settings, so it is not a separate activation step and does not affect automatic approval. It only decides whether the deployment carries a VAPID key.
+
+- **On:** the instance serves its VAPID public key (`/v1/push/vapid-key`). Browsers subscribe with Web Push. The iOS and Android apps register through Bye's push gateway (`push.<DOMAIN>`), which holds the app's APNs/FCM credentials and relays ciphertext only. Each user still turns notifications on per device in Settings.
+- **Off:** the key stays sealed in the installation record but is deployed empty, so the instance offers no push. Turning it back on restores existing subscriptions.
+- **Later:** "Recovery and connection" has the same setting. Changing it records the choice and opens the plan review; it takes effect with the approved deployment, like any configuration change.
+- **Existing installations:** a VAPID key is generated on the next review if the sealed secrets have none, so installations bound before push existed gain it on their next upgrade. The DKIM key is not backfilled this way, because it would change which mail the instance sends.
+
 ---
 
 ## 7. Custom-domain plan changes

@@ -384,7 +384,12 @@ export const PushSubscriptionRequest = Schema.Struct({
     Schema.Struct({ p256dh: Schema.optional(UpTo(256)), auth: Schema.optional(UpTo(256)) }),
   ),
   label: Schema.optional(UpTo(200)),
+  /** APNs only: the token came from the sandbox environment (a development-signed build). */
+  sandbox: Schema.optional(Schema.Boolean),
 });
+
+/** Remove this account's registration of one push endpoint (the endpoint is the key a browser has). */
+export const PushUnregisterRequest = Schema.Struct({ endpoint: Bounded(2048) });
 
 /** External send-as credential (§5.3 ExternalIdentityTransport, E19). Sealed at rest. */
 export const ExternalIdentityCredentialRequest = Schema.Struct({

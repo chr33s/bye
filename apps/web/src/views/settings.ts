@@ -1,7 +1,7 @@
 import { Predicate } from "effect";
 import type { MailboxCommandInput } from "@bye/native-shared";
 import { degrade } from "../core/degrade.ts";
-import { api, list } from "../api.ts";
+import { api, ApiRequestError, list } from "../api.ts";
 import { addPasskey, logout, urlBase64ToBytes } from "../auth.ts";
 import {
   act,
@@ -72,6 +72,56 @@ const select = (
   return field(label, s);
 };
 
+/** Which server registration is this browser's (a per-browser convenience, not state). */
+const PUSH_DEVICE_KEY = "bye:push-device";
+
+const thisPushDevice = (): string | null => {
+  try {
+    return localStorage.getItem(PUSH_DEVICE_KEY);
+  } catch {
+    return null;
+  }
+};
+
+const rememberPushDevice = (id: string | null) => {
+  try {
+    if (id) localStorage.setItem(PUSH_DEVICE_KEY, id);
+    else localStorage.removeItem(PUSH_DEVICE_KEY);
+  } catch {
+    // Only marks "this browser" in the device list.
+  }
+};
+
+/** This browser's live push subscription, if any. Never waits for a worker that isn't there. */
+const currentSubscription = async (): Promise<PushSubscription | null> => {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return null;
+  const registration = await navigator.serviceWorker.getRegistration();
+
+  return registration ? registration.pushManager.getSubscription() : null;
+};
+
+/**
+ * Register a subscription with the server. Registration is keyed by endpoint, so this also answers
+ * the existing id for a subscription registered earlier (or re-registered by the service worker).
+ */
+const registerSubscription = async (subscription: PushSubscription): Promise<string> => {
+  const json = subscription.toJSON() as {
+    endpoint: string;
+    keys: { p256dh: string; auth: string };
+  };
+
+  const { id } = await api<{ id: string }>("POST", "/v1/push/subscriptions", {
+    kind: "webpush",
+    endpoint: json.endpoint,
+    keys: json.keys,
+    label: navigator.userAgent.slice(0, 60),
+  });
+
+  rememberPushDevice(id);
+
+  return id;
+};
+
 const subscribePush = async (): Promise<void> => {
   if (!("serviceWorker" in navigator) || !("PushManager" in window))
     throw new Error("This browser doesn't support push notifications");
@@ -86,17 +136,30 @@ const subscribePush = async (): Promise<void> => {
     applicationServerKey: urlBase64ToBytes(publicKey),
   });
 
-  const json = subscription.toJSON() as {
-    endpoint: string;
-    keys: { p256dh: string; auth: string };
-  };
+  await registerSubscription(subscription);
+};
 
-  await api("POST", "/v1/push/subscriptions", {
-    kind: "webpush",
-    endpoint: json.endpoint,
-    keys: json.keys,
-    label: navigator.userAgent.slice(0, 60),
-  });
+/**
+ * Remove this browser's registration, then its subscription. The row is found by the current
+ * subscription's endpoint (the service worker may have re-registered it under a new id); without a
+ * subscription, the stored id is removed. Either way nothing is re-enabled on the way.
+ */
+const unsubscribePush = async (): Promise<void> => {
+  const subscription = await currentSubscription();
+  const id = thisPushDevice();
+
+  if (subscription) {
+    await api("POST", "/v1/push/subscriptions/unregister", { endpoint: subscription.endpoint });
+    await subscription.unsubscribe();
+  } else if (id) {
+    await api("DELETE", `/v1/push/subscriptions/${encodeURIComponent(id)}`).catch(
+      (error: Error) => {
+        if (!(error instanceof ApiRequestError && error.status === 404)) throw error;
+      },
+    );
+  }
+
+  rememberPushDevice(null);
 };
 
 export const renderSettings = async (signal: AbortSignal): Promise<void> => {
@@ -126,6 +189,13 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
   ]);
 
   const p = prefs.preferences;
+  const ownDevice = thisPushDevice();
+
+  // On only when this browser is subscribed AND this account has its registration enabled; a
+  // subscription left from another account or a removed registration shows "Enable" again.
+  const subscribed =
+    (await currentSubscription().catch(() => null)) !== null &&
+    push.some((d) => d.id === ownDevice && d.enabled);
 
   const setPref =
     (key: Extract<MailboxCommandInput, { _tag: "SetPreference" }>["key"]) =>
@@ -288,7 +358,10 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
         "Devices receiving push",
         push,
         [
-          ["Device", (d) => text(d.label || d.kind)],
+          [
+            "Device",
+            (d) => `${text(d.label || d.kind)}${d.id === ownDevice ? " (this browser)" : ""}`,
+          ],
           ["Added", (d) => formatDate(d.createdAt)],
           ["Status", (d) => (d.enabled ? "On" : "Off")],
           [
@@ -310,11 +383,20 @@ export const renderSettings = async (signal: AbortSignal): Promise<void> => {
         ],
         "No devices yet.",
       ),
-      h(
-        "button",
-        { type: "button", onclick: act("Push enabled on this device", subscribePush, reload) },
-        "Enable push on this device",
-      ),
+      subscribed
+        ? h(
+            "button",
+            {
+              type: "button",
+              onclick: act("Push turned off on this device", unsubscribePush, reload),
+            },
+            "Turn off push on this device",
+          )
+        : h(
+            "button",
+            { type: "button", onclick: act("Push enabled on this device", subscribePush, reload) },
+            "Enable push on this device",
+          ),
       h("h2", {}, "Away reply"),
       h(
         "form",

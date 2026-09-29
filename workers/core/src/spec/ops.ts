@@ -5,6 +5,7 @@ import {
   PushDeviceList,
   PushDeviceRegistered,
   PushSubscriptionRequest,
+  PushUnregisterRequest,
 } from "@bye/contracts";
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi";
@@ -28,6 +29,14 @@ export class OpsApi extends HttpApiGroup.make("ops")
     }),
     HttpApiEndpoint.delete("removePushSubscription", "/v1/push/subscriptions/:id", {
       params: { id: Schema.String },
+      success: Ok,
+    }),
+    /**
+     * Remove by endpoint: a browser knows its current subscription's endpoint, not which row the
+     * service worker last registered it as. Answers ok whether or not a row existed.
+     */
+    HttpApiEndpoint.post("unregisterPushEndpoint", "/v1/push/subscriptions/unregister", {
+      payload: PushUnregisterRequest,
       success: Ok,
     }),
 

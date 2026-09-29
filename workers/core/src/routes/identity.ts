@@ -7,7 +7,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { Invocation } from "../http.ts";
 import { publicly } from "../httpapi.ts";
 import { CoreApi } from "../spec/index.ts";
-import { closeLiveSockets, ctl, requireUser } from "./common.ts";
+import { closeLiveSockets, ctl, releaseCredential, requireUser } from "./common.ts";
 
 export const IdentityHandlers = HttpApiBuilder.group(CoreApi, "identity", (handlers) =>
   handlers
@@ -188,7 +188,7 @@ export const IdentityHandlers = HttpApiBuilder.group(CoreApi, "identity", (handl
 
         if (!(yield* auth.revokeSession(p.userId, params.id)))
           return yield* new NotFound({ resource: "session" });
-        yield* Effect.promise(() => closeLiveSockets(env, p.userId, params.id));
+        yield* Effect.promise(() => releaseCredential(env, p.userId, params.id));
 
         return { revoked: true };
       }).pipe(publicly),
