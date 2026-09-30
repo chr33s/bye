@@ -105,7 +105,7 @@ class ByePushModule(context: ReactApplicationContext) : ReactContextBaseJavaModu
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
       ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     ) return then(true)
-    val activity = currentActivity as? PermissionAwareActivity ?: return then(false)
+    val activity = context.currentActivity as? PermissionAwareActivity ?: return then(false)
     activity.requestPermissions(
       arrayOf(Manifest.permission.POST_NOTIFICATIONS),
       PERMISSION_REQUEST,
