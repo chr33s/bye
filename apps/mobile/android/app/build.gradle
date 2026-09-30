@@ -150,6 +150,12 @@ android {
             }
         }
     }
+    testOptions {
+        unitTests.all {
+            // Bridge contracts shared with the TypeScript and Swift suites.
+            systemProperty "bye.fixtures", file("../../../../packages/contracts/test/fixtures/native").absolutePath
+        }
+    }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
@@ -170,6 +176,10 @@ dependencies {
     // FCM for push (ByeMessagingService); configured at runtime from BuildConfig, no gms plugin.
     implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
     implementation("com.google.firebase:firebase-messaging")
+
+    // JVM unit tests (app/src/test): android.jar only stubs org.json, so the real one is added.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250517")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

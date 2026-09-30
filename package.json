@@ -8,7 +8,7 @@
     "test": "vitest run",
     "check:boundaries": "node --experimental-strip-types infra/policies/check-boundaries.ts",
     "check:versions": "node --experimental-strip-types infra/policies/check-versions.ts",
-    "verify": "pnpm check:versions && pnpm check:boundaries && pnpm check:concurrency && pnpm fmt:check && pnpm lint && pnpm typecheck && pnpm test && pnpm check:bundle",
+    "verify": "pnpm check:versions && pnpm check:boundaries && pnpm check:concurrency && pnpm fmt:check && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm check:bundle",
     "build:web": "pnpm --filter @bye/web build",
     "build:mime": "node --experimental-strip-types containers/mime/build.ts",
     "build:deploy": "pnpm build:web && pnpm build:mime",
@@ -37,7 +37,8 @@
     "evidence:bench": "BYE_BENCH_MESSAGES=${BYE_BENCH_MESSAGES:-1000} vitest run infra/tests/evidence-bench.test.ts",
     "lint": "oxlint",
     "fmt": "oxfmt",
-    "fmt:check": "oxfmt --check"
+    "fmt:check": "oxfmt --check",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "effect": "4.0.0-rc.117"
@@ -57,6 +58,7 @@
     "@effect/vitest": "4.0.0-rc.117",
     "@oxlint/plugins": "1.85.0",
     "@types/node": "24.19.0",
+    "@vitest/coverage-v8": "5.0.2",
     "alchemy": "2.0.0-beta.79",
     "miniflare": "4.20260730.0",
     "oxfmt": "0.70.0",

@@ -1,0 +1,34 @@
+# Browser sign-in against the real server, with only the passkey ceremony stubbed.
+#
+# The app starts a real PKCE attempt and opens /oauth/authorize in the system browser. The
+# browser has no session there, so the server bounces it to the web sign-in page with
+# ?next=/oauth/authorize?…; we copy that address, and scripts/consent.js performs the consent POST
+# with the test account's session cookie (exactly what the "Allow" button submits). The server
+# issues a real single-use code bound to the app's state and code challenge, and we hand the
+# resulting bye://oauth/callback?code=…&state=…&iss=… back to the app, which checks state and
+# issuer and redeems the code with its own verifier. Nothing in the app is bypassed.
+appId: email.bye.app
+---
+- extendedWaitUntil:
+    visible: Sign in with your browser
+    timeout: 30000
+- tapOn: Sign in with your browser
+- runFlow:
+    when:
+      platform: iOS
+    file: read-browser-url-ios.yaml
+- runFlow:
+    when:
+      platform: Android
+    file: read-browser-url-android.yaml
+- runScript:
+    file: ../scripts/consent.js
+    env:
+      E2E_SESSION_COOKIE: ${E2E_SESSION_COOKIE}
+- openLink: ${output.callbackUrl}
+- runFlow: dismiss-open-in.yaml
+# Signed in: the tab bar is showing and the sign-in screen is gone.
+- extendedWaitUntil:
+    visible: Settings
+    timeout: 30000
+- assertNotVisible: Sign in to bye

@@ -1,17 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Linking, NativeModules } from "react-native";
-import {
-  CUSTOM_SCHEME_REDIRECT,
-  DESKTOP_CLIENT_ID,
-  nativeSecureStore,
-  SecureStoreError,
-  type SecureSessionStore,
-  SessionClient,
-} from "../auth/index.ts";
+import { CUSTOM_SCHEME_REDIRECT, DESKTOP_CLIENT_ID, SessionClient } from "../auth/index.ts";
+import { hostSecureStore, type NativeSecureStoreModule } from "../bridge.ts";
 import { secureStoreKey } from "../sealed-store.ts";
 import type { Platform } from "./platform.ts";
 
 export type { Platform, WidgetSnapshot } from "./platform.ts";
+export { decodePushToken, encodeWidgetSnapshot } from "../bridge.ts";
 
 // The host adapter every native shell shares (spec §10 device sessions, X01).
 // Sign-in is the device-session flow against the *selected* instance: the system browser runs the
@@ -21,19 +16,6 @@ export type { Platform, WidgetSnapshot } from "./platform.ts";
 // iOS/macOS, Android Keystore, Windows Credential Manager), one slot per instance. No cookie jar,
 // no plaintext. Each app supplies only what is OS-specific: its name, device label, client and
 // bridges. No server address is compiled in beyond the hosted default offered on first use.
-
-interface NativeSecureStoreModule {
-  read(key: string): Promise<string>;
-  write(key: string, value: string): Promise<void>;
-  remove(key: string): Promise<void>;
-}
-
-/** A missing native module is a build defect: surface it as unavailable storage, never plaintext. */
-const unavailableStore: SecureSessionStore = {
-  read: () => Promise.reject(new SecureStoreError("StorageUnavailable", "module-missing")),
-  write: () => Promise.reject(new SecureStoreError("StorageUnavailable", "module-missing")),
-  remove: async () => undefined,
-};
 
 export interface NativeHostOptions {
   readonly name: Platform["name"];
@@ -47,8 +29,9 @@ export interface NativeHostOptions {
 }
 
 export const makeNativePlatform = (options: NativeHostOptions): Platform => {
-  const secure = NativeModules.ByeSecureStore as NativeSecureStoreModule | undefined;
-  const store = secure ? nativeSecureStore(secure) : unavailableStore;
+  const store = hostSecureStore(
+    NativeModules.ByeSecureStore as NativeSecureStoreModule | undefined,
+  );
   const clientId = options.clientId ?? DESKTOP_CLIENT_ID;
   return {
     name: options.name,

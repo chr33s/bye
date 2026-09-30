@@ -1,0 +1,12 @@
+# Safari: reveal and copy the full address. Element ids are Safari's own, not ours.
+# TODO(e2e): re-verify these ids when the macos-15 runner image moves to a new iOS runtime.
+appId: com.apple.mobilesafari
+---
+- extendedWaitUntil:
+    visible:
+      id: TabBarItemTitle
+    timeout: 30000
+- tapOn:
+    id: TabBarItemTitle
+- copyTextFrom:
+    id: URL

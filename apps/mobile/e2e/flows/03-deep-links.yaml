@@ -1,0 +1,27 @@
+# Allowlisted bye:// links route inside the signed-in app (deeplink.ts); others are ignored.
+# E2E_THREAD_ID must match deeplink.ts's ID pattern (e.g. thr_<20-40 lowercase alphanumerics>).
+appId: email.bye.app
+name: 03-deep-links
+tags: [smoke]
+---
+- launchApp
+- openLink: bye://thread/${E2E_THREAD_ID}
+- runFlow: ../subflows/dismiss-open-in.yaml
+- extendedWaitUntil:
+    visible: Reply Later
+    timeout: 30000
+- openLink: bye://compose?to=e2e%40bye.test&subject=E2E%20deep%20link
+- runFlow: ../subflows/dismiss-open-in.yaml
+- extendedWaitUntil:
+    visible: New message
+    timeout: 30000
+- assertVisible: E2E deep link
+- openLink: bye://calendar
+- runFlow: ../subflows/dismiss-open-in.yaml
+- extendedWaitUntil:
+    visible: + New event
+    timeout: 30000
+# Not on the allowlist: the app stays where it is.
+- openLink: bye://unknown/route
+- runFlow: ../subflows/dismiss-open-in.yaml
+- assertVisible: + New event

@@ -1,0 +1,64 @@
+{
+  "description": "ByeWidgetBridge.publish payloads: snapshot is the shared app's WidgetSnapshot, json exactly what encodeWidgetSnapshot hands the bridge, rendered what the iOS widget (Snapshot) and Android widget (WidgetSnapshot.parse) must read from it.",
+  "maxBytes": 16384,
+  "cases": [
+    {
+      "name": "event, timer and unseen",
+      "snapshot": {
+        "nextEvent": {
+          "title": "Design review",
+          "startMs": 1790000000000
+        },
+        "timer": {
+          "label": "Writing",
+          "startedAtMs": 1789990000000
+        },
+        "unseen": 3
+      },
+      "json": "{\"nextEvent\":{\"title\":\"Design review\",\"startMs\":1790000000000},\"timer\":{\"label\":\"Writing\",\"startedAtMs\":1789990000000},\"unseen\":3}",
+      "rendered": {
+        "title": "Design review",
+        "startMs": 1790000000000,
+        "timerLabel": "Writing",
+        "startedAtMs": 1789990000000,
+        "unseen": 3
+      }
+    },
+    {
+      "name": "nothing scheduled",
+      "snapshot": {
+        "nextEvent": null,
+        "timer": null,
+        "unseen": 0
+      },
+      "json": "{\"nextEvent\":null,\"timer\":null,\"unseen\":0}",
+      "rendered": {
+        "title": null,
+        "startMs": null,
+        "timerLabel": null,
+        "startedAtMs": null,
+        "unseen": 0
+      }
+    },
+    {
+      "name": "server attribution and non-ASCII title",
+      "snapshot": {
+        "nextEvent": {
+          "title": "Café ☕ with Zoë",
+          "startMs": 1790003600000
+        },
+        "timer": null,
+        "unseen": 12,
+        "server": "mail.bye.test"
+      },
+      "json": "{\"nextEvent\":{\"title\":\"Café ☕ with Zoë\",\"startMs\":1790003600000},\"timer\":null,\"unseen\":12,\"server\":\"mail.bye.test\"}",
+      "rendered": {
+        "title": "Café ☕ with Zoë",
+        "startMs": 1790003600000,
+        "timerLabel": null,
+        "startedAtMs": null,
+        "unseen": 12
+      }
+    }
+  ]
+}

@@ -26,6 +26,8 @@
     "App.tsx",
     "src/**/*.ts",
     "src/**/*.tsx",
+    "test/**/*.ts",
+    "test/**/*.tsx",
     "../../packages/native-shared/src/**/*.ts",
     "../../packages/native-shared/src/**/*.tsx"
   ],

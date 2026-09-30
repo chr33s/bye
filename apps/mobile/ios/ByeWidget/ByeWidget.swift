@@ -1,15 +1,9 @@
 import SwiftUI
 import WidgetKit
 
-/// Home-screen widget: next event, running timer, and unseen count. Reads only the snapshot the app
-/// publishes into the App Group; it holds no credentials and makes no network requests.
-struct Snapshot: Decodable {
-  struct Event: Decodable { let title: String; let startMs: Double }
-  struct Timer: Decodable { let label: String; let startedAtMs: Double }
-  let nextEvent: Event?
-  let timer: Timer?
-  let unseen: Int
-}
+// Home-screen widget: next event, running timer, and unseen count. Reads only the snapshot the app
+// publishes into the App Group (Snapshot.swift); it holds no credentials and makes no network
+// requests.
 
 struct Entry: TimelineEntry {
   let date: Date
@@ -18,8 +12,7 @@ struct Entry: TimelineEntry {
 
 struct Provider: TimelineProvider {
   func load() -> Snapshot? {
-    guard let json = UserDefaults(suiteName: "group.email.bye")?.string(forKey: "widgetSnapshot"), let data = json.data(using: .utf8) else { return nil }
-    return try? JSONDecoder().decode(Snapshot.self, from: data)
+    UserDefaults(suiteName: "group.email.bye")?.string(forKey: "widgetSnapshot").flatMap(Snapshot.decode)
   }
 
   func placeholder(in context: Context) -> Entry { Entry(date: .now, snapshot: nil) }

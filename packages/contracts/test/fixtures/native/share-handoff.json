@@ -1,0 +1,40 @@
+{
+  "description": "iOS Share Extension handoff: ShareHandoff.link(text:url:) (ShareViewController.swift) writes link to the App Group; the app reads it through takePendingShare and deepLinkToRoute must yield route with text and url intact.",
+  "cases": [
+    {
+      "name": "plain text",
+      "text": "Hello there",
+      "url": null,
+      "link": "bye://compose?text=Hello%20there",
+      "route": "#/compose?text=Hello%20there"
+    },
+    {
+      "name": "link with its own query and fragment",
+      "text": null,
+      "url": "https://example.com/a?b=1&c=2#frag",
+      "link": "bye://compose?url=https://example.com/a?b%3D1%26c%3D2%23frag",
+      "route": "#/compose?url=https%3A%2F%2Fexample.com%2Fa%3Fb%3D1%26c%3D2%23frag"
+    },
+    {
+      "name": "reserved characters survive, including +",
+      "text": "fish & chips = 2+2 #yum",
+      "url": "https://x.test/?q=a+b",
+      "link": "bye://compose?text=fish%20%26%20chips%20%3D%202%2B2%20%23yum&url=https://x.test/?q%3Da%2Bb",
+      "route": "#/compose?text=fish%20%26%20chips%20%3D%202%2B2%20%23yum&url=https%3A%2F%2Fx.test%2F%3Fq%3Da%2Bb"
+    },
+    {
+      "name": "non-ASCII and percent",
+      "text": "Zoë says: 50% off? ☕",
+      "url": null,
+      "link": "bye://compose?text=Zo%C3%AB%20says:%2050%25%20off?%20%E2%98%95",
+      "route": "#/compose?text=Zo%C3%AB%20says%3A%2050%25%20off%3F%20%E2%98%95"
+    },
+    {
+      "name": "nothing usable",
+      "text": null,
+      "url": null,
+      "link": "bye://compose?",
+      "route": "#/compose"
+    }
+  ]
+}

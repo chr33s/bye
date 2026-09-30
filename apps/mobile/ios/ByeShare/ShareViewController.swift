@@ -19,14 +19,10 @@ final class ShareViewController: UIViewController {
         link = url.absoluteString
       } else if text == nil, provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
                 let value = try? await provider.loadItem(forTypeIdentifier: UTType.plainText.identifier) as? String {
-        text = String(value.prefix(4000))
+        text = value
       }
     }
-    var components = URLComponents()
-    components.scheme = "bye"
-    components.host = "compose"
-    components.queryItems = [text.map { URLQueryItem(name: "text", value: $0) }, link.map { URLQueryItem(name: "url", value: $0) }].compactMap { $0 }
-    if let value = components.url?.absoluteString {
+    if let value = ShareHandoff.link(text: text, url: link) {
       UserDefaults(suiteName: "group.email.bye")?.set(value, forKey: "pendingShare")
     }
     await MainActor.run { showDone() }

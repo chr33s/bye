@@ -1,7 +1,11 @@
 import { NativeEventEmitter, NativeModules, Platform as RN } from "react-native";
 import { MOBILE_CLIENT_ID } from "@bye/native-shared/auth";
-import { makeNativePlatform, type Platform } from "@bye/native-shared/platform";
-import type { DevicePushToken } from "@bye/native-shared/push";
+import {
+  decodePushToken,
+  encodeWidgetSnapshot,
+  makeNativePlatform,
+  type Platform,
+} from "@bye/native-shared/platform";
 
 // iOS/Android host: the shared native adapter plus the home-screen widget / share bridge
 // (ByeWidgetBridge: WidgetKit on iOS, App Widgets on Android) and the push bridge (ByePush: APNs
@@ -24,32 +28,12 @@ interface PushModule {
 
 const pushModule = NativeModules.ByePush as PushModule | undefined;
 
-const decodeToken = (raw: string | null): DevicePushToken | null => {
-  if (!raw) return null;
-
-  try {
-    const t = JSON.parse(raw) as Partial<DevicePushToken>;
-
-    return (t.platform === "apns" || t.platform === "fcm") && t.token && t.p256dh && t.auth
-      ? {
-          platform: t.platform,
-          token: t.token,
-          sandbox: t.sandbox === true,
-          p256dh: t.p256dh,
-          auth: t.auth,
-        }
-      : null;
-  } catch {
-    return null;
-  }
-};
-
 const pushBridge = (module: PushModule, label: string): NonNullable<Platform["push"]> => {
   const events = new NativeEventEmitter(module);
 
   return {
     label,
-    requestToken: async () => decodeToken(await module.requestToken()),
+    requestToken: async () => decodePushToken(await module.requestToken()),
     onTokenRefresh: (listener) => {
       const sub = events.addListener("ByePushToken", () => listener());
 
@@ -75,7 +59,11 @@ export const mobilePlatform = makeNativePlatform({
   ...(bridge
     ? {
         widgets: {
-          publish: (snapshot) => bridge.publish(JSON.stringify(snapshot)),
+          publish: (snapshot) => {
+            const json = encodeWidgetSnapshot(snapshot);
+
+            if (json) bridge.publish(json);
+          },
           takePendingShare: () => bridge.takePendingShare(),
         },
       }

@@ -7,17 +7,22 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		050866A88B959CAD0061D3F2 /* ByeKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6E224BB9407FD91D085125C /* ByeKeychain.swift */; };
 		38B154EC42BBCF106EE0A33C /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 1B1560AEA43B989FFF9C56E8 /* PrivacyInfo.xcprivacy */; };
+		4057A6F9E252C6DDC752C021 /* KeychainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DD00792400ABC98900CA7B2 /* KeychainTests.swift */; };
+		40C8337BAA2F0FFB7016C9B8 /* ByeKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6E224BB9407FD91D085125C /* ByeKeychain.swift */; };
 		5142014D2437B4B30078DB4F /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = 5142014C2437B4B30078DB4F /* AppDelegate.mm */; };
 		514201522437B4B40078DB4F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 514201512437B4B40078DB4F /* Assets.xcassets */; };
 		514201552437B4B40078DB4F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 514201532437B4B40078DB4F /* Main.storyboard */; };
 		514201582437B4B40078DB4F /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 514201572437B4B40078DB4F /* main.m */; };
 		59D5C0A7F33DE1AECCC964DF /* libPods-ByeDesktop-macOS.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D078B604B2A1F0B2DD2F4A1 /* libPods-ByeDesktop-macOS.a */; };
+		5BEBEA48177004CD9B3E2E71 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7C18345E6E49A11DC11B1B2C /* Cocoa.framework */; };
 		92BC7078B15BCAC1D9B48805 /* ByeSecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D591C0A2E1E0C36A091AC3BB /* ByeSecureStore.swift */; };
 		A7344D625E76C92910299CEC /* ByeSecureStore.m in Sources */ = {isa = PBXBuildFile; fileRef = AA7802703DB8FB560A7184CD /* ByeSecureStore.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0DD00792400ABC98900CA7B2 /* KeychainTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KeychainTests.swift; sourceTree = "<group>"; };
 		1B1560AEA43B989FFF9C56E8 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		514201492437B4B30078DB4F /* ByeDesktop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ByeDesktop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5142014B2437B4B30078DB4F /* AppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; };
@@ -30,12 +35,23 @@
 		586190DE8209DE2494CC53D2 /* Pods-ByeDesktop-macOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ByeDesktop-macOS.debug.xcconfig"; path = "Target Support Files/Pods-ByeDesktop-macOS/Pods-ByeDesktop-macOS.debug.xcconfig"; sourceTree = "<group>"; };
 		5D078B604B2A1F0B2DD2F4A1 /* libPods-ByeDesktop-macOS.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-ByeDesktop-macOS.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		72C70D31BB2DED5E69B2A8F3 /* Pods-ByeDesktop-macOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ByeDesktop-macOS.release.xcconfig"; path = "Target Support Files/Pods-ByeDesktop-macOS/Pods-ByeDesktop-macOS.release.xcconfig"; sourceTree = "<group>"; };
+		7C18345E6E49A11DC11B1B2C /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		AA7802703DB8FB560A7184CD /* ByeSecureStore.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = ByeSecureStore.m; sourceTree = "<group>"; };
+		B0A1D6BCABB6F5440F3B8548 /* ByeDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ByeDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B6E224BB9407FD91D085125C /* ByeKeychain.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeKeychain.swift; sourceTree = "<group>"; };
 		D591C0A2E1E0C36A091AC3BB /* ByeSecureStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeSecureStore.swift; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		0285D5FD36D321E8F9867447 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5BEBEA48177004CD9B3E2E71 /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		514201462437B4B30078DB4F /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -47,11 +63,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		2AE3CBC7F649CD55ADACF287 /* OS X */ = {
+			isa = PBXGroup;
+			children = (
+				7C18345E6E49A11DC11B1B2C /* Cocoa.framework */,
+			);
+			name = "OS X";
+			sourceTree = "<group>";
+		};
 		2D16E6871FA4F8E400B85C8A /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
 				ED297162215061F000B7C4FE /* JavaScriptCore.framework */,
 				5D078B604B2A1F0B2DD2F4A1 /* libPods-ByeDesktop-macOS.a */,
+				2AE3CBC7F649CD55ADACF287 /* OS X */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -78,6 +103,7 @@
 				514201592437B4B40078DB4F /* ByeDesktop.entitlements */,
 				D591C0A2E1E0C36A091AC3BB /* ByeSecureStore.swift */,
 				AA7802703DB8FB560A7184CD /* ByeSecureStore.m */,
+				B6E224BB9407FD91D085125C /* ByeKeychain.swift */,
 			);
 			path = "ByeDesktop-macOS";
 			sourceTree = "<group>";
@@ -98,6 +124,7 @@
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
 				1B1560AEA43B989FFF9C56E8 /* PrivacyInfo.xcprivacy */,
 				4446FD4FAAB8DF9C0FDB8552 /* Pods */,
+				9FD262A21EB76E8A1FC37AC0 /* ByeDesktopTests */,
 			);
 			indentWidth = 2;
 			sourceTree = "<group>";
@@ -108,8 +135,18 @@
 			isa = PBXGroup;
 			children = (
 				514201492437B4B30078DB4F /* ByeDesktop.app */,
+				B0A1D6BCABB6F5440F3B8548 /* ByeDesktopTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		9FD262A21EB76E8A1FC37AC0 /* ByeDesktopTests */ = {
+			isa = PBXGroup;
+			children = (
+				0DD00792400ABC98900CA7B2 /* KeychainTests.swift */,
+			);
+			name = ByeDesktopTests;
+			path = ByeDesktopTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -135,6 +172,23 @@
 			productName = ByeDesktop;
 			productReference = 514201492437B4B30078DB4F /* ByeDesktop.app */;
 			productType = "com.apple.product-type.application";
+		};
+		D6553DA395A5ED8295FEC530 /* ByeDesktopTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C7BD4A65BD55756A679877C9 /* Build configuration list for PBXNativeTarget "ByeDesktopTests" */;
+			buildPhases = (
+				E8AFBF83ACE40922E4B986F9 /* Sources */,
+				0285D5FD36D321E8F9867447 /* Frameworks */,
+				62CE5CAA71BAEB1365DB66BE /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ByeDesktopTests;
+			productName = ByeDesktopTests;
+			productReference = B0A1D6BCABB6F5440F3B8548 /* ByeDesktopTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -164,6 +218,7 @@
 			projectRoot = "";
 			targets = (
 				514201482437B4B30078DB4F /* ByeDesktop-macOS */,
+				D6553DA395A5ED8295FEC530 /* ByeDesktopTests */,
 			);
 		};
 /* End PBXProject section */
@@ -176,6 +231,13 @@
 				514201522437B4B40078DB4F /* Assets.xcassets in Resources */,
 				514201552437B4B40078DB4F /* Main.storyboard in Resources */,
 				38B154EC42BBCF106EE0A33C /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		62CE5CAA71BAEB1365DB66BE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -279,6 +341,16 @@
 				5142014D2437B4B30078DB4F /* AppDelegate.mm in Sources */,
 				92BC7078B15BCAC1D9B48805 /* ByeSecureStore.swift in Sources */,
 				A7344D625E76C92910299CEC /* ByeSecureStore.m in Sources */,
+				40C8337BAA2F0FFB7016C9B8 /* ByeKeychain.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E8AFBF83ACE40922E4B986F9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4057A6F9E252C6DDC752C021 /* KeychainTests.swift in Sources */,
+				050866A88B959CAD0061D3F2 /* ByeKeychain.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -303,8 +375,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				ENABLE_HARDENED_RUNTIME = YES;
 				DEAD_CODE_STRIPPING = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "ByeDesktop-macos/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
@@ -347,6 +419,21 @@
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
+		};
+		7DAF74F30E097E6861976ECB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = email.bye.desktop.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
 		};
 		83CBBA201A601CBA00E9B192 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -466,6 +553,21 @@
 			};
 			name = Release;
 		};
+		C25FC4C5EF0D36A8BFD9A3D9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = email.bye.desktop.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -483,6 +585,15 @@
 			buildConfigurations = (
 				83CBBA201A601CBA00E9B192 /* Debug */,
 				83CBBA211A601CBA00E9B192 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C7BD4A65BD55756A679877C9 /* Build configuration list for PBXNativeTarget "ByeDesktopTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C25FC4C5EF0D36A8BFD9A3D9 /* Release */,
+				7DAF74F30E097E6861976ECB /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

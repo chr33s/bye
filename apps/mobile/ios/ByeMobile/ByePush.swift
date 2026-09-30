@@ -47,15 +47,8 @@ final class ByePush: RCTEventEmitter {
         case .success(let token):
           do {
             let keys = try ByePushCrypto.loadOrCreate()
-            let body: [String: Any] = [
-              "platform": "apns",
-              "token": token,
-              "sandbox": ByePushHub.sandbox,
-              "p256dh": keys.p256dh,
-              "auth": keys.authSecret,
-            ]
-            let json = try JSONSerialization.data(withJSONObject: body)
-            resolve(String(decoding: json, as: UTF8.self))
+            resolve(
+              try ByePushCrypto.registration(token: token, sandbox: ByePushHub.sandbox, keys: keys))
           } catch {
             reject("PushKeys", "could not create push keys", error)
           }

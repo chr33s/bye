@@ -21,7 +21,7 @@ end
 
 # App: bridge sources, bridging header, entitlements, bundle id.
 app_group = project.main_group["ByeMobile"]
-%w[ByeWidgetBridge.swift ByeWidgetBridge.m ByePush.swift ByePush.m].each do |name|
+%w[ByeWidgetBridge.swift ByeWidgetBridge.m ByePush.swift ByePush.m ByeKeychain.swift].each do |name|
   ref = ensure_file(project, app_group, name)
   app.source_build_phase.add_file_reference(ref, true)
 end
@@ -38,7 +38,6 @@ def extension(project, app, name:, type:, sources:, bundle_id:, frameworks: [])
   unless target
     target = project.new_target(type, name, :ios, DEPLOYMENT, nil, :swift)
     group = project.main_group[name] || project.main_group.new_group(name, name)
-    sources.each { |s| target.source_build_phase.add_file_reference(ensure_file(project, group, s), true) }
     ensure_file(project, group, "Info.plist")
     ensure_file(project, group, "#{name}.entitlements")
     frameworks.each { |f| target.add_system_framework(f) }
@@ -48,8 +47,10 @@ def extension(project, app, name:, type:, sources:, bundle_id:, frameworks: [])
     build_file = embed.add_file_reference(target.product_reference, true)
     build_file.settings = { "ATTRIBUTES" => ["RemoveHeadersOnCopy"] }
   end
-  # Privacy manifest (App Group UserDefaults, reason 1C8F.1), bundled as a resource.
   group = project.main_group[name]
+  # Sources are (re)applied on every run so files added later reach existing targets.
+  sources.each { |s| target.source_build_phase.add_file_reference(ensure_file(project, group, s, name), true) }
+  # Privacy manifest (App Group UserDefaults, reason 1C8F.1), bundled as a resource.
   privacy = ensure_file(project, group, "PrivacyInfo.xcprivacy", name)
   target.resources_build_phase.add_file_reference(privacy, true) unless target.resources_build_phase.files_references.include?(privacy)
   target.build_configurations.each do |c|
@@ -69,8 +70,8 @@ def extension(project, app, name:, type:, sources:, bundle_id:, frameworks: [])
   target
 end
 
-extension(project, app, name: "ByeWidget", type: :app_extension, sources: ["ByeWidget.swift"], bundle_id: "email.bye.app.widget", frameworks: %w[WidgetKit SwiftUI])
-extension(project, app, name: "ByeShare", type: :app_extension, sources: ["ShareViewController.swift"], bundle_id: "email.bye.app.share", frameworks: %w[UniformTypeIdentifiers])
+extension(project, app, name: "ByeWidget", type: :app_extension, sources: ["ByeWidget.swift", "Snapshot.swift"], bundle_id: "email.bye.app.widget", frameworks: %w[WidgetKit SwiftUI])
+extension(project, app, name: "ByeShare", type: :app_extension, sources: ["ShareViewController.swift", "ShareHandoff.swift"], bundle_id: "email.bye.app.share", frameworks: %w[UniformTypeIdentifiers])
 # Notification Service Extension: decrypts pushes relayed by Bye's push gateway (spec P1.7).
 extension(project, app, name: "ByeNotify", type: :app_extension, sources: ["NotificationService.swift", "ByePushCrypto.swift"], bundle_id: "email.bye.app.notify", frameworks: %w[UserNotifications])
 

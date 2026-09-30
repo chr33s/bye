@@ -77,8 +77,16 @@ jobs:
         run: pnpm lint
       - name: Strict type-check (packages, workers, infra)
         run: pnpm typecheck
-      - name: Contract fixtures, adapter, adversarial, infra-policy, a11y and parity tests
-        run: pnpm test
+      - name: Contract fixtures, adapter, adversarial, infra-policy, a11y and parity tests (coverage-gated)
+        run: pnpm test:coverage
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-${{ github.sha }}
+          path: |
+            coverage/lcov.info
+            coverage/coverage-summary.json
+          if-no-files-found: ignore
       - name: Worker bundle gate
         run: pnpm check:bundle
       # Not a deploy build (STAGE unset, so not strict): the same public inputs the deploy builds
@@ -720,11 +728,16 @@ jobs:
       - name: Typecheck shared screens and host
         working-directory: apps/mobile
         run: npm run typecheck
+      - name: Render tests for the shared screens (vitest-native, real React Native JS)
+        working-directory: apps/mobile
+        run: npm test
       - name: CocoaPods
         working-directory: apps/mobile/ios
         run: pod install
-      - name: Push decryption matches RFC 8291 Appendix A
-        run: sh apps/mobile/ios/scripts/push-crypto-vector.sh
+      # Push crypto (RFC 8291 Appendix A), widget/share payloads and Keychain against the shared
+      # fixtures in packages/contracts/test/fixtures/native; hosted by ByeTestHost, no Pods needed.
+      - name: Native unit tests (XCTest)
+        run: xcodebuild test -project apps/mobile/ios/ByeMobile.xcodeproj -scheme ByeMobileTests -destination 'platform=iOS Simulator,name=iPhone 16'
       - name: Build app, widget, share and notification extensions for the simulator
         working-directory: apps/mobile
         run: npm run ios:build-sim
@@ -744,6 +757,9 @@ jobs:
       - name: Install (exact lockfile)
         working-directory: apps/mobile
         run: npm ci --no-audit --no-fund
+      - name: Native unit tests (JVM, shared fixtures)
+        working-directory: apps/mobile/android
+        run: ./gradlew testDebugUnitTest
       - name: Assemble debug APK
         working-directory: apps/mobile
         run: npm run android:build
@@ -775,6 +791,8 @@ jobs:
       - name: Build macOS app
         working-directory: apps/desktop
         run: npm run macos:build
+      - name: Native unit tests (XCTest, Keychain)
+        run: xcodebuild test -project apps/desktop/macos/ByeDesktop.xcodeproj -scheme ByeDesktopTests -destination 'platform=macOS'
 
   native-windows:
     # react-native-windows 0.81 builds with the v145 toolset (Visual Studio 2026, >= 18.6).

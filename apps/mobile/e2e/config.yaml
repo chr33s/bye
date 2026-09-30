@@ -1,0 +1,24 @@
+# Maestro smoke suite for the iOS/Android app (plan step 5). Runs nightly and on release branches
+# from .github/workflows/native-e2e.yml, never on pull requests.
+#
+#   maestro test apps/mobile/e2e \
+#     -e E2E_SERVER=https://app.<stage> -e E2E_SESSION_COOKIE=<__Host-session value> \
+#     -e E2E_THREAD_SUBJECT=<subject> -e E2E_THREAD_ID=thr_<id>
+#
+# Requirements on the target stage (a preview/staging stage with the mail sandbox, never prod):
+# - E2E_SERVER: the instance's HTTPS base URL (what a user types under "Add a server").
+# - E2E_SESSION_COOKIE: the value of the `__Host-session` cookie of a dedicated test account's
+#   browser session. It replaces only the passkey ceremony (see subflows/sign-in.yaml); sessions
+#   expire after 30 days (SESSION_TTL_MS), so the secret must be refreshed at least monthly.
+# - E2E_THREAD_SUBJECT / E2E_THREAD_ID: a thread in that account's Imbox whose sender is a
+#   sandboxed address, so the reply in 02-imbox-reply never leaves the stage.
+#
+# Flows share app state in order: 01 wipes the app and signs in, the rest reuse that session.
+flows:
+  - "flows/*"
+executionOrder:
+  continueOnFailure: false
+  flowsOrder:
+    - 01-sign-in
+    - 02-imbox-reply
+    - 03-deep-links

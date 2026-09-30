@@ -1,0 +1,38 @@
+# Imbox → open the seeded thread → reply → the send is accepted, then undone so the seeded thread
+# never collects nightly replies.
+appId: email.bye.app
+name: 02-imbox-reply
+tags: [smoke]
+---
+- launchApp
+- tapOn: Mail
+- tapOn: Inbox
+- scrollUntilVisible:
+    element: .*${E2E_THREAD_SUBJECT}.*
+    direction: DOWN
+    timeout: 30000
+- tapOn: .*${E2E_THREAD_SUBJECT}.*
+- extendedWaitUntil:
+    visible: Reply
+    timeout: 30000
+- tapOn: Reply
+- assertVisible: Reply
+- tapOn: Message
+- inputText: "E2E smoke reply ${maestro.platform}"
+- hideKeyboard
+- scrollUntilVisible:
+    element: Send
+    direction: DOWN
+- tapOn: Send
+# "Sending…" plus Undo: accepted into the undo window, not presented as delivered (E18).
+- extendedWaitUntil:
+    visible: Sending…
+    timeout: 30000
+- assertVisible: Undo send
+- tapOn: Undo send
+# Cancelled inside the undo window: nothing reaches the provider, and Send is offered again.
+- extendedWaitUntil:
+    visible: Send cancelled
+    timeout: 15000
+- assertVisible: Send
+- assertNotVisible: Undo send

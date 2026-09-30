@@ -1,0 +1,18 @@
+# Chrome: skip first-run screens if the workflow's --no-first-run flag didn't take, then copy the
+# full address from the omnibox (focused, so it isn't shortened to the host).
+appId: com.android.chrome
+---
+- tapOn:
+    text: (Use without an account|Accept & continue|No thanks)
+    optional: true
+- tapOn:
+    text: (No thanks|Got it)
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: com.android.chrome:id/url_bar
+    timeout: 30000
+- tapOn:
+    id: com.android.chrome:id/url_bar
+- copyTextFrom:
+    id: com.android.chrome:id/url_bar

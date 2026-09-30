@@ -1,11 +1,11 @@
-# Adds the Keychain module to the macOS target and sets bundle identity. Idempotent. Run with CocoaPods' Ruby:
+# Adds the Keychain module (ByeSecureStore + ByeKeychain) to the macOS target and sets bundle identity. Idempotent. Run with CocoaPods' Ruby:
 #   GEM_HOME="$(brew --prefix cocoapods)/libexec" "$(brew --prefix ruby)/bin/ruby" scripts/configure-project.rb
 require "xcodeproj"
 
 project = Xcodeproj::Project.open(File.expand_path("../ByeDesktop.xcodeproj", __dir__))
 target = project.targets.find { |t| t.name == "ByeDesktop-macOS" } or abort("macOS target missing")
 group = project.main_group["ByeDesktop-macOS"] or abort("group missing")
-%w[ByeKeychain.swift ByeKeychain.m].each do |name|
+%w[ByeSecureStore.swift ByeSecureStore.m ByeKeychain.swift].each do |name|
   wanted = group.path ? name : File.join("ByeDesktop-macOS", name)
   ref = group.files.find { |f| File.basename(f.path.to_s) == name } || group.new_reference(wanted)
   ref.path = wanted

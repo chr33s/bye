@@ -7,7 +7,7 @@ import Security
 /// decrypts). Instances encrypt notifications to these keys; Bye's push gateway and Apple only ever
 /// see ciphertext (spec P1.7). The same steps as `decryptWebPush` in
 /// packages/platform-cloudflare/src/transport/push/webpush.ts, checked against the RFC 8291
-/// Appendix A vector by scripts/push-crypto-vector.sh.
+/// Appendix A vector by ByeMobileTests (packages/contracts/test/fixtures/native/webpush.json).
 ///
 /// The private key and auth secret live in the Data Protection keychain under a keychain access
 /// group both targets hold, `AfterFirstUnlockThisDeviceOnly` (the extension runs while the phone is
@@ -113,6 +113,19 @@ enum ByePushCrypto {
     guard record.last == 2 else { throw Failure.delimiter }
     record.removeLast()
     return Data(record)
+  }
+
+  /// What ByePush.requestToken answers the app (decodePushToken): the APNs token with this
+  /// device's public key and auth secret. Pinned by fixtures/native/push-token.json.
+  static func registration(token: String, sandbox: Bool, keys: Keys) throws -> String {
+    let body: [String: Any] = [
+      "platform": "apns",
+      "token": token,
+      "sandbox": sandbox,
+      "p256dh": keys.p256dh,
+      "auth": keys.authSecret,
+    ]
+    return String(decoding: try JSONSerialization.data(withJSONObject: body), as: UTF8.self)
   }
 
   static func base64url(_ data: Data) -> String {

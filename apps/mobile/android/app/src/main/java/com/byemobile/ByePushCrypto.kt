@@ -23,6 +23,7 @@ import javax.crypto.Mac
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import org.json.JSONObject
 
 /**
  * This device's Web Push keys and message decryption (RFC 8291, aes128gcm per RFC 8188), used by
@@ -120,10 +121,56 @@ object ByePushCrypto {
     return record.copyOfRange(0, end)
   }
 
-  fun base64url(bytes: ByteArray): String =
-    Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+  /**
+   * What ByePush.requestToken answers the app (decodePushToken): the FCM token with this device's
+   * public key and auth secret. Pinned by packages/contracts/test/fixtures/native/push-token.json.
+   */
+  fun registration(token: String, keys: Keys): String =
+    JSONObject()
+      .put("platform", "fcm")
+      .put("token", token)
+      .put("sandbox", false)
+      .put("p256dh", keys.p256dh)
+      .put("auth", keys.authSecret)
+      .toString()
 
-  fun fromBase64url(value: String): ByteArray = Base64.decode(value, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+  // base64url without padding, in plain Kotlin: android.util.Base64 isn't available to JVM unit tests
+  // and java.util.Base64 needs API 26 (minSdk is 24).
+  private const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+  fun base64url(bytes: ByteArray): String {
+    val out = StringBuilder((bytes.size * 4 + 2) / 3)
+    var i = 0
+    while (i < bytes.size) {
+      val chunk = minOf(3, bytes.size - i)
+      var n = 0
+      for (j in 0 until 3) n = (n shl 8) or (if (j < chunk) bytes[i + j].toInt() and 0xff else 0)
+      for (j in 0..chunk) out.append(ALPHABET[(n shr (18 - 6 * j)) and 0x3f])
+      i += 3
+    }
+    return out.toString()
+  }
+
+  /** Decodes base64url (padding optional); throws IllegalArgumentException on anything else. */
+  fun fromBase64url(value: String): ByteArray {
+    val text = value.trimEnd('=')
+    require(text.length % 4 != 1) { "invalid base64url length" }
+    val out = ByteArray(text.length * 3 / 4)
+    var bits = 0
+    var count = 0
+    var at = 0
+    for (c in text) {
+      val v = ALPHABET.indexOf(c)
+      require(v >= 0) { "invalid base64url character" }
+      bits = (bits shl 6) or v
+      count += 6
+      if (count >= 8) {
+        count -= 8
+        out[at++] = (bits shr count).toByte()
+      }
+    }
+    return out
+  }
 
   /** RFC 5869 HKDF-SHA256 with a single expand block (every output here is at most 32 bytes). */
   private fun hkdf(salt: ByteArray, ikm: ByteArray, info: ByteArray, length: Int): ByteArray {

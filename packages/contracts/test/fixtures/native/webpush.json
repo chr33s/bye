@@ -1,0 +1,47 @@
+{
+  "description": "Web Push (RFC 8291, aes128gcm) as the native push decryptors see it. rfc8291 is the Appendix A vector; notices are gateway payloads encrypted to the same receiver keys with a fixed salt and the Appendix A sender keys, so encryptWebPush reproduces them byte for byte (packages/native-shared/test/bridge-fixtures.test.ts). Read by ByeMobileTests (Swift) and app/src/test (Kotlin).",
+  "rfc8291": {
+    "plaintext": "When I grow up, I want to be a watermelon",
+    "asPublic": "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8",
+    "asPrivate": "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw",
+    "uaPublic": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "uaPrivate": "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg",
+    "salt": "DGv6ra1nlYgDCS1FRnbzlw",
+    "body": "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN"
+  },
+  "notices": [
+    {
+      "name": "full notice",
+      "salt": "AAECAwQFBgcICQoLDA0ODw",
+      "payload": {
+        "title": "Ada Lovelace",
+        "body": "Lunch on Friday?",
+        "url": "https://mail.bye.test/#/thread/thr_0123456789abcdefghjk",
+        "collapseId": "thread:thr_0123456789abcdefghjk"
+      },
+      "expected": {
+        "title": "Ada Lovelace",
+        "body": "Lunch on Friday?",
+        "url": "https://mail.bye.test/#/thread/thr_0123456789abcdefghjk",
+        "tag": "thread:thr_0123456789abcdefghjk"
+      },
+      "message": "AAECAwQFBgcICQoLDA0ODwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A9NTdDWyteh8-eUrqiFvlEGyNUNQD_WT9bgWajhNR7DbGmq32FAsH4qfkilEA2YGtkqFH2Pd07AGVWSMJj8ZVKErq3iOHsV4fCeYoGDOVMdnxN14iBM8OqYRIEFl0v8TUdwWucjZeOp62Sc2MyhWgjInvrcwdAglAKVUzaK02h9xVba7CCBCe4AKKLyv3LcKj-4KzY8nwFojTlOVHf36u5R6iMtu4e0EYV8enSVBAvWEHk7"
+    },
+    {
+      "name": "empty fields fall back; non-https links are dropped",
+      "salt": "EBESExQVFhcYGRobHB0eHw",
+      "payload": {
+        "title": "",
+        "url": "http://insecure.test/x"
+      },
+      "expected": {
+        "title": "bye",
+        "body": "New notification",
+        "url": null,
+        "tag": null
+      },
+      "message": "EBESExQVFhcYGRobHB0eHwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8KZo5XvwzmsvzSvnw3c-R5GEgOeaL91PZLrGXX_eN4IGDXibZCbGunmsTni71il0AJdezwK7LWySmma_g"
+    }
+  ]
+}

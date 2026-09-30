@@ -34,11 +34,14 @@ class ByeMessagingService : FirebaseMessagingService() {
     const val CHANNEL = "mail"
     const val EXTRA_URL = "email.bye.push.url"
 
-    fun decode(context: Context, sealed: String?): Notice {
+    fun decode(context: Context, sealed: String?): Notice = decode(sealed) { ByePushCrypto.load(context) }
+
+    /** The real notice from the gateway's `p` ciphertext, or the generic one. Keys are read only once there is ciphertext. */
+    fun decode(sealed: String?, keys: () -> ByePushCrypto.Keys?): Notice {
       val generic = Notice("bye", "New notification", null, null)
       if (sealed == null) return generic
       return try {
-        val keys = ByePushCrypto.load(context) ?: return generic
+        val keys = keys() ?: return generic
         val plain = ByePushCrypto.decrypt(ByePushCrypto.fromBase64url(sealed), keys)
         val json = JSONObject(String(plain, Charsets.UTF_8))
         fun text(key: String) = json.optString(key, "").take(500).ifEmpty { null }

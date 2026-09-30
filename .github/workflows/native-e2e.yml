@@ -1,0 +1,195 @@
+# Maestro smoke suite for the iOS/Android app (apps/mobile/e2e), kept off pull requests: nightly,
+# on release branches, and on demand. Debug builds load JS from a Metro server started in the job.
+#
+# Needs the `e2e` environment (a mail-sandboxed preview/staging stage, never prod):
+#   vars.E2E_SERVER          instance HTTPS base URL, e.g. https://app.staging.example
+#   vars.E2E_THREAD_SUBJECT  subject of a seeded Imbox thread from a sandboxed sender
+#   vars.E2E_THREAD_ID       that thread's id (thr_…)
+#   secrets.E2E_SESSION_COOKIE  `__Host-session` value of the test account's browser session;
+#                               replaces only the passkey ceremony, expires after 30 days
+# See apps/mobile/e2e/config.yaml and subflows/sign-in.yaml for how sign-in uses them.
+# Every action is pinned to a commit SHA; Maestro is fetched from its release and checksum-verified.
+name: native-e2e
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  push:
+    branches: ["release/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run at a time: flows share the test account's Imbox.
+  group: native-e2e
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 24.18.1
+  PNPM_VERSION: 11.20.0
+  MAESTRO_VERSION: 2.11.0
+  MAESTRO_SHA256: 5384593cb4e7a106489e75a821d157dd43f4e438df6bc308b72e82c685e1283a
+  MAESTRO_CLI_NO_ANALYTICS: "1"
+  MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: "true"
+
+jobs:
+  ios:
+    runs-on: macos-15
+    environment: e2e
+    timeout-minutes: 75
+    env:
+      E2E_SERVER: ${{ vars.E2E_SERVER }}
+      E2E_THREAD_SUBJECT: ${{ vars.E2E_THREAD_SUBJECT }}
+      E2E_THREAD_ID: ${{ vars.E2E_THREAD_ID }}
+      E2E_SESSION_COOKIE: ${{ secrets.E2E_SESSION_COOKIE }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: E2E configuration present
+        run: |
+          for v in E2E_SERVER E2E_THREAD_SUBJECT E2E_THREAD_ID E2E_SESSION_COOKIE; do
+            [ -n "$(printenv "$v")" ] || { echo "::error::$v is not set in the e2e environment"; exit 1; }
+          done
+      - name: Install (exact lockfile)
+        working-directory: apps/mobile
+        run: npm ci --no-audit --no-fund
+      - name: Install shared workspace packages (frozen lockfile)
+        run: pnpm install --frozen-lockfile --filter "@bye/native-shared..."
+      - name: CocoaPods
+        working-directory: apps/mobile/ios
+        run: pod install
+      - name: Build Debug app for the simulator
+        working-directory: apps/mobile
+        run: >-
+          xcodebuild -workspace ios/ByeMobile.xcworkspace -scheme ByeMobile -configuration Debug
+          -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath build/e2e CODE_SIGNING_ALLOWED=NO build
+      - name: Start Metro
+        working-directory: apps/mobile
+        run: |
+          nohup npx react-native start --port 8081 > metro.log 2>&1 &
+          for _ in $(seq 60); do curl -fs http://localhost:8081/status | grep -q running && exit 0; sleep 2; done
+          cat metro.log; exit 1
+      - name: Boot simulator and install
+        run: |
+          udid=$(xcrun simctl list devices available -j | node -e '
+            const d = JSON.parse(require("fs").readFileSync(0, "utf8")).devices;
+            const ios = Object.keys(d).filter((r) => r.includes("iOS")).sort().reverse();
+            const phone = ios.flatMap((r) => d[r]).find((x) => x.name.startsWith("iPhone"));
+            if (!phone) process.exit(1);
+            console.log(phone.udid);')
+          echo "UDID=$udid" >> "$GITHUB_ENV"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          xcrun simctl install "$udid" apps/mobile/build/e2e/Build/Products/Debug-iphonesimulator/ByeMobile.app
+      - name: Install Maestro
+        run: |
+          curl -fsSL -o maestro.zip "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
+          echo "${MAESTRO_SHA256}  maestro.zip" | shasum -a 256 -c -
+          unzip -q maestro.zip -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/maestro/bin" >> "$GITHUB_PATH"
+      - name: Smoke flows
+        run: >-
+          maestro --device "$UDID" test apps/mobile/e2e
+          -e E2E_SERVER="$E2E_SERVER" -e E2E_SESSION_COOKIE="$E2E_SESSION_COOKIE"
+          -e E2E_THREAD_SUBJECT="$E2E_THREAD_SUBJECT" -e E2E_THREAD_ID="$E2E_THREAD_ID"
+          --format junit --output e2e-ios.xml --test-output-dir e2e-ios
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: e2e-ios
+          path: |
+            e2e-ios.xml
+            e2e-ios
+            apps/mobile/metro.log
+          if-no-files-found: ignore
+
+  android:
+    runs-on: ubuntu-latest
+    environment: e2e
+    timeout-minutes: 75
+    env:
+      E2E_SERVER: ${{ vars.E2E_SERVER }}
+      E2E_THREAD_SUBJECT: ${{ vars.E2E_THREAD_SUBJECT }}
+      E2E_THREAD_ID: ${{ vars.E2E_THREAD_ID }}
+      E2E_SESSION_COOKIE: ${{ secrets.E2E_SESSION_COOKIE }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: E2E configuration present
+        run: |
+          for v in E2E_SERVER E2E_THREAD_SUBJECT E2E_THREAD_ID E2E_SESSION_COOKIE; do
+            [ -n "$(printenv "$v")" ] || { echo "::error::$v is not set in the e2e environment"; exit 1; }
+          done
+      - name: Install (exact lockfile)
+        working-directory: apps/mobile
+        run: npm ci --no-audit --no-fund
+      - name: Install shared workspace packages (frozen lockfile)
+        run: pnpm install --frozen-lockfile --filter "@bye/native-shared..."
+      - name: Assemble debug APK
+        working-directory: apps/mobile
+        run: npm run android:build
+      - name: Start Metro
+        working-directory: apps/mobile
+        run: |
+          nohup npx react-native start --port 8081 > metro.log 2>&1 &
+          for _ in $(seq 60); do curl -fs http://localhost:8081/status | grep -q running && exit 0; sleep 2; done
+          cat metro.log; exit 1
+      - name: Install Maestro
+        run: |
+          curl -fsSL -o maestro.zip "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
+          echo "${MAESTRO_SHA256}  maestro.zip" | sha256sum -c -
+          unzip -q maestro.zip -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/maestro/bin" >> "$GITHUB_PATH"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Smoke flows on the emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          # google_apis (not playstore) so `adb root` works for Chrome's command-line flags.
+          # TODO(e2e): confirm this image ships Chrome; if not, install a pinned Chrome APK here.
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: |
+            adb root && adb wait-for-device
+            adb shell 'echo "_ --disable-fre --no-default-browser-check --no-first-run" > /data/local/tmp/chrome-command-line'
+            adb install -r apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+            adb reverse tcp:8081 tcp:8081
+            maestro test apps/mobile/e2e -e E2E_SERVER="$E2E_SERVER" -e E2E_SESSION_COOKIE="$E2E_SESSION_COOKIE" -e E2E_THREAD_SUBJECT="$E2E_THREAD_SUBJECT" -e E2E_THREAD_ID="$E2E_THREAD_ID" --format junit --output e2e-android.xml --test-output-dir e2e-android
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: e2e-android
+          path: |
+            e2e-android.xml
+            e2e-android
+            apps/mobile/metro.log
+          if-no-files-found: ignore

@@ -1,0 +1,17 @@
+# Fresh install → add the E2E server through the onboarding handoff link → browser sign-in.
+appId: email.bye.app
+name: 01-sign-in
+tags: [smoke]
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+# First launch probes the hosted default; whatever it selects, the handoff link below adds the
+# stage and opens the sign-in for it (bye://add-instance, instance/handoff.ts).
+- openLink: bye://add-instance?url=${E2E_SERVER}
+- runFlow: ../subflows/dismiss-open-in.yaml
+- extendedWaitUntil:
+    visible: Add and sign in
+    timeout: 30000
+- tapOn: Add and sign in
+- runFlow: ../subflows/sign-in.yaml

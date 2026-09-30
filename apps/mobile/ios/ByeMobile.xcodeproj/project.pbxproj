@@ -8,35 +8,52 @@
 
 /* Begin PBXBuildFile section */
 		0673C829980A3AA6C680C497 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B984B300713DC67C658011CD /* Foundation.framework */; };
+		08F1DF42B16AED8091107411 /* Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C7060D73CEB532BE5158F3B /* Snapshot.swift */; };
 		0C80B921A6F3F58F76C31292 /* libPods-ByeMobile.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-ByeMobile.a */; };
 		11CAEE822558277E5ACBD908 /* ByeNotify.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 654F617B64C6E88628CFC26A /* ByeNotify.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
+		14D7F1F3CB3CF88CE9FC866F /* PushCryptoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB7BADC58653493A3016CF56 /* PushCryptoTests.swift */; };
 		1606AEA8E5CBAE4184077266 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 92922C2EEE86FD532C69A947 /* PrivacyInfo.xcprivacy */; };
 		1918D3D5FC8470B0B5614EBB /* ByeWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 19E916EC8DE8979676C4FC65 /* ByeWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		212FCA91E88783DF010DB9D8 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B984B300713DC67C658011CD /* Foundation.framework */; };
+		3234DB0BAC0CCD23DE100147 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 33CE62E16140CA2DB5EF2165 /* UserNotifications.framework */; };
 		37DEA9B2A2F39E5BF6F7B803 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 85BD064BFBF54C923578CA60 /* PrivacyInfo.xcprivacy */; };
+		38645CC60089CD1779D696BC /* Fixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AE32042A6F28F73631CB4EE /* Fixtures.swift */; };
+		474586C5F72B4D7210E895EC /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58FEC9579312D3DD921ADDC0 /* main.swift */; };
 		4E144E45499D6C657F538747 /* ByePushCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0F7748FA98B4E8469D81B7 /* ByePushCrypto.swift */; };
+		5CBFFD20677BF05014A64235 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B984B300713DC67C658011CD /* Foundation.framework */; };
 		5E90872C3A5F21A53AD8EA31 /* ByePush.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE7E381DFA7760ADFBB80A35 /* ByePush.swift */; };
 		68E287BFB9A064B512B75177 /* ByeWidgetBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFDA905E45D8512120079A15 /* ByeWidgetBridge.swift */; };
+		6BC7C71A3EC04E01DD791E0D /* ByeKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF0E47CA3321A117D5BC0A1 /* ByeKeychain.swift */; };
+		71F8F00823EDFBC1EBC90F6B /* ShareHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76D1F8A3CA7CF4567709311E /* ShareHandoff.swift */; };
 		7255F8A76EF38B67E65F5A8A /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 29367ADE0DB5695444FE7E43 /* PrivacyInfo.xcprivacy */; };
 		74D324F74E5CC4587DB36661 /* ByeSecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB7BE4A5A5D9FF3490F01EB5 /* ByeSecureStore.swift */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
+		76FD57362580327FC8E1EDB0 /* ByeKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF0E47CA3321A117D5BC0A1 /* ByeKeychain.swift */; };
+		7971921F08DE279248FFCABA /* KeychainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8FCE6270E840713BC433C8C /* KeychainTests.swift */; };
 		7CB1E7F108D79ABB05BA1055 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6827264657D28D2D9A24AEF8 /* Foundation.framework */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 		822001195183FBA4705632BB /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FA24BE9AF23C00903A739DCE /* UserNotifications.framework */; };
+		89114F98A50AA810E6638045 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA00B7525CA1A7683C37CFB7 /* NotificationService.swift */; };
 		9B9DEBE05EB3F6BA24E328BB /* ByeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33FCF1AE644E1E8577D048C8 /* ByeWidget.swift */; };
 		9BD6A9946B288E24D3B938D5 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D68DDDCA7568693687089AD /* SwiftUI.framework */; };
 		A1B2C3D40000000000000002 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000001 /* SceneDelegate.swift */; };
 		A3989E9F88D6BBFABA7C5568 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA00B7525CA1A7683C37CFB7 /* NotificationService.swift */; };
+		A8233201D6D089EB7FA9F92F /* ByePushCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0F7748FA98B4E8469D81B7 /* ByePushCrypto.swift */; };
 		A8F60FA782E3253888861489 /* ByeShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1CED6C0A0439D5B853E31ACF /* ByeShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AAD32A164B1E54B0C64E02C5 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C51AF4FB1A2D81FE94B124BD /* ShareViewController.swift */; };
+		AE9770FB7AD506001FF1B892 /* WidgetSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F930DC8761B67F03A36237CB /* WidgetSnapshotTests.swift */; };
 		B20207155192721ABEF8B048 /* ByePush.m in Sources */ = {isa = PBXBuildFile; fileRef = 07F44E473BEAD8679FBFD8D0 /* ByePush.m */; };
 		C0C962DC8FE627C9F2FB93C1 /* ByeWidgetBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 5BFB31DBDCDD7D1D6D58A94A /* ByeWidgetBridge.m */; };
 		CC277323FBA774ED8750F7E1 /* ByeSecureStore.m in Sources */ = {isa = PBXBuildFile; fileRef = 32882F1939FBA5D0A9F65DBF /* ByeSecureStore.m */; };
+		CE8B033624219F9E98474CC5 /* Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C7060D73CEB532BE5158F3B /* Snapshot.swift */; };
 		D169456954915398950AB98E /* ByePushCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0F7748FA98B4E8469D81B7 /* ByePushCrypto.swift */; };
+		D38E8BE43B7E3112424EDC82 /* ShareHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76D1F8A3CA7CF4567709311E /* ShareHandoff.swift */; };
 		DBE0369BBDB494A9BB292E5B /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0631239F62240D58030494E /* WidgetKit.framework */; };
 		EA263358C5BCDD0AC1731726 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1D29ED657D8B2685F2C07DD2 /* UniformTypeIdentifiers.framework */; };
+		F42B0A24E1E508775EBAEA69 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B984B300713DC67C658011CD /* Foundation.framework */; };
 		F5E4ED0739A4612E16AD8F06 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
+		FB6FFA9F30D9C0589B4ACBB2 /* ShareHandoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A68823A7BA743ABD31AEB8 /* ShareHandoffTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -61,6 +78,13 @@
 			remoteGlobalIDString = 8A118F7F8C41C8DB01EA9F19;
 			remoteInfo = ByeWidget;
 		};
+		F8BE7370AD5AB7DB06F04EE5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D76E1E90EE1D48A94DFCA3C2;
+			remoteInfo = ByeTestHost;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -81,6 +105,7 @@
 
 /* Begin PBXFileReference section */
 		07F44E473BEAD8679FBFD8D0 /* ByePush.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = ByePush.m; path = ByeMobile/ByePush.m; sourceTree = "<group>"; };
+		0EF9DA891AED7845F55357C9 /* ByeMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ByeMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07F961A680F5B00A75B9A /* ByeMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ByeMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = ByeMobile/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = ByeMobile/Info.plist; sourceTree = "<group>"; };
@@ -88,41 +113,61 @@
 		19E916EC8DE8979676C4FC65 /* ByeWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ByeWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1CED6C0A0439D5B853E31ACF /* ByeShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ByeShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1D29ED657D8B2685F2C07DD2 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = DEVELOPER_DIR; };
+		28F06FCF16015D497950840B /* ByeTestHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ByeTestHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		29367ADE0DB5695444FE7E43 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		308F4A8096CE96AF5304E12C /* ByeMobile.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ByeMobile/ByeMobile.entitlements; sourceTree = "<group>"; };
 		32882F1939FBA5D0A9F65DBF /* ByeSecureStore.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = ByeMobile/ByeSecureStore.m; sourceTree = "<group>"; };
+		33CE62E16140CA2DB5EF2165 /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/UserNotifications.framework; sourceTree = DEVELOPER_DIR; };
 		33FCF1AE644E1E8577D048C8 /* ByeWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeWidget.swift; sourceTree = "<group>"; };
 		3A0F7748FA98B4E8469D81B7 /* ByePushCrypto.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByePushCrypto.swift; sourceTree = "<group>"; };
 		3B4392A12AC88292D35C810B /* Pods-ByeMobile.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ByeMobile.debug.xcconfig"; path = "Target Support Files/Pods-ByeMobile/Pods-ByeMobile.debug.xcconfig"; sourceTree = "<group>"; };
 		3BCF18BE56F4AB5B29FDF05C /* ByeWidget.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ByeWidget.entitlements; sourceTree = "<group>"; };
 		444F561CB1B89FD1B774DBC3 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-ByeMobile.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ByeMobile.release.xcconfig"; path = "Target Support Files/Pods-ByeMobile/Pods-ByeMobile.release.xcconfig"; sourceTree = "<group>"; };
+		58FEC9579312D3DD921ADDC0 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		5AF0E47CA3321A117D5BC0A1 /* ByeKeychain.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ByeKeychain.swift; path = ByeMobile/ByeKeychain.swift; sourceTree = "<group>"; };
 		5BFB31DBDCDD7D1D6D58A94A /* ByeWidgetBridge.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = ByeMobile/ByeWidgetBridge.m; sourceTree = "<group>"; };
 		5D68DDDCA7568693687089AD /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/SwiftUI.framework; sourceTree = DEVELOPER_DIR; };
 		5DCACB8F33CDC322A6C60F78 /* libPods-ByeMobile.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-ByeMobile.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		654F617B64C6E88628CFC26A /* ByeNotify.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ByeNotify.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		6827264657D28D2D9A24AEF8 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS14.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = ByeMobile/AppDelegate.swift; sourceTree = "<group>"; };
+		76D1F8A3CA7CF4567709311E /* ShareHandoff.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareHandoff.swift; sourceTree = "<group>"; };
 		7AAC33FE0767C2E743D458C0 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = ByeMobile/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		85BD064BFBF54C923578CA60 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		875D16FACF412A2FE9D575E4 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		8A34535627E413CB2471B548 /* ByeShare.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ByeShare.entitlements; sourceTree = "<group>"; };
+		8AE32042A6F28F73631CB4EE /* Fixtures.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Fixtures.swift; sourceTree = "<group>"; };
 		92922C2EEE86FD532C69A947 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		98B6A89A33F33B6050CFD381 /* ByeNotify.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ByeNotify.entitlements; sourceTree = "<group>"; };
+		9C7060D73CEB532BE5158F3B /* Snapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Snapshot.swift; sourceTree = "<group>"; };
 		A0631239F62240D58030494E /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/WidgetKit.framework; sourceTree = DEVELOPER_DIR; };
 		A1B2C3D40000000000000001 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SceneDelegate.swift; path = ByeMobile/SceneDelegate.swift; sourceTree = "<group>"; };
+		A8FCE6270E840713BC433C8C /* KeychainTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KeychainTests.swift; sourceTree = "<group>"; };
+		B5A68823A7BA743ABD31AEB8 /* ShareHandoffTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareHandoffTests.swift; sourceTree = "<group>"; };
 		B984B300713DC67C658011CD /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		C51AF4FB1A2D81FE94B124BD /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		CA00B7525CA1A7683C37CFB7 /* NotificationService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		CB7BADC58653493A3016CF56 /* PushCryptoTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PushCryptoTests.swift; sourceTree = "<group>"; };
 		DB7BE4A5A5D9FF3490F01EB5 /* ByeSecureStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeMobile/ByeSecureStore.swift; sourceTree = "<group>"; };
 		DFDA905E45D8512120079A15 /* ByeWidgetBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ByeMobile/ByeWidgetBridge.swift; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
+		F930DC8761B67F03A36237CB /* WidgetSnapshotTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotTests.swift; sourceTree = "<group>"; };
 		FA24BE9AF23C00903A739DCE /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS14.0.sdk/System/Library/Frameworks/UserNotifications.framework; sourceTree = DEVELOPER_DIR; };
 		FE7E381DFA7760ADFBB80A35 /* ByePush.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ByePush.swift; path = ByeMobile/ByePush.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		0CE3C3652C3DB8CB06509CCE /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5CBFFD20677BF05014A64235 /* Foundation.framework in Frameworks */,
+				3234DB0BAC0CCD23DE100147 /* UserNotifications.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		13B07F8C1A680F5B00A75B9A /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -137,6 +182,14 @@
 			files = (
 				0673C829980A3AA6C680C497 /* Foundation.framework in Frameworks */,
 				EA263358C5BCDD0AC1731726 /* UniformTypeIdentifiers.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F4E137205E5DA28DB14C7B79 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F42B0A24E1E508775EBAEA69 /* Foundation.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -178,6 +231,7 @@
 				308F4A8096CE96AF5304E12C /* ByeMobile.entitlements */,
 				FE7E381DFA7760ADFBB80A35 /* ByePush.swift */,
 				07F44E473BEAD8679FBFD8D0 /* ByePush.m */,
+				5AF0E47CA3321A117D5BC0A1 /* ByeKeychain.swift */,
 			);
 			name = ByeMobile;
 			sourceTree = "<group>";
@@ -189,6 +243,7 @@
 				C51AF4FB1A2D81FE94B124BD /* ShareViewController.swift */,
 				875D16FACF412A2FE9D575E4 /* Info.plist */,
 				8A34535627E413CB2471B548 /* ByeShare.entitlements */,
+				76D1F8A3CA7CF4567709311E /* ShareHandoff.swift */,
 			);
 			name = ByeShare;
 			path = ByeShare;
@@ -235,6 +290,8 @@
 				FE3AF6EDEC72B57B714571F9 /* ByeWidget */,
 				173D531209F01657616052CB /* ByeShare */,
 				242169642AE02D23EE5FD3CD /* ByeNotify */,
+				AF1B64AC8E4C03DD91404E84 /* ByeMobileTests */,
+				F4A249C7421279B2CA96653B /* ByeTestHost */,
 			);
 			indentWidth = 2;
 			sourceTree = "<group>";
@@ -248,8 +305,23 @@
 				19E916EC8DE8979676C4FC65 /* ByeWidget.appex */,
 				1CED6C0A0439D5B853E31ACF /* ByeShare.appex */,
 				654F617B64C6E88628CFC26A /* ByeNotify.appex */,
+				0EF9DA891AED7845F55357C9 /* ByeMobileTests.xctest */,
+				28F06FCF16015D497950840B /* ByeTestHost.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		AF1B64AC8E4C03DD91404E84 /* ByeMobileTests */ = {
+			isa = PBXGroup;
+			children = (
+				8AE32042A6F28F73631CB4EE /* Fixtures.swift */,
+				A8FCE6270E840713BC433C8C /* KeychainTests.swift */,
+				CB7BADC58653493A3016CF56 /* PushCryptoTests.swift */,
+				B5A68823A7BA743ABD31AEB8 /* ShareHandoffTests.swift */,
+				F930DC8761B67F03A36237CB /* WidgetSnapshotTests.swift */,
+			);
+			name = ByeMobileTests;
+			path = ByeMobileTests;
 			sourceTree = "<group>";
 		};
 		BBD78D7AC51CEA395F1C20DB /* Pods */ = {
@@ -270,8 +342,18 @@
 				1D29ED657D8B2685F2C07DD2 /* UniformTypeIdentifiers.framework */,
 				6827264657D28D2D9A24AEF8 /* Foundation.framework */,
 				FA24BE9AF23C00903A739DCE /* UserNotifications.framework */,
+				33CE62E16140CA2DB5EF2165 /* UserNotifications.framework */,
 			);
 			name = iOS;
+			sourceTree = "<group>";
+		};
+		F4A249C7421279B2CA96653B /* ByeTestHost */ = {
+			isa = PBXGroup;
+			children = (
+				58FEC9579312D3DD921ADDC0 /* main.swift */,
+			);
+			name = ByeTestHost;
+			path = ByeTestHost;
 			sourceTree = "<group>";
 		};
 		FE3AF6EDEC72B57B714571F9 /* ByeWidget */ = {
@@ -281,6 +363,7 @@
 				33FCF1AE644E1E8577D048C8 /* ByeWidget.swift */,
 				7AAC33FE0767C2E743D458C0 /* Info.plist */,
 				3BCF18BE56F4AB5B29FDF05C /* ByeWidget.entitlements */,
+				9C7060D73CEB532BE5158F3B /* Snapshot.swift */,
 			);
 			name = ByeWidget;
 			path = ByeWidget;
@@ -331,6 +414,24 @@
 			productReference = 13B07F961A680F5B00A75B9A /* ByeMobile.app */;
 			productType = "com.apple.product-type.application";
 		};
+		184B645B5A1D2E58A5C38952 /* ByeMobileTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C7CCA3F5CB4274DB1987CB96 /* Build configuration list for PBXNativeTarget "ByeMobileTests" */;
+			buildPhases = (
+				0FEF70EE8E4F2B985830414D /* Sources */,
+				0CE3C3652C3DB8CB06509CCE /* Frameworks */,
+				D890A0633F94316313B0CFF2 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BA9A5ABAA3EF511ED7AFC481 /* PBXTargetDependency */,
+			);
+			name = ByeMobileTests;
+			productName = ByeMobileTests;
+			productReference = 0EF9DA891AED7845F55357C9 /* ByeMobileTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		29E2EA6E50CAE1F33EABB99C /* ByeShare */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0CA734697BC860FCF1C56426 /* Build configuration list for PBXNativeTarget "ByeShare" */;
@@ -365,6 +466,23 @@
 			productReference = 19E916EC8DE8979676C4FC65 /* ByeWidget.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		D76E1E90EE1D48A94DFCA3C2 /* ByeTestHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 95EE08CA7BD8D1AAA2F8BE83 /* Build configuration list for PBXNativeTarget "ByeTestHost" */;
+			buildPhases = (
+				5E74811EB551B5FC82850010 /* Sources */,
+				F4E137205E5DA28DB14C7B79 /* Frameworks */,
+				B68520359212B2B10EDC7CB8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ByeTestHost;
+			productName = ByeTestHost;
+			productReference = 28F06FCF16015D497950840B /* ByeTestHost.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -395,6 +513,8 @@
 				8A118F7F8C41C8DB01EA9F19 /* ByeWidget */,
 				29E2EA6E50CAE1F33EABB99C /* ByeShare */,
 				0E1E012BFA6BB56DEADA3640 /* ByeNotify */,
+				184B645B5A1D2E58A5C38952 /* ByeMobileTests */,
+				D76E1E90EE1D48A94DFCA3C2 /* ByeTestHost */,
 			);
 		};
 /* End PBXProject section */
@@ -431,6 +551,20 @@
 			buildActionMask = 2147483647;
 			files = (
 				37DEA9B2A2F39E5BF6F7B803 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B68520359212B2B10EDC7CB8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D890A0633F94316313B0CFF2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -521,6 +655,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0FEF70EE8E4F2B985830414D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				38645CC60089CD1779D696BC /* Fixtures.swift in Sources */,
+				7971921F08DE279248FFCABA /* KeychainTests.swift in Sources */,
+				14D7F1F3CB3CF88CE9FC866F /* PushCryptoTests.swift in Sources */,
+				FB6FFA9F30D9C0589B4ACBB2 /* ShareHandoffTests.swift in Sources */,
+				AE9770FB7AD506001FF1B892 /* WidgetSnapshotTests.swift in Sources */,
+				A8233201D6D089EB7FA9F92F /* ByePushCrypto.swift in Sources */,
+				89114F98A50AA810E6638045 /* NotificationService.swift in Sources */,
+				CE8B033624219F9E98474CC5 /* Snapshot.swift in Sources */,
+				71F8F00823EDFBC1EBC90F6B /* ShareHandoff.swift in Sources */,
+				76FD57362580327FC8E1EDB0 /* ByeKeychain.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		13B07F871A680F5B00A75B9A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -534,6 +685,7 @@
 				5E90872C3A5F21A53AD8EA31 /* ByePush.swift in Sources */,
 				B20207155192721ABEF8B048 /* ByePush.m in Sources */,
 				D169456954915398950AB98E /* ByePushCrypto.swift in Sources */,
+				6BC7C71A3EC04E01DD791E0D /* ByeKeychain.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -542,6 +694,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				AAD32A164B1E54B0C64E02C5 /* ShareViewController.swift in Sources */,
+				D38E8BE43B7E3112424EDC82 /* ShareHandoff.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5E74811EB551B5FC82850010 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				474586C5F72B4D7210E895EC /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -550,6 +711,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				9B9DEBE05EB3F6BA24E328BB /* ByeWidget.swift in Sources */,
+				08F1DF42B16AED8091107411 /* Snapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -567,6 +729,12 @@
 			name = ByeWidget;
 			target = 8A118F7F8C41C8DB01EA9F19 /* ByeWidget */;
 			targetProxy = A9BEAF318DDAF65599C91710 /* PBXContainerItemProxy */;
+		};
+		BA9A5ABAA3EF511ED7AFC481 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ByeTestHost;
+			target = D76E1E90EE1D48A94DFCA3C2 /* ByeTestHost */;
+			targetProxy = F8BE7370AD5AB7DB06F04EE5 /* PBXContainerItemProxy */;
 		};
 		E461EB5C907759EC8288EB7F /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -601,6 +769,26 @@
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
+		};
+		1147B98593BA33419F6F5901 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = email.bye.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ByeTestHost.app/ByeTestHost";
+			};
+			name = Debug;
 		};
 		13B07F941A680F5B00A75B9A /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -657,6 +845,32 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "ByeMobile/ByeMobile-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
+		593DC20D2717EC3A4408CBC8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = email.bye.app.testhost;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
@@ -864,6 +1078,52 @@
 			};
 			name = Debug;
 		};
+		A069AB910288B48C945AEF1B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = email.bye.app.testhost;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B4666E01194F22F64982AE47 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = email.bye.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ByeTestHost.app/ByeTestHost";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		B6EE7EB830CACDC7BF6BDC31 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -968,11 +1228,29 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		95EE08CA7BD8D1AAA2F8BE83 /* Build configuration list for PBXNativeTarget "ByeTestHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				593DC20D2717EC3A4408CBC8 /* Release */,
+				A069AB910288B48C945AEF1B /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		C3D296335C6EC884CF027E14 /* Build configuration list for PBXNativeTarget "ByeWidget" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BADC862B718683C54F2B3993 /* Release */,
 				9BAB3AE2E8D91E9733D94C38 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C7CCA3F5CB4274DB1987CB96 /* Build configuration list for PBXNativeTarget "ByeMobileTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B4666E01194F22F64982AE47 /* Release */,
+				1147B98593BA33419F6F5901 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

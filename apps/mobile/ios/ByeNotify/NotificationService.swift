@@ -42,10 +42,16 @@ final class NotificationService: UNNotificationServiceExtension {
   }
 
   static func decode(_ userInfo: [AnyHashable: Any]) -> Notice? {
+    decode(userInfo) { try? ByePushCrypto.load() }
+  }
+
+  /// The real notice from the gateway's `bye.p` ciphertext; nil leaves the generic alert. Keys are
+  /// read only once there is ciphertext to open.
+  static func decode(_ userInfo: [AnyHashable: Any], keys: () -> ByePushCrypto.Keys?) -> Notice? {
     guard let envelope = userInfo["bye"] as? [String: Any],
       let sealed = envelope["p"] as? String,
       let message = ByePushCrypto.fromBase64url(sealed),
-      let keys = try? ByePushCrypto.load(),
+      let keys = keys(),
       let plain = try? ByePushCrypto.decrypt(message, keys: keys),
       let payload = try? JSONSerialization.jsonObject(with: plain) as? [String: Any]
     else { return nil }

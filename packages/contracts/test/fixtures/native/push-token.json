@@ -1,0 +1,108 @@
+{
+  "description": "ByePush.requestToken answers (ByePush.swift, ByePushModule.kt) and how the shared app reads them (decodePushToken). produced: what each native side must emit for the RFC 8291 receiver keys; invalid: raw answers the app must treat as no token.",
+  "produced": [
+    {
+      "name": "APNs sandbox",
+      "platform": "apns",
+      "token": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "sandbox": true,
+      "expected": {
+        "platform": "apns",
+        "token": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "sandbox": true,
+        "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+        "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+      }
+    },
+    {
+      "name": "FCM",
+      "platform": "fcm",
+      "token": "fcm-token:APA91bExample_Token-123",
+      "sandbox": false,
+      "expected": {
+        "platform": "fcm",
+        "token": "fcm-token:APA91bExample_Token-123",
+        "sandbox": false,
+        "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+        "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+      }
+    }
+  ],
+  "decoded": [
+    {
+      "name": "sandbox missing means production",
+      "raw": "{\"platform\": \"apns\", \"token\": \"t1\", \"p256dh\": \"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4\", \"auth\": \"BTBZMqHH6r4Tts7J_aSIgg\"}",
+      "expected": {
+        "platform": "apns",
+        "token": "t1",
+        "sandbox": false,
+        "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+        "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+      }
+    },
+    {
+      "name": "non-boolean sandbox is production",
+      "raw": "{\"platform\": \"apns\", \"token\": \"t1\", \"sandbox\": \"true\", \"p256dh\": \"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4\", \"auth\": \"BTBZMqHH6r4Tts7J_aSIgg\"}",
+      "expected": {
+        "platform": "apns",
+        "token": "t1",
+        "sandbox": false,
+        "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+        "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+      }
+    },
+    {
+      "name": "extra fields are dropped",
+      "raw": "{\"platform\": \"fcm\", \"token\": \"t2\", \"sandbox\": false, \"p256dh\": \"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4\", \"auth\": \"BTBZMqHH6r4Tts7J_aSIgg\", \"private\": \"never\"}",
+      "expected": {
+        "platform": "fcm",
+        "token": "t2",
+        "sandbox": false,
+        "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+        "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "null",
+      "raw": null
+    },
+    {
+      "name": "empty",
+      "raw": ""
+    },
+    {
+      "name": "not JSON",
+      "raw": "{platform:apns"
+    },
+    {
+      "name": "JSON null",
+      "raw": "null"
+    },
+    {
+      "name": "unknown platform",
+      "raw": "{\"platform\": \"webpush\", \"token\": \"t\", \"p256dh\": \"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4\", \"auth\": \"BTBZMqHH6r4Tts7J_aSIgg\"}"
+    },
+    {
+      "name": "missing token",
+      "raw": "{\"platform\": \"apns\", \"p256dh\": \"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4\", \"auth\": \"BTBZMqHH6r4Tts7J_aSIgg\"}"
+    },
+    {
+      "name": "empty token",
+      "raw": "{\"platform\": \"apns\", \"token\": \"\", \"p256dh\": \"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4\", \"auth\": \"BTBZMqHH6r4Tts7J_aSIgg\"}"
+    },
+    {
+      "name": "missing p256dh",
+      "raw": "{\"platform\": \"apns\", \"token\": \"t\", \"auth\": \"BTBZMqHH6r4Tts7J_aSIgg\"}"
+    },
+    {
+      "name": "missing auth",
+      "raw": "{\"platform\": \"fcm\", \"token\": \"t\", \"p256dh\": \"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4\"}"
+    },
+    {
+      "name": "numeric token",
+      "raw": "{\"platform\": \"fcm\", \"token\": 42, \"p256dh\": \"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4\", \"auth\": \"BTBZMqHH6r4Tts7J_aSIgg\"}"
+    }
+  ]
+}

@@ -17,7 +17,6 @@ import com.facebook.react.modules.core.PermissionListener
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.messaging.FirebaseMessaging
-import org.json.JSONObject
 
 /**
  * Push bridge (spec P1.7, E23), the Android side of iOS `ByePush`: notification permission, the
@@ -57,15 +56,7 @@ class ByePushModule(context: ReactApplicationContext) : ReactContextBaseJavaModu
         try {
           val keys = ByePushCrypto.loadOrCreate(context)
           ByeMessagingService.ensureChannel(context)
-          promise.resolve(
-            JSONObject()
-              .put("platform", "fcm")
-              .put("token", task.result)
-              .put("sandbox", false)
-              .put("p256dh", keys.p256dh)
-              .put("auth", keys.authSecret)
-              .toString()
-          )
+          promise.resolve(ByePushCrypto.registration(task.result, keys))
         } catch (error: Exception) {
           promise.reject("PushKeys", "could not create push keys")
         }

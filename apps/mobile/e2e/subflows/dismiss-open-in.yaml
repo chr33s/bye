@@ -1,0 +1,10 @@
+# iOS may ask before a custom-scheme link opens the app; Android resolves it directly.
+appId: email.bye.app
+---
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn:
+          text: Open
+          optional: true
