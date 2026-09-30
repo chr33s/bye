@@ -18,7 +18,7 @@ import { OnboardingService } from "../service.ts";
 
 export interface OnboardingEnv {
   readonly ONBOARDING: DurableObjectNamespace<OnboardingDO>;
-  /** Public origin, e.g. https://onboarding.bye.software. */
+  /** Public origin, e.g. https://bye.chr33s.dev. */
   readonly BYE_ONBOARDING_ORIGIN: string;
   readonly BYE_ONBOARDING_KEYS: string;
   /** 64 hex: signs session cookies. */

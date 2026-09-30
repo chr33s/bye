@@ -6,7 +6,7 @@ It has not been run against Cloudflare. The acceptance scenarios (OB01–OB10 pl
 
 There are two ways to run it. Both use the same service, HTTP handler (`http.ts`) and rules:
 
-- **Hosted (default for new users):** a Cloudflare Worker at `https://onboarding.<DOMAIN>`, with the Alchemy run executed by a deployer provisioned in the user's own account ([Hosted](#hosted)).
+- **Hosted (default for new users):** a Cloudflare Worker at `https://bye.chr33s.dev` (`BYE_ONBOARDING_ORIGIN`, else `https://onboarding.<DOMAIN>`), with the Alchemy run executed by a deployer provisioned in the user's own account ([Hosted](#hosted)).
 - **Self-hosted Node process:** `pnpm onboarding` on a machine with the release checkout, behind Cloudflare Access ([Run (Node)](#run-node)).
 
 ## Hosted
@@ -31,10 +31,10 @@ user's account ─ images copied into registry.cloudflare.com/<account>/bye-*
 
 **Separate from the app.** The service is its own Alchemy stack (`ByeOnboarding`): `pnpm run deploy` never deploys it, only `pnpm deploy:onboarding` does. In CI it is opt-in: set the repository variable `BYE_ONBOARDING` to `true` and the `onboarding` job in `ci.yml` deploys it from `main`, and `release-images.yml` builds the release images on version tags. Both skip otherwise.
 
-**Deploy the service** (Bye's account; `DOMAIN` names the zone, so the page is `https://onboarding.<DOMAIN>`):
+**Deploy the service** (Bye's account; the page is `BYE_ONBOARDING_ORIGIN`, else `https://onboarding.<DOMAIN>`; its host must be in a zone on the account):
 
 ```sh
-DOMAIN=bye.software \
+BYE_ONBOARDING_ORIGIN=https://bye.chr33s.dev \
 BYE_ONBOARDING_KEYS=v1:$(openssl rand -hex 32) \
 BYE_ONBOARDING_SESSION_KEY=$(openssl rand -hex 32) \
 BYE_ONBOARDING_DEPLOYER_KEY=$(openssl rand -hex 32) \
@@ -42,7 +42,7 @@ CLOUDFLARE_OAUTH_CLIENT_ID=… \
 pnpm deploy:onboarding
 ```
 
-- **CI:** the `onboarding` environment holds `BYE_ONBOARDING_KEYS`, `BYE_ONBOARDING_SESSION_KEY`, `BYE_ONBOARDING_DEPLOYER_KEY`, `CLOUDFLARE_OAUTH_CLIENT_SECRET` (optional) and the prod `PROD_CLOUDFLARE_*` / `PROD_BYE_STATE_*` credentials, plus the variables `CLOUDFLARE_OAUTH_CLIENT_ID` and optionally `BYE_ONBOARDING_ACCESS_TEAM_DOMAIN` / `BYE_ONBOARDING_ACCESS_AUD`; `DOMAIN` is the repository variable the release jobs use. `pnpm plan:onboarding` previews a change.
+- **CI:** the `onboarding` environment holds `BYE_ONBOARDING_KEYS`, `BYE_ONBOARDING_SESSION_KEY`, `BYE_ONBOARDING_DEPLOYER_KEY`, `CLOUDFLARE_OAUTH_CLIENT_SECRET` (optional) and the prod `PROD_CLOUDFLARE_*` / `PROD_BYE_STATE_*` credentials, plus the variables `BYE_ONBOARDING_ORIGIN` (`https://bye.chr33s.dev`), `CLOUDFLARE_OAUTH_CLIENT_ID` and optionally `BYE_ONBOARDING_ACCESS_TEAM_DOMAIN` / `BYE_ONBOARDING_ACCESS_AUD`; `DOMAIN` is the repository variable the release jobs use. `pnpm plan:onboarding` previews a change.
 - **Keys:** escrow all three. `BYE_ONBOARDING_KEYS` seals credentials and runtime secrets (losing it loses the generated secrets). `BYE_ONBOARDING_SESSION_KEY` signs session cookies (rotating it signs everyone out). `BYE_ONBOARDING_DEPLOYER_KEY` derives each installation's deployer secret (rotating it makes existing deployers refuse until the next bootstrap re-uploads them).
 - **Identity:** session mode by default: the operator is the signed session, so anyone can start and only that session can act. Set `BYE_ONBOARDING_ACCESS_TEAM_DOMAIN` and `BYE_ONBOARDING_ACCESS_AUD` to require Cloudflare Access instead.
 - **Release:** `release-pin.ts` is the pinned release; until it names one, the page reports "no release pinned" and nothing can be installed. Publish a release with `node --experimental-strip-types infra/onboarding/release-manifest.ts <tag> <image digests…>` (see the file header) after CI has pushed the four `linux/amd64` images to GHCR as public packages.

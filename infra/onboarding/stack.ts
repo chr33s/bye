@@ -1,17 +1,17 @@
 // The hosted onboarding service (infra/onboarding/spec.md Part J): one Worker and one Durable Object
-// in Bye's account, served at onboarding.<DOMAIN>. Separate from the MailboxPlatform stack: it is a
+// in Bye's account, served at BYE_ONBOARDING_ORIGIN, else onboarding.<DOMAIN>. Separate from the MailboxPlatform stack: it is a
 // single shared service, not a stage, and it never binds a management token (each installation's
 // deploy runs in that installation's account through the operator's OAuth grant).
 //
 // Deployed only on its own (`pnpm deploy:onboarding`, or the opt-in CI job); `pnpm run deploy`
 // never touches it.
 //
-// Usage: DOMAIN=bye.software … pnpm deploy:onboarding
+// Usage: BYE_ONBOARDING_ORIGIN=https://bye.chr33s.dev … pnpm deploy:onboarding
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { Config, Effect, Redacted } from "effect";
 import { COMPATIBILITY } from "../resources/compat.ts";
-import { parseDomain } from "../resources/domain.ts";
+import { ONBOARDING_ORIGIN, parseDomain } from "../resources/domain.ts";
 import { selectState } from "../state/client.ts";
 import type { OnboardingDO } from "./worker/onboarding.ts";
 
@@ -26,10 +26,21 @@ export default Alchemy.Stack(
   // Same state selection as the application stack: STATE_BACKEND=http in CI, else Cloudflare.state().
   { providers: Cloudflare.providers(), state: selectState() },
   Effect.gen(function* () {
-    const domain = parseDomain(yield* Config.String("DOMAIN"));
+    // An explicit origin wins (resources/domain.ts); only its host is used, served over https.
+    const origin = yield* optional(ONBOARDING_ORIGIN);
+    const domain = parseDomain(yield* optional("DOMAIN"));
 
-    if (domain === undefined) return yield* Effect.die(new Error("set DOMAIN, e.g. bye.software"));
-    const host = `onboarding.${domain}`;
+    const host =
+      origin !== ""
+        ? new URL(origin).hostname
+        : domain !== undefined
+          ? `onboarding.${domain}`
+          : undefined;
+
+    if (host === undefined)
+      return yield* Effect.die(
+        new Error("set BYE_ONBOARDING_ORIGIN (e.g. https://bye.chr33s.dev) or DOMAIN"),
+      );
 
     const worker = yield* Cloudflare.Worker("Onboarding", {
       name: "bye-onboarding",

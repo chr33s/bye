@@ -12,15 +12,21 @@ export const ONBOARDING_PAGE = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Set up Bye</title>
+<meta name="theme-color" content="#f6f1e7">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
+<header class="top">
+  <span class="brand"><svg class="mark" viewBox="0 0 48 40" aria-hidden="true" focusable="false"><rect x="0" y="8" width="38" height="30" rx="8" fill="#d5613f"/><path d="M8 16l11 8 11-8" fill="none" stroke="#f6f1e7" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="37" cy="10" r="9" fill="#1d1b16" stroke="#f6f1e7" stroke-width="2"/><rect x="35.6" y="4.5" width="2.8" height="8" rx="1.4" fill="#f6f1e7"/><rect x="33" y="10" width="8" height="4.5" rx="2" fill="#f6f1e7"/></svg><span class="wordmark">bye<span class="dot">.</span></span></span>
+  <span class="tag">Setup</span>
+</header>
 <main>
   <p id="error" class="bad" role="alert"></p>
 
-  <section id="s-connect" aria-labelledby="h-connect" hidden>
-    <h1 id="h-connect">Set up Bye</h1>
-    <p>Bye runs in your Cloudflare account.</p>
+  <section id="s-connect" class="hero" aria-labelledby="h-connect" hidden>
+    <p class="eyebrow">Email, but with boundaries</p>
+    <h1 id="h-connect">Set up <em>bye</em> in your own Cloudflare.</h1>
+    <p class="lede">Bye runs in your Cloudflare account. Connect it, pick an address, and you're done in a few minutes.</p>
     <p id="auth-note" class="warn"></p>
     <button id="connect">Continue with Cloudflare</button>
     <details><summary>What Bye creates</summary><ul id="creates" class="muted"></ul>
@@ -46,13 +52,13 @@ export const ONBOARDING_PAGE = `<!doctype html>
   <section id="s-domain" aria-labelledby="h-domain" hidden>
     <h1 id="h-domain">Where should Bye live?</h1>
     <div id="zones-box">
-      <p><label>Domain<br><select id="zone"></select></label></p>
-      <p><label for="label">Bye address</label><br>
-        <span class="row"><input id="label" type="text" value="bye" size="16" autocomplete="off" spellcheck="false" aria-describedby="label-help"> <span>.</span> <span id="zone-name"></span></span></p>
-      <p id="label-help" class="muted">Lowercase letters, digits and hyphens.</p>
-      <p>Your Bye:<br><strong id="preview"></strong></p>
-      <p><label><input id="push" type="checkbox" checked aria-describedby="push-help"> Push notifications</label><br>
-        <span id="push-help" class="muted">Notifications in browsers and the Bye apps. The apps get them through Bye's push service, encrypted so it can't read them. You can change this later.</span></p>
+      <p class="field"><label for="zone">Domain</label><select id="zone"></select></p>
+      <p class="field"><label for="label">Bye address</label>
+        <span class="addr"><input id="label" type="text" value="bye" size="16" autocomplete="off" spellcheck="false" aria-describedby="label-help"><span class="suffix"><span>.</span><span id="zone-name"></span></span></span></p>
+      <p id="label-help" class="muted small">Lowercase letters, digits and hyphens.</p>
+      <p class="preview">Your Bye <strong id="preview"></strong></p>
+      <p class="check"><label><input id="push" type="checkbox" checked aria-describedby="push-help"> Push notifications</label>
+        <span id="push-help" class="muted small">Notifications in browsers and the Bye apps. The apps get them through Bye's push service, encrypted so it can't read them. You can change this later.</span></p>
       <button id="create-btn">Create Bye</button>
     </div>
     <div id="no-zones" hidden>
@@ -62,7 +68,7 @@ export const ONBOARDING_PAGE = `<!doctype html>
         <button id="refresh-zones" class="secondary">Refresh domains</button>
       </div>
     </div>
-    <p class="muted">Choosing a domain does not change its mail. Incoming email is a separate step you can do later.</p>
+    <p class="muted small">Choosing a domain does not change its mail. Incoming email is a separate step you can do later.</p>
   </section>
 
   <section id="s-progress" aria-labelledby="h-progress" hidden>
@@ -136,41 +142,129 @@ export const ONBOARDING_PAGE = `<!doctype html>
     </details>
   </section>
 </main>
+<footer class="foot"><span>© Bye Software</span><span>Runs in your Cloudflare account</span></footer>
 <script src="/app.js"></script>
 </body>
 </html>
 `;
 
-export const ONBOARDING_STYLE = `:root { --bg:#fff; --fg:#1a1a1a; --muted:#5c5c5c; --line:#ddd; --accent:#1d4ed8; --bad:#b91c1c; --ok:#15803d; --warn:#a16207; color-scheme: light dark; }
-@media (prefers-color-scheme: dark) { :root { --bg:#111; --fg:#eee; --muted:#aaa; --line:#333; --accent:#8ab4ff; --bad:#f87171; --ok:#4ade80; --warn:#facc15; } }
+export const ONBOARDING_STYLE = `/* Bye brand (design.pdf), the same tokens as apps/web/public/styles.css: Sunset accent, Ink,
+   Paper, Pine; Fraunces for headlines and the wordmark, DM Sans for everything else. The CSP has
+   no font-src, so fonts resolve to locally installed faces, then the fallbacks. */
+:root {
+  --bg: #f6f1e7; --surface: #fdfcf7; --fg: #1d1b16; --muted: #6a655a; --line: #e2dccd;
+  --accent: #d5613f; --pine: #2f5d50; --on-ink: #f6f1e7;
+  --bad: #b3401f; --ok: #2f5d50; --warn: #8a5a00;
+  --blob-a: #dfe1d7; --blob-b: #f5dccf;
+  --font-display: Fraunces, "Iowan Old Style", Georgia, "Times New Roman", serif;
+  --font-body: "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1d1b16; --surface: #26231d; --fg: #f6f1e7; --muted: #a8a191; --line: #38342b;
+    --accent: #e0714f; --pine: #6fae99; --on-ink: #1d1b16;
+    --bad: #f08a6c; --ok: #6fae99; --warn: #e3b35c;
+    --blob-a: #262a24; --blob-b: #33251f;
+  }
+}
 * { box-sizing: border-box; }
-body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
-main { max-width: 640px; margin: 0 auto; padding: 32px 16px 64px; }
-h1 { font-size: 1.6rem; margin: 0 0 8px; }
-h3 { font-size: 1rem; margin: 16px 0 4px; }
-section { padding: 8px 0 24px; }
-#s-manage { border-top: 1px solid var(--line); padding-top: 16px; }
+html { background: var(--bg); }
+body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; color: var(--fg); font: 16px/1.55 var(--font-body); overflow-x: hidden; position: relative; }
+body::before, body::after { content: ""; position: fixed; z-index: -1; border-radius: 50%; pointer-events: none; }
+body::before { width: 260px; height: 260px; top: 150px; right: -130px; background: var(--blob-a); }
+body::after { width: 420px; height: 420px; bottom: -210px; left: -150px; background: var(--blob-b); }
+body > * { position: relative; }
+
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; max-width: 1120px; margin: 0 auto; padding: 28px 24px 8px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; }
+.mark { width: 44px; height: 37px; }
+.wordmark { font: italic 800 2rem/1 var(--font-display); letter-spacing: -0.04em; }
+.wordmark .dot { color: var(--accent); }
+.tag, .eyebrow { display: inline-block; padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+
+main { flex: 1; width: 100%; max-width: 680px; margin: 0 auto; padding: 24px 16px 48px; }
+section { margin: 0 0 20px; padding: 28px; background: var(--surface); border: 1px solid var(--line); border-radius: 28px; }
+section.hero { padding: 40px 0 8px; background: none; border: 0; text-align: center; }
+h1 { font: 800 clamp(1.9rem, 5vw, 2.6rem)/1.08 var(--font-display); letter-spacing: -0.035em; margin: 0 0 12px; overflow-wrap: anywhere; }
+.hero h1 { font-size: clamp(2.5rem, 8vw, 4.25rem); margin: 20px 0 16px; }
+h1 em { font-style: italic; color: var(--accent); }
+h3 { font-size: .75rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; margin: 24px 0 8px; }
+h4 { font-size: .9rem; margin: 12px 0 4px; }
+p { margin: 0 0 12px; }
+.lede { font-size: 1.15rem; color: var(--muted); max-width: 34em; margin: 0 auto 28px; }
 .muted { color: var(--muted); }
+.small { font-size: .875rem; }
 .bad { color: var(--bad); } .ok { color: var(--ok); } .warn { color: var(--warn); }
-button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--bg); cursor: pointer; }
-button.secondary { background: transparent; color: var(--accent); }
-button:disabled { opacity: .5; cursor: not-allowed; }
-select, input[type=text] { font: inherit; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); max-width: 100%; }
-table { border-collapse: collapse; width: 100%; font-size: .9rem; }
-td, th { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+#error:empty, #auth-note:empty, #op-error:empty, #op-next:empty { display: none; }
+#error { margin: 0 0 16px; padding: 12px 18px; border: 1.5px solid var(--bad); border-radius: 18px; background: var(--surface); }
+a { color: var(--pine); text-underline-offset: 3px; }
+
+button { font: 700 1rem/1 var(--font-body); padding: 15px 26px; border-radius: 999px; border: 1.5px solid var(--fg); background: var(--fg); color: var(--on-ink); cursor: pointer; transition: transform .12s ease, background .12s ease; }
+button:hover:not(:disabled) { transform: translateY(-1px); }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+button.secondary { background: transparent; color: var(--fg); padding: 11px 20px; font-size: .9rem; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+#connect, #first-btn, #approve-btn { background: var(--accent); border-color: var(--accent); color: #1d1b16; }
+
+select, input[type=text] { font: inherit; padding: 13px 18px; border: 1.5px solid var(--fg); border-radius: 999px; background: var(--surface); color: var(--fg); max-width: 100%; }
+select { appearance: none; padding-right: 44px; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 22px) 55%, calc(100% - 16px) 55%; background-size: 6px 6px; background-repeat: no-repeat; }
+input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--pine); vertical-align: -3px; margin: 0 8px 0 0; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > label { font-weight: 700; font-size: .9rem; }
+.addr { display: flex; align-items: center; border: 1.5px solid var(--fg); border-radius: 999px; background: var(--surface); padding-right: 18px; max-width: 100%; }
+.addr:focus-within { outline: 3px solid var(--accent); outline-offset: 2px; }
+.addr input[type=text] { border: 0; outline: 0; flex: 1 1 6em; min-width: 4em; background: transparent; }
+.addr .suffix { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.preview { padding: 14px 18px; border-radius: 18px; background: var(--bg); display: flex; flex-direction: column; gap: 2px; font-size: .8rem; color: var(--muted); }
+.preview strong { font: 800 1.2rem/1.3 var(--font-display); color: var(--fg); overflow-wrap: anywhere; }
+.preview strong.bad { color: var(--bad); font: 600 1rem/1.3 var(--font-body); }
+.check label { font-weight: 700; }
+.check .small { display: block; margin: 4px 0 0 26px; }
+#create-btn { width: 100%; margin: 8px 0 16px; }
+
+table { border-collapse: collapse; width: 100%; font-size: .875rem; }
+td, th { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+th { font-weight: 700; }
 code, strong { overflow-wrap: anywhere; }
-.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.steps { list-style: none; padding-left: 0; }
-.steps li::before { display: inline-block; width: 1.5em; content: "·"; }
-.steps li.done::before { content: "✓"; color: var(--ok); }
-.steps li.now::before { content: "•"; color: var(--accent); }
-.steps li.fail::before { content: "✕"; color: var(--bad); }
-.steps li.todo { color: var(--muted); }
-details { margin-top: 12px; }
-#qr img { width: 200px; height: 200px; background: #fff; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.row label { display: flex; flex-direction: column; gap: 6px; font-weight: 700; font-size: .9rem; flex: 1 1 240px; }
+
+.steps { list-style: none; padding: 0; margin: 20px 0; display: grid; gap: 10px; }
+.steps li { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-radius: 18px; background: var(--bg); font-weight: 600; }
+.steps li::before { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--line); content: ""; font-size: .85rem; font-weight: 800; }
+.steps li.done::before { content: "✓"; background: var(--pine); border-color: var(--pine); color: #f6f1e7; }
+.steps li.now { background: var(--fg); color: var(--on-ink); }
+.steps li.now::before { border: 3px solid var(--accent); border-right-color: transparent; animation: spin 1s linear infinite; }
+.steps li.fail::before { content: "✕"; background: var(--bad); border-color: var(--bad); color: #fdfcf7; }
+.steps li.todo { color: var(--muted); font-weight: 500; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .steps li.now::before { animation: none; border-right-color: var(--accent); } button { transition: none; } }
+
+details { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+.hero details { text-align: left; max-width: 34em; margin: 28px auto 0; }
+summary { cursor: pointer; font-weight: 700; font-size: .9rem; list-style: none; display: flex; align-items: center; gap: 8px; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: "+"; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--fg); font-weight: 700; line-height: 1; }
+details[open] > summary::before { content: "–"; }
+details[open] > summary { margin-bottom: 10px; }
+#s-manage { background: transparent; }
+#s-manage > details { margin: 0; border: 0; padding: 0; }
+#s-manage h3:first-of-type { margin-top: 12px; }
+#qr img { width: 200px; height: 200px; background: #fff; padding: 10px; border-radius: 18px; margin-top: 12px; }
 ol, ul { padding-left: 20px; }
 ul.plain { list-style: none; padding-left: 0; }
-ul.plain li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+ul.plain li { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin: 10px 0; padding: 14px 18px; border-radius: 18px; background: var(--bg); }
+
+.foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; width: 100%; max-width: 1120px; margin: 0 auto; padding: 16px 24px 28px; font-size: .8rem; color: var(--muted); }
+@media (max-width: 560px) {
+  .top { padding: 20px 16px 4px; }
+  .wordmark { font-size: 1.7rem; }
+  section { padding: 22px 18px; border-radius: 22px; }
+  section.hero { padding-top: 24px; }
+  .foot { padding: 16px; }
+  body::before { width: 160px; height: 160px; right: -90px; }
+}
 [hidden] { display: none !important; }
 `;
 

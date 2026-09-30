@@ -627,6 +627,7 @@ jobs:
       cancel-in-progress: false
     env:
       DOMAIN: ${{ vars.DOMAIN }}
+      BYE_ONBOARDING_ORIGIN: ${{ vars.BYE_ONBOARDING_ORIGIN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PROD_CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.PROD_CLOUDFLARE_API_TOKEN }}
       STATE_BACKEND: http
@@ -653,7 +654,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Prerequisites
         run: |
-          for v in DOMAIN BYE_ONBOARDING_KEYS BYE_ONBOARDING_SESSION_KEY BYE_ONBOARDING_DEPLOYER_KEY CLOUDFLARE_OAUTH_CLIENT_ID; do
+          [ -n "$BYE_ONBOARDING_ORIGIN$DOMAIN" ] || { echo "::error::set BYE_ONBOARDING_ORIGIN or DOMAIN on the onboarding environment"; exit 1; }
+          for v in BYE_ONBOARDING_KEYS BYE_ONBOARDING_SESSION_KEY BYE_ONBOARDING_DEPLOYER_KEY CLOUDFLARE_OAUTH_CLIENT_ID; do
             [ -n "${!v}" ] || { echo "::error::$v is not set on the onboarding environment"; exit 1; }
           done
       - run: node --experimental-strip-types infra/state/verify-worker.ts
@@ -736,8 +738,16 @@ jobs:
         run: pod install
       # Push crypto (RFC 8291 Appendix A), widget/share payloads and Keychain against the shared
       # fixtures in packages/contracts/test/fixtures/native; hosted by ByeTestHost, no Pods needed.
+      # Runner images rotate their simulator set, so test on whichever iPhone is available (or
+      # create one on the newest installed iOS runtime) instead of pinning a device name.
       - name: Native unit tests (XCTest)
-        run: xcodebuild test -project apps/mobile/ios/ByeMobile.xcodeproj -scheme ByeMobileTests -destination 'platform=iOS Simulator,name=iPhone 16'
+        run: |
+          udid=$(xcrun simctl list devices available -j | jq -r '[.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith("iPhone"))][0].udid // empty')
+          if [ -z "$udid" ]; then
+            runtime=$(xcrun simctl list runtimes available -j | jq -r '[.runtimes[] | select(.platform == "iOS")] | last | .identifier')
+            udid=$(xcrun simctl create bye-ci com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$runtime")
+          fi
+          xcodebuild test -project apps/mobile/ios/ByeMobile.xcodeproj -scheme ByeMobileTests -destination "platform=iOS Simulator,id=$udid"
       - name: Build app, widget, share and notification extensions for the simulator
         working-directory: apps/mobile
         run: npm run ios:build-sim

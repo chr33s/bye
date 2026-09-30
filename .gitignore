@@ -6,6 +6,7 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.onboarding.example
 coverage/
 apps/mobile/ios/build/
 apps/mobile/android/.gradle/

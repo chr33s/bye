@@ -31,7 +31,7 @@
     "onboarding": "node --experimental-strip-types infra/onboarding/server.ts",
     "build:onboarding": "node --experimental-strip-types infra/onboarding/deployer/build.ts && oxfmt infra/onboarding/deployer/worker.bundle.ts",
     "plan:onboarding": "ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 alchemy plan infra/onboarding/stack.ts --stage prod",
-    "deploy:onboarding": "pnpm build:onboarding && ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 alchemy deploy infra/onboarding/stack.ts --stage prod --yes",
+    "deploy:onboarding": "pnpm build:onboarding && ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 alchemy deploy infra/onboarding/stack.ts --stage prod --yes --env-file=.env.onboarding",
     "plan:push-gateway": "ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 alchemy plan infra/push-gateway/stack.ts --stage prod",
     "deploy:push-gateway": "ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1 alchemy deploy infra/push-gateway/stack.ts --stage prod --yes",
     "evidence:bench": "BYE_BENCH_MESSAGES=${BYE_BENCH_MESSAGES:-1000} vitest run infra/tests/evidence-bench.test.ts",
