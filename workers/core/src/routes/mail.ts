@@ -31,7 +31,7 @@ import {
   type SearchPage,
   zipStream,
 } from "@bye/platform-cloudflare";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import { call, mailbox } from "../authorities.ts";
 import { bodyKeyFor, type StoredBody } from "../objects.ts";
 import type { CoreEnv } from "../env.ts";

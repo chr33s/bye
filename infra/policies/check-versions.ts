@@ -2,7 +2,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const EFFECT_VERSION = "4.0.0-rc.117";
+export const EFFECT_VERSION = "4.0.0";
 
 export const ALCHEMY_VERSION = "2.0.0-beta.79";
 

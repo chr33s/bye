@@ -13,7 +13,7 @@ ENV BYE_RELEASE_DIR=/srv/bye BYE_RELEASE_COMMIT=$BYE_RELEASE_COMMIT PORT=8080 \
     CI=true ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1
 # pnpm as a plain global binary, not a corepack shim: jobs run with a fresh HOME and only an
 # allowlisted environment (executor.ts childEnv), where a shim would download pnpm again.
-RUN npm install --global pnpm@11.20.0 && npm cache clean --force
+RUN npm install --global pnpm@12.8.1 && npm cache clean --force
 # The checkout belongs to the unprivileged user that installs, builds and runs it.
 RUN mkdir -p /srv/bye && chown node:node /srv/bye
 WORKDIR /srv/bye

@@ -1,5 +1,5 @@
 import { Effect, Layer, Predicate } from "effect";
-import { CliOutput, Command } from "effect/unstable/cli";
+import { CliOutput, Command } from "effect/cli";
 import { execute, Invocation, NotSignedIn, report, root, signedIn, UsageError } from "./args.ts";
 import { CliApi, CliApiError, EXIT, exitCodeFor } from "./client.ts";
 import { COMMANDS } from "./commands.ts";

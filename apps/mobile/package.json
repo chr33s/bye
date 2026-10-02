@@ -1,6 +1,6 @@
 {
   "name": "@bye/mobile",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "bye for iOS and Android (React Native). Installed with npm, outside the pnpm workspace.",
   "scripts": {
@@ -21,7 +21,7 @@
     "react": "19.2.3",
     "react-native": "0.87.1",
     "react-native-get-random-values": "2.0.0",
-    "react-native-safe-area-context": "5.10.0",
+    "react-native-safe-area-context": "5.10.1",
     "react-native-url-polyfill": "4.0.0",
     "react-native-webview": "16.0.0"
   },
@@ -39,7 +39,7 @@
     "@types/react": "19.3.0",
     "test-renderer": "1.3.0",
     "typescript": "7.0.2",
-    "vitest": "5.0.2",
+    "vitest": "5.0.3",
     "vitest-native": "0.13.0"
   },
   "engines": {

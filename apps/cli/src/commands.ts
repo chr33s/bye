@@ -1,5 +1,5 @@
 import { Effect, type Layer, Option } from "effect";
-import { Argument, Command, Flag } from "effect/unstable/cli";
+import { Argument, Command, Flag } from "effect/cli";
 import type { CalTimeWire, MailDraftContent } from "@bye/contracts";
 import { MAIL_VIEWS } from "@bye/domain";
 import {
@@ -33,7 +33,7 @@ import type { JsonValue } from "./json.ts";
 import { OPS_COMMANDS } from "./ops.ts";
 import { UPLOAD_COMMANDS } from "./upload.ts";
 
-// CLI command tree (X02), parsed by effect/unstable/cli. Every write carries a fresh command ID
+// CLI command tree (X02), parsed by effect/cli. Every write carries a fresh command ID
 // so retries are idempotent and server audit logs attribute the action to this credential.
 
 export { UsageError } from "./args.ts";

@@ -5,7 +5,7 @@
 import { Authorization, requireOperatorAccess, requireStepUp } from "@bye/application";
 import { ApiError } from "@bye/contracts";
 import { Effect, Match } from "effect";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import { Invocation } from "../http.ts";
 import { publicly } from "../httpapi.ts";
 import { configureNewsletterProvider, newsletterConfigView } from "../newsletter-config.ts";

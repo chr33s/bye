@@ -1,5 +1,6 @@
 {
   "name": "@bye/web",
+  "version": "0.3.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -14,6 +15,6 @@
   "devDependencies": {
     "axe-core": "4.13.0",
     "jsdom": "30.1.1",
-    "rolldown": "1.2.11"
+    "rolldown": "1.2.12"
   }
 }

@@ -1,5 +1,6 @@
 {
   "name": "@bye/worker-push-gateway",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -8,6 +9,6 @@
   "dependencies": {
     "@bye/domain": "workspace:*",
     "@bye/platform-cloudflare": "workspace:*",
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.0"
   }
 }

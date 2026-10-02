@@ -1,5 +1,6 @@
 {
   "name": "@bye/platform-cloudflare",
+  "version": "0.3.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -12,6 +13,6 @@
     "@bye/contracts": "workspace:*",
     "@bye/domain": "workspace:*",
     "@bye/mail-codec": "workspace:*",
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.0"
   }
 }

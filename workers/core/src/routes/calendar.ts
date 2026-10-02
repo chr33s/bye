@@ -39,7 +39,7 @@ import {
   type OccurrencesQuery,
 } from "@bye/contracts";
 import { calendarLocationSearchLive, readBounded } from "@bye/platform-cloudflare";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import { mint, verify } from "../capability.ts";
 import type { CoreEnv } from "../env.ts";
 import { Invocation, route, type Route } from "../http.ts";

@@ -1,6 +1,6 @@
 {
   "name": "@bye/desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "bye for macOS and Windows (React Native macOS/Windows). Installed with npm, outside the pnpm workspace.",
   "scripts": {
@@ -28,13 +28,13 @@
     "@babel/core": "7.29.7",
     "@babel/preset-env": "7.29.7",
     "@babel/runtime": "7.29.7",
-    "@react-native-community/cli": "20.0.0",
+    "@react-native-community/cli": "20.2.0",
     "@react-native/babel-preset": "0.81.6",
     "@react-native/metro-config": "0.81.6",
     "@react-native/typescript-config": "0.81.6",
-    "@types/react": "19.1.17",
+    "@types/react": "19.3.0",
     "patch-package": "8.0.1",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   },
   "engines": {
     "node": ">=20"

@@ -9,10 +9,15 @@ packages:
 allowBuilds:
   workerd: true
 minimumReleaseAgeExclude:
-  - "@cloudflare/workers-types@5.20260928.1"
+  - "@cloudflare/workers-types@5.20261002.1"
+  - "@types/node@26.6.4"
+  - effect@4.0.0
 overrides:
-  "@effect/sql-d1": 4.0.0-rc.117
-  "@effect/sql-sqlite-do": 4.0.0-rc.117
-  "@effect/platform-node-shared": 4.0.0-rc.117
-  "@effect/vitest": 4.0.0-rc.117
-  effect: 4.0.0-rc.117
+  "@effect/sql-d1": 4.0.0
+  "@effect/sql-sqlite-do": 4.0.0
+  "@effect/platform-node-shared": 4.0.0
+  "@effect/vitest": 4.0.0
+  effect: 4.0.0
+patchedDependencies:
+  # Alchemy and Distilled still import the Effect 4 RC module paths.
+  effect@4.0.0: patches/effect@4.0.0.patch

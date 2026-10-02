@@ -89,7 +89,7 @@ Everything that could be fixed in code has been removed from this list. What rem
 - [ ] **Scale the cron catalog sweep.** It is now sharded (`shardsForRun`) and paged, but each run still reconciles serially in one invocation (`workers/core/src/scheduled.ts:130-146`). Load-test it (evidence #5) and fan out through queue messages or Workflows if it doesn't fit.
 - [ ] **Choose the scanner signature path for prod** (mirror or baked), and document the accepted risk of the SigMirror job container's general internet egress.
 - [ ] **Pin apt package versions** in the three Dockerfiles (`containers/{mime,scanner,sigmirror}`; `apt-get install` is unpinned in scanner and sigmirror). The base images and pip packages are already pinned. Add image scanning and signing.
-- [ ] **Accept or reduce the prerelease dependency risk.** `alchemy@2.0.0-beta.79` and `effect@4.0.0-rc.117` are in the prod path. Name an owner, and re-run evidence #6 and #8 on every bump.
+- [ ] **Accept or reduce the prerelease dependency risk.** `alchemy@2.0.0-beta.79` is in the prod path; Effect is now stable at `4.0.0`. Name an owner, and re-run evidence #6 and #8 on every bump.
 
 ### Known limitations of the fixes
 

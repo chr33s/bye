@@ -31,7 +31,7 @@ import {
   type SendingScope,
   SupportService,
 } from "@bye/platform-cloudflare";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import { kernelClock } from "../durable-host.ts";
 import type { CoreEnv } from "../env.ts";
 import { errorResponse, Invocation, route, type Route } from "../http.ts";

@@ -29,7 +29,7 @@ import { pruneEndedRegistrations, type PushRegistration, validateRegistration } 
 import { storeExternalCredential } from "../transports.ts";
 import { requireUser } from "./common.ts";
 import { decodeAs } from "./decode.ts";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import { CoreApi } from "../spec/index.ts";
 
 // Push device registration (E23), external send-as credentials (E19), and operator recovery

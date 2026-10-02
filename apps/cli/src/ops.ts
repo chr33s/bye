@@ -1,5 +1,5 @@
 import { Option } from "effect";
-import { Argument, Flag } from "effect/unstable/cli";
+import { Argument, Flag } from "effect/cli";
 import { action, get, group, opt, optInt, post } from "./args.ts";
 
 // Operator commands (§6 DLQ inspect/replay, §12 reindex/erasure). They call the /v1/ops routes,

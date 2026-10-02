@@ -9,10 +9,10 @@ import {
   HttpRouter,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import { ErrorCode, HTTP_STATUS } from "@bye/contracts";
 
-// HTTP boundary helpers: routing (effect/unstable/http HttpRouter), JSON envelopes, and mapping of
+// HTTP boundary helpers: routing (effect/http HttpRouter), JSON envelopes, and mapping of
 // expected tagged failures to public error codes. Defects are logged with an opaque request ID and
 // returned as `internal` without details (§7.4 Errors).
 

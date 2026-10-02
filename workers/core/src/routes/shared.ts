@@ -34,7 +34,7 @@ import {
   RegistryService,
   type RpcResult,
 } from "@bye/platform-cloudflare";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import { CoreApi } from "../spec/index.ts";
 
 const MEDIA_MAX_BYTES = 10 * 1024 * 1024;

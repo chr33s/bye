@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { Effect } from "effect";
-import { Argument } from "effect/unstable/cli";
+import { Argument } from "effect/cli";
 import { action, commandId, mailbox, opt, post } from "./args.ts";
 import { CliApi } from "./client.ts";
 

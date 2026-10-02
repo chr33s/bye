@@ -31,7 +31,7 @@ import {
   VisibleCalendarsResponse,
 } from "@bye/contracts";
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 import { Ok, RequestServices, SchemaErrors } from "../httpapi.ts";
 
 const space = { id: Schema.String };

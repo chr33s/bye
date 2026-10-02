@@ -1,7 +1,7 @@
 import type { RequestBody } from "@bye/native-shared";
 import { probeInstance, type ProbeFetch, PROBE_ERRORS } from "@bye/native-shared/instance";
 import { Effect, Match, Predicate } from "effect";
-import { Argument, Command } from "effect/unstable/cli";
+import { Argument, Command } from "effect/cli";
 import { bool, CalendarFlag, Invocation, Json, MailboxFlag, opt } from "./args.ts";
 import { EXIT } from "./client.ts";
 import {

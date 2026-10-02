@@ -23,7 +23,7 @@ import {
   TotpEnrollment,
 } from "@bye/contracts";
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 import { RequestServices, SchemaErrors } from "../httpapi.ts";
 
 const id = { id: Schema.String };

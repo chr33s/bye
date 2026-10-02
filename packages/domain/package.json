@@ -1,5 +1,6 @@
 {
   "name": "@bye/domain",
+  "version": "0.3.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -7,6 +8,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.0"
   }
 }

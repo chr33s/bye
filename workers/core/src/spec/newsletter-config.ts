@@ -1,6 +1,6 @@
 // Instance newsletter provider configuration (infra/onboarding/spec.md §23).
 import { NewsletterConfigRequest, NewsletterConfigView } from "@bye/contracts";
-import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 import { RequestServices, SchemaErrors } from "../httpapi.ts";
 
 export class NewsletterConfigApi extends HttpApiGroup.make("newsletterConfig")

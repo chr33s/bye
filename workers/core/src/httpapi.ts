@@ -1,12 +1,12 @@
-// HttpApi (effect/unstable/httpapi) plumbing for the conventional JSON API (§8): the public error
+// HttpApi (effect/http-api) plumbing for the conventional JSON API (§8): the public error
 // envelope as endpoint error schemas, the middleware that authenticates and provides request-scoped
 // services, and the platform services the builder needs on Workers. Endpoint specs live in
 // ./spec/*, handlers next to their routes in ./routes/*.
 import { authenticateRequest, requestAuthLayer } from "@bye/application";
 import { ErrorCode, HTTP_STATUS } from "@bye/contracts";
 import { Cause, Effect, FileSystem, Layer, Option, Path, Predicate, Schema } from "effect";
-import { Etag, HttpPlatform, HttpServerRequest } from "effect/unstable/http";
-import { HttpApiMiddleware, HttpApiSchema } from "effect/unstable/httpapi";
+import { Etag, HttpPlatform, HttpServerRequest } from "effect/http";
+import { HttpApiMiddleware, HttpApiSchema } from "effect/http-api";
 import {
   type ErrorDetails,
   Invocation,

@@ -20,7 +20,7 @@ concurrency:
 
 env:
   NODE_VERSION: "24.18.1"
-  PNPM_VERSION: "11.20.0"
+  PNPM_VERSION: "12.8.1"
 
 jobs:
   images:

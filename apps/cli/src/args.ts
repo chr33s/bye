@@ -13,14 +13,8 @@ import {
   Stdio,
   Terminal,
 } from "effect";
-import {
-  CliConfig as ParserConfig,
-  CliError,
-  Command,
-  Flag,
-  GlobalFlag,
-} from "effect/unstable/cli";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { CliConfig as ParserConfig, CliError, Command, Flag, GlobalFlag } from "effect/cli";
+import { ChildProcessSpawner } from "effect/process";
 import type {
   CalendarCommandInput,
   MailboxCommandInput,
@@ -30,7 +24,7 @@ import type {
 import { CliApi, type CliConfig } from "./client.ts";
 import type { InstanceDeps } from "./instance.ts";
 
-// Command-line parsing (effect/unstable/cli) and the request helpers every CLI command module
+// Command-line parsing (effect/cli) and the request helpers every CLI command module
 // shares (X02). Commands are typed against @bye/contracts; every write carries a fresh command ID
 // so retries are idempotent and server audit logs attribute the action to this credential.
 

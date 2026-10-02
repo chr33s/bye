@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect, Predicate, Schema, SchemaAST } from "effect";
-import * as Arbitrary from "effect/unstable/arbitrary/Arbitrary";
+import * as Arbitrary from "effect/Arbitrary";
 import * as Contracts from "../../src/index.ts";
 
 export const CURRENT_FIXTURE_VERSION = "v1";

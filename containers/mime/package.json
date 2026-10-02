@@ -1,5 +1,6 @@
 {
   "name": "@bye/mime-container",
+  "version": "0.3.0",
   "private": true,
   "description": "Bounded MIME-processing container for exceptional messages (spec §3.1 Containers, §5.1 step 5).",
   "type": "module",

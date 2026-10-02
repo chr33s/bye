@@ -5,7 +5,7 @@ import { State } from "alchemy/State";
 import { makeHttpStateStore } from "alchemy/State/HttpStateStore";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { Config, Effect, Layer, Redacted } from "effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClient from "effect/http/HttpClient";
 
 export type StateBackend = "cloudflare" | "http";
 

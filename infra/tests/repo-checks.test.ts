@@ -11,7 +11,7 @@ import { checkLockfile, checkManifest, isExactSpecifier } from "../policies/chec
 
 describe("exact dependency pins (§7.1)", () => {
   it("rejects ranges, dist-tags, and mismatched Effect family pins", () => {
-    for (const ok of ["4.0.0-rc.117", "2.0.0-beta.79", "1.2.3", "workspace:*"])
+    for (const ok of ["4.0.0", "2.0.0-beta.79", "1.2.3", "workspace:*"])
       expect(isExactSpecifier(ok), ok).toBe(true);
 
     for (const bad of [
@@ -33,7 +33,7 @@ describe("exact dependency pins (§7.1)", () => {
       {
         dependencies: {
           effect: "4.0.0-rc.116",
-          "@effect/vitest": "4.0.0-rc.117",
+          "@effect/vitest": "4.0.0",
           alchemy: "latest",
         },
       },
@@ -41,7 +41,7 @@ describe("exact dependency pins (§7.1)", () => {
     );
 
     expect(issues.map((i) => i.message)).toEqual([
-      "effect must be 4.0.0-rc.117",
+      "effect must be 4.0.0",
       "alchemy@latest is not an exact pin",
       "alchemy must be 2.0.0-beta.79",
     ]);
@@ -49,10 +49,10 @@ describe("exact dependency pins (§7.1)", () => {
 
   it("detects a second resolved effect version or drifting @effect/* family in the lockfile", () => {
     const lock =
-      "packages:\n\n  effect@4.0.0-rc.117:\n    resolution: {}\n\n  effect@4.0.0-rc.116:\n    resolution: {}\n\n  '@effect/sql-d1@4.0.0-rc.116':\n    resolution: {}\n";
+      "packages:\n\n  effect@4.0.0:\n    resolution: {}\n\n  effect@4.0.0-rc.116:\n    resolution: {}\n\n  '@effect/sql-d1@4.0.0-rc.116':\n    resolution: {}\n";
 
     const messages = checkLockfile("lock", lock).map((i) => i.message);
-    expect(messages[0]).toMatch(/expected exactly effect@4.0.0-rc.117/);
+    expect(messages[0]).toMatch(/expected exactly effect@4.0.0/);
     expect(messages[1]).toMatch(/@effect\/sql-d1 resolves to 4.0.0-rc.116/);
   });
 });

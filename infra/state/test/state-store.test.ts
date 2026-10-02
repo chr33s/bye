@@ -1,5 +1,5 @@
 import { Effect, Redacted } from "effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { STATE_STORE_VERSION } from "alchemy/State/HttpStateApi";
 import { makeHttpStateStore } from "alchemy/State/HttpStateStore";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

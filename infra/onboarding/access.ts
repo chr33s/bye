@@ -6,7 +6,7 @@
 // Checked: signature (RS256 with a key from https://<team>.cloudflareaccess.com/cdn-cgi/access/certs,
 // cached and refetched on an unknown `kid`), `iss` = the team domain, `aud` contains the
 // application's AUD tag, `exp`/`nbf` with a small clock skew, and a non-empty `email`.
-import { createPublicKey, type JsonWebKey, verify } from "node:crypto";
+import { createPublicKey, verify, type webcrypto } from "node:crypto";
 import { Option, Predicate, Schema } from "effect";
 import type { Fetch } from "./oauth.ts";
 
@@ -19,7 +19,7 @@ export interface AccessConfig {
   readonly audience: string;
 }
 
-interface Jwk extends JsonWebKey {
+interface Jwk extends webcrypto.JsonWebKey {
   readonly kid?: string;
 }
 

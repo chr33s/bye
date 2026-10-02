@@ -1,6 +1,6 @@
 import { Effect, Exit, Layer } from "effect";
-import { HttpRouter } from "effect/unstable/http";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpRouter } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
 import { Forbidden, requestAuthLayer, requireMailbox, requireScope } from "@bye/application";
 import { ControlDirectory } from "@bye/platform-cloudflare";
 import type { CoreEnv } from "./env.ts";

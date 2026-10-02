@@ -28,7 +28,9 @@ Source for the demo reel: [`demo-reel/`](./demo-reel)
 
 The product and architecture are specified in [`spec.md`](./spec.md); this repository implements that design on Cloudflare primitives. Alchemy v2 beta defines the deployment, which has not yet been run against Cloudflare.
 
-Pinned baseline: `effect@4.0.0-rc.117`, `alchemy@2.0.0-beta.79`, Node 24.18.1, pnpm 11.20.0 (see `.mise.toml`). Every dependency is an exact version; the Effect family is pinned through `pnpm-workspace.yaml` overrides.
+Pinned baseline: `effect@4.0.0`, `alchemy@2.0.0-beta.79`, Node 24.18.1, pnpm 12.8.1 (see `.mise.toml`). Every dependency is an exact version; the Effect family is pinned through `pnpm-workspace.yaml` overrides.
+
+`patches/effect@4.0.0.patch` aliases Alchemy's legacy `effect/unstable/*` imports and the former `effect/Encoding` functions to the stable Effect modules. Repository code uses the stable paths; remove the patch when Alchemy and its provider dependencies adopt them. Native React pins match their bundled renderers, and Babel remains on 7 because React Native's transform plugins require it. The desktop platform family and AsyncStorage retain the versions supported by its native hosts and patches. Miniflare stays on its newest stable release (`latest` currently points to an alpha); WebView retains its newer 16.0.0 release from the `next` channel.
 
 ## Layout
 

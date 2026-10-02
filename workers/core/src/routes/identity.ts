@@ -3,7 +3,7 @@
 import { Effect, type Types } from "effect";
 import { issueApiToken, NotFound, Principal, requireStepUp } from "@bye/application";
 import { AuthService, CommerceService, SupportService } from "@bye/platform-cloudflare";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import { Invocation } from "../http.ts";
 import { publicly } from "../httpapi.ts";
 import { CoreApi } from "../spec/index.ts";
