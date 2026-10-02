@@ -1,0 +1,133 @@
+# Explicit migration lane. Existing workflows remain the rollback lane until live cutover gates pass.
+name: cf opt-in
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        type: choice
+        options: [staging, prod]
+        required: true
+      operation:
+        type: choice
+        options: [plan, drift, apply]
+        required: true
+        default: plan
+      initial_stage:
+        description: First deployment; every owned resource must be absent
+        type: boolean
+        default: false
+      approved_digest:
+        description: Canonical digest from the reviewed plan artifact (required for apply)
+        type: string
+      release_commit:
+        description: Full reviewed release commit
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: deploy-${{ inputs.stage }}
+  cancel-in-progress: false
+jobs:
+  cf:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Apply needs the same environment approval as the existing release lane.
+    environment: ${{ inputs.operation == 'apply' && inputs.stage || format('{0}-plan', inputs.stage) }}
+    env:
+      BYE_DEPLOY_ENGINE: cf
+      BYE_CF_INITIAL_STAGE: ${{ inputs.initial_stage && '1' || '' }}
+      STAGE: ${{ inputs.stage }}
+      DO_NOT_TRACK: "1"
+      CF_SEND_TELEMETRY: "false"
+      CLOUDFLARE_ACCOUNT_ID: ${{ inputs.stage == 'prod' && secrets.PROD_CLOUDFLARE_ACCOUNT_ID || secrets.NONPROD_CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ inputs.stage == 'prod' && secrets.PROD_CLOUDFLARE_API_TOKEN || secrets.NONPROD_CLOUDFLARE_API_TOKEN }}
+      BYE_CF_LOCK_URL: ${{ vars.BYE_CF_LOCK_URL }}
+      BYE_CF_LOCK_CREDENTIAL: ${{ secrets.BYE_CF_LOCK_CREDENTIAL }}
+      BYE_CF_OUTPUT: ${{ runner.temp }}/bye-cf-output
+      BYE_CF_RESOURCE_MAP: ${{ runner.temp }}/resources.cf-resources.json
+      BYE_CF_ADOPTION: ${{ !inputs.initial_stage && format('{0}/adoption.json', runner.temp) || '' }}
+      APP_ORIGIN: ${{ vars.APP_ORIGIN }}
+      MAIL_RENDER_ORIGIN: ${{ vars.MAIL_RENDER_ORIGIN }}
+      PROVIDER_SENT_PREVIEWS: ${{ vars.PROVIDER_SENT_PREVIEWS }}
+      PROBE_BASE_URL: ${{ vars.APP_ORIGIN }}
+      APP_DOMAIN: ${{ vars.APP_DOMAIN }}
+      PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN }}
+      DOMAIN: ${{ vars.DOMAIN }}
+      SCANNER_SIGNATURES: baked
+      SCANNER_IMAGE: ${{ vars.SCANNER_IMAGE }}
+      MIME_IMAGE: ${{ vars.MIME_IMAGE }}
+      SIGMIRROR_IMAGE: ${{ vars.SIGMIRROR_IMAGE }}
+      TURNSTILE_SITEKEY: ${{ vars.TURNSTILE_SITEKEY }}
+      SESSION_KEY: ${{ secrets.SESSION_KEY }}
+      PROXY_SIGNING_KEY: ${{ secrets.PROXY_SIGNING_KEY }}
+      BILLING_WEBHOOK_SECRET: ${{ secrets.BILLING_WEBHOOK_SECRET }}
+      TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
+      SIGMIRROR_WRITE_TOKEN: ${{ secrets.SIGMIRROR_WRITE_TOKEN }}
+      PROBE_TOKEN: ${{ secrets.PROBE_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 12.8.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate reviewed inputs
+        env:
+          REVIEWED_COMMIT: ${{ inputs.release_commit }}
+          CF_RESOURCE_MAP: ${{ vars.BYE_CF_RESOURCE_MAP_JSON }}
+          CF_ADOPTION: ${{ vars.BYE_CF_ADOPTION_JSON }}
+          CF_CONFIG: ${{ vars.BYE_CF_CONFIG_JSON }}
+          CF_RUNTIME_SECRETS: ${{ secrets.BYE_CF_RUNTIME_SECRETS_JSON }}
+        run: |
+          node --experimental-strip-types --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { writeFileSync, appendFileSync } from 'node:fs';
+          import { randomUUID } from 'node:crypto';
+          import { RUNTIME_CONFIG } from './infra/cf/config/runtime.ts';
+          import { CONFIG_INPUTS } from './infra/cf/config/workers.ts';
+          if (!/^[a-f0-9]{40}$/.test(process.env.REVIEWED_COMMIT ?? '') || execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim() !== process.env.REVIEWED_COMMIT) throw Error('reviewed commit mismatch');
+          for (const [key, path] of [['CF_RESOURCE_MAP', process.env.BYE_CF_RESOURCE_MAP], ['CF_ADOPTION', process.env.BYE_CF_ADOPTION]]) {
+            if (key === 'CF_ADOPTION' && process.env.BYE_CF_INITIAL_STAGE === '1') continue;
+            if (key === 'CF_RESOURCE_MAP' && !process.env[key] && process.env.BYE_CF_INITIAL_STAGE === '1') continue;
+            const value = JSON.parse(process.env[key] ?? '');
+            writeFileSync(path, JSON.stringify(value), {mode:0o600, flag:'wx'});
+          }
+          for (const [source, secret] of [['CF_CONFIG', false], ['CF_RUNTIME_SECRETS', true]]) {
+            const values = JSON.parse(process.env[source] || '{}');
+            if (!values || typeof values !== 'object' || Array.isArray(values)) throw Error('configuration must be an object');
+            for (const [key, value] of Object.entries(values)) {
+              const declaration = RUNTIME_CONFIG[key];
+              const allowed = secret ? declaration?.secret || key === 'SIGMIRROR_WRITE_TOKEN' : declaration && !declaration.secret || CONFIG_INPUTS.includes(key);
+              if (!allowed || key === 'STAGE' || typeof value !== 'string') throw Error('invalid configuration key/type');
+              if (secret) console.log('::add-mask::' + value.replaceAll('%','%25').replaceAll('\r','%0D').replaceAll('\n','%0A'));
+              const delimiter = randomUUID();
+              appendFileSync(process.env.GITHUB_ENV, `${key}<<${delimiter}\n${value}\n${delimiter}\n`);
+            }
+          }
+          JS
+          if [ "$BYE_CF_INITIAL_STAGE" = "1" ] && [ ! -f "$BYE_CF_RESOURCE_MAP" ]; then
+            pnpm cf:new-map --initial-stage --out "$BYE_CF_RESOURCE_MAP"
+          fi
+          echo "GITHUB_SHA=$REVIEWED_COMMIT" >> "$GITHUB_ENV"
+      - run: pnpm check:versions && pnpm check:boundaries && pnpm typecheck:infra && pnpm exec vitest run infra/cf/test
+      - run: pnpm build:deploy
+      - name: Execute selected cf operation
+        env:
+          CF_OPERATION: ${{ inputs.operation }}
+          BYE_CF_APPROVED_DIGEST: ${{ inputs.approved_digest }}
+        run: |
+          CF_ALLOWED_HOSTS=$(node --input-type=module -e 'const hosts=["api.cloudflare.com","registry.cloudflare.com"];for(const key of ["BYE_CF_LOCK_URL","PROBE_BASE_URL"])if(process.env[key])hosts.push(new URL(process.env[key]).hostname);process.stdout.write(hosts.join(","))')
+          node --experimental-strip-types infra/policies/egress-proxy.ts --allow "$CF_ALLOWED_HOSTS" -- node --experimental-strip-types infra/cf/cli.ts "$CF_OPERATION" --out "$BYE_CF_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: cf-${{ inputs.stage }}-${{ inputs.operation }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/bye-cf-output*
+          if-no-files-found: ignore

@@ -74,9 +74,10 @@ export const PUBLIC_WORKER = "PublicSite";
 export const CORE_WORKER = "MailCore";
 
 const requiredCoreBindings = (): ReadonlyArray<string> =>
-  INVENTORY.filter((e) => e.owner === "stack" && e.binding !== undefined).map(
-    (e) => e.binding as string,
-  );
+  INVENTORY.filter(
+    (e) =>
+      e.owner === "stack" && e.binding !== undefined && (e.worker ?? "MailCore") === "MailCore",
+  ).map((e) => e.binding as string);
 
 const isDestructive = (action: PlanAction) => action === "delete" || action === "replace";
 

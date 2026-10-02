@@ -111,6 +111,7 @@ describe("stage classes", () => {
     expect(destroy).toMatch(/if: always\(\) && steps\.destroy-gate\.outputs\.gate != 'rejected'/);
     // The fallback is safe because destroy:preview itself refuses persistent stages.
     const pkg = readFileSync(join(import.meta.dirname, "../../package.json"), "utf8");
-    expect(pkg).toMatch(/"destroy:preview": "[^"]*guard-stage\.ts destroy/);
+    expect(pkg).toMatch(/"legacy:destroy:preview": "[^"]*guard-stage\.ts destroy/);
+    expect(pkg).toContain("infra/cf/dispatch.ts destroy");
   });
 });

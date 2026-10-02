@@ -62,9 +62,14 @@ export const checkSource = (file: string, source: string): ReadonlyArray<Boundar
   const path = file.replaceAll("\\", "/");
   const inTesting = path.startsWith("packages/testing/");
   const isTest = /\/test\//.test(path) || path.endsWith(".test.ts");
+  // Typed deployment/build configuration sits beside each Worker, outside its runtime graph.
+  const isWorkerConfig = /^workers\/[^/]+\/(cloudflare|vite)\.config\.ts$/.test(path);
 
   const runtime =
-    (path.startsWith("workers/") || path.startsWith("packages/")) && !inTesting && !isTest;
+    (path.startsWith("workers/") || path.startsWith("packages/")) &&
+    !inTesting &&
+    !isTest &&
+    !isWorkerConfig;
 
   for (const ref of importsOf(source)) {
     if (runtime && FORBIDDEN_RUNTIME.some((r) => r.test(ref.specifier)) && !ref.typeOnly) {

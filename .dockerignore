@@ -1,0 +1,13 @@
+.git
+**/node_modules
+**/.env
+**/.env.*
+**/.dev.vars
+**/.dev.vars.*
+**/.alchemy
+**/.cloudflare
+**/.cf
+**/*.cf-resources.json
+**/*.cf-secrets.json
+**/coverage
+.DS_Store

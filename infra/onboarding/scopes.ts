@@ -1,3 +1,4 @@
+import { CF_ONBOARDING_SCOPES } from "../cf/onboarding-scopes.ts";
 // Cloudflare OAuth scope-to-operation matrix for onboarding (spec.md §15.11 "OAuth,
 // credentials, and disconnect"; infra/onboarding/spec.md §4). Only what the stack needs: zone read (to
 // list and re-verify the chosen zone) and Workers Routes write (the one MailCore custom hostname),
@@ -132,7 +133,10 @@ export const PERMITTED_ZONE_SCOPES: ReadonlySet<string> = new Set([
   "workers-routes.write",
 ]);
 
-export const requestedScopes = (): ReadonlyArray<string> => ONBOARDING_SCOPES.map((s) => s.scope);
+export const requestedScopes = (): ReadonlyArray<string> =>
+  (process.env.BYE_DEPLOY_ENGINE === "cf" ? CF_ONBOARDING_SCOPES : ONBOARDING_SCOPES).map(
+    (s) => s.scope,
+  );
 
 export const forbiddenScopes = (scopes: ReadonlyArray<string>): ReadonlyArray<string> =>
   scopes.filter((s) => FORBIDDEN_SCOPE.test(s) && !PERMITTED_ZONE_SCOPES.has(s));

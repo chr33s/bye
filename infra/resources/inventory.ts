@@ -58,6 +58,12 @@ export const PROTECTED_TYPES: ReadonlySet<ResourceType> = new Set<ResourceType>(
   "Cloudflare.Email.Routing",
   "Cloudflare.Email.CatchAll",
   "Cloudflare.StateStore",
+  "Cloudflare.Worker",
+  "Cloudflare.Queues.Queue",
+  "Cloudflare.Queues.Consumer",
+  "Cloudflare.KV.Namespace",
+  "Cloudflare.Container",
+  "Cloudflare.Turnstile.Widget",
 ]);
 
 export interface InventoryEntry {

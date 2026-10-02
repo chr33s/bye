@@ -124,6 +124,7 @@ export const PREVIEW_OPTIONAL_SECRETS: ReadonlyArray<string> = ["SEND_EVENTS_WEB
 /** Tiered deploy credentials the preview job resolves by their nonprod names. */
 export const PREVIEW_DEPLOY_SECRETS: ReadonlyArray<string> = [
   "BYE_STATE_TOKEN",
+  "NONPROD_CF_LOCK_CREDENTIAL",
   "NONPROD_CLOUDFLARE_ACCOUNT_ID",
   "NONPROD_CLOUDFLARE_API_TOKEN",
 ];

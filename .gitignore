@@ -21,3 +21,9 @@ apps/desktop/macos/Pods/
 apps/desktop/macos/build/
 apps/desktop/macos/.xcode.env.local
 apps/mobile/ios/.xcode.env.local
+
+# Cloudflare build output, ephemeral resolved IDs and private upload files
+.cloudflare/
+.cf/
+*.cf-resources.json
+*.cf-secrets.json

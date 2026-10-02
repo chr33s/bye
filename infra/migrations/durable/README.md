@@ -20,3 +20,7 @@ Rules:
 - Expand → migrate/backfill → verify → contract. Readers support the prior schema for the
   rollback interval. A code rollback does not roll back object data.
 - Fixtures of prior schemas live beside each authority's tests and must keep decoding.
+
+## Cloudflare configuration migration
+
+`infra/cf/config/workers.ts` derives the currently live SQLite class declarations from `HOSTED_NAMESPACES`, tested against `liveClasses(CLASS_MIGRATIONS_BY_HOST[host])`. Historical applied rename/delete steps remain in this manifest; they are not replayed as new `worker.exports` tombstones. A future lifecycle operation must be reviewed separately and match live adoption evidence before apply. See [the migration checkpoint](../../cf/README.md).

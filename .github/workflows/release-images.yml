@@ -10,6 +10,11 @@ on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      cf_deployer:
+        description: Build the opt-in cf deployer as a separate image
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,6 +58,7 @@ jobs:
       - name: Build and push (single-platform manifests)
         env:
           REF_NAME: ${{ github.ref_name }}
+          CF_DEPLOYER: ${{ inputs.cf_deployer && '1' || '' }}
         run: |
           set -eu
           repo="ghcr.io/${GITHUB_REPOSITORY}"
@@ -63,6 +69,10 @@ jobs:
             digest="$(jq -r '."containerimage.digest"' "/tmp/$name.json")"
             echo "--$name $repo/$name@$digest" | tee -a "$GITHUB_STEP_SUMMARY"
           }
-          build deployer infra/onboarding/deployer/Dockerfile . --build-arg "BYE_RELEASE_COMMIT=$GITHUB_SHA"
+          if [ "$CF_DEPLOYER" = "1" ]; then
+            build deployer-cf infra/onboarding/deployer/Dockerfile.cf . --build-arg "BYE_RELEASE_COMMIT=$GITHUB_SHA"
+          else
+            build deployer infra/onboarding/deployer/Dockerfile . --build-arg "BYE_RELEASE_COMMIT=$GITHUB_SHA"
+          fi
           build mime containers/mime/Dockerfile containers/mime
           build sigmirror containers/sigmirror/Dockerfile containers/sigmirror

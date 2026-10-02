@@ -10,6 +10,7 @@ import { PRIVATE_BINDINGS } from "../resources/bindings.ts";
 import { classifyStage } from "../resources/stage.ts";
 import { type ExportedPlan, normalizePlan } from "../policies/plan-normalize.ts";
 import { evaluatePlan, formatViolation } from "../policies/plan-policy.ts";
+import { CF_ONBOARDING_SCOPES } from "../cf/onboarding-scopes.ts";
 import { coverageGaps, ONBOARDING_SCOPES, type ScopeGrant } from "./scopes.ts";
 import type {
   ApprovalSubject,
@@ -219,7 +220,8 @@ export const buildReview = (input: ReviewInput): ReviewOutcome => {
   const gaps = coverageGaps(
     actions.map((a) => a.type),
     input.grantedScopes,
-    input.scopeMatrix ?? ONBOARDING_SCOPES,
+    input.scopeMatrix ??
+      (exported.deploymentEngine === "cf" ? CF_ONBOARDING_SCOPES : ONBOARDING_SCOPES),
   );
 
   if (gaps.length > 0) {
@@ -244,7 +246,10 @@ export const buildReview = (input: ReviewInput): ReviewOutcome => {
       `${pending.length} forward-only migrations will apply; code rollback does not roll back data`,
     );
 
-  const subject: ApprovalSubject = {
+  if (exported.deploymentEngine === "cf" && !/^[a-f0-9]{64}$/.test(exported.cfApprovalDigest ?? ""))
+    blockers.push("cf plan has no valid canonical release approval digest");
+
+  let subject: ApprovalSubject = {
     installationId: installation.id,
     accountId: installation.accountId!,
     stage,
@@ -253,6 +258,9 @@ export const buildReview = (input: ReviewInput): ReviewOutcome => {
     actions,
     migrations: pending,
   };
+
+  if (exported.cfApprovalDigest)
+    subject = { ...subject, cfApprovalDigest: exported.cfApprovalDigest };
 
   return { subject, digest: subjectDigest(subject), blockers, warnings, destructive };
 };
@@ -267,6 +275,9 @@ export const approvalCovers = (
   fresh: ApprovalSubject,
 ): ReadonlyArray<string> => {
   const reasons: Array<string> = [];
+
+  if (approved.cfApprovalDigest !== fresh.cfApprovalDigest)
+    reasons.push("cf release inputs changed; reconcile and review again");
 
   if (approved.installationId !== fresh.installationId) reasons.push("installation changed");
 

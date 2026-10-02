@@ -130,6 +130,7 @@ export interface PlannedAction {
 
 /** Everything an approval covers; its digest is what the operator approved. */
 export interface ApprovalSubject {
+  readonly cfApprovalDigest?: string;
   readonly installationId: string;
   readonly accountId: string;
   readonly stage: string;

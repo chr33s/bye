@@ -1,13 +1,22 @@
-// Runs the existing Alchemy stack for one installation (spec.md §15.11 "Use the existing
-// Alchemy stack ... Do not maintain a second resource definition"). Planning is plan-export.ts;
-// applying is the repository's own `pnpm run deploy` (web build, guard-stage, alchemy deploy), in
-// the pinned release checkout. Each run gets an isolated environment: its own HOME (Alchemy's
-// local profile and caches), only allowlisted variables, the installation's account and token,
-// the chosen Bye hostname (APP_DOMAIN) and every other domain/mail switch forced empty.
+import { Schema } from "effect";
+// Runs the selected deployment engine in the pinned release, with an isolated
+// installation HOME, explicit credentials and forced private domain/mail settings.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+  copyFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { ExportedPlan } from "../policies/plan-normalize.ts";
+import { newResourceMap } from "../cf/resource-map.ts";
+import { writeArtifact } from "../cf/artifacts.ts";
+import { CF_ENV } from "../cf/command.ts";
+import { deploymentEngine } from "../cf/dispatch.ts";
 import { REQUIRED_DEPLOY_ENV } from "../policies/telemetry.ts";
 
 export interface ExecutionContext {
@@ -81,6 +90,11 @@ export const FORCED_EMPTY = [
   "BYE_CANARY_PERCENT",
 ] as const;
 
+interface ApplyEnvironment extends Record<string, string> {
+  readonly BYE_DEPLOY_WRITER: string;
+  readonly BYE_RELEASE_MANIFEST_VERIFIED: string;
+}
+
 const PASSTHROUGH = ["PATH", "LANG", "TZ", "SystemRoot", "TMPDIR"] as const;
 
 export const childEnv = (
@@ -91,15 +105,37 @@ export const childEnv = (
   const env: Record<string, string> = {};
 
   for (const k of PASSTHROUGH) if (parent[k] !== undefined) env[k] = parent[k]!;
-  Object.assign(env, REQUIRED_DEPLOY_ENV, ctx.config, extra, {
+  const engine = deploymentEngine(ctx.config.BYE_DEPLOY_ENGINE ?? parent.BYE_DEPLOY_ENGINE);
+  Object.assign(env, engine === "cf" ? CF_ENV : REQUIRED_DEPLOY_ENV, ctx.config, extra, {
     HOME: ctx.homeDir,
     XDG_CONFIG_HOME: join(ctx.homeDir, ".config"),
     XDG_CACHE_HOME: join(ctx.homeDir, ".cache"),
     STAGE: ctx.stage,
     CLOUDFLARE_ACCOUNT_ID: ctx.accountId,
     CLOUDFLARE_API_TOKEN: ctx.apiToken,
-    STATE_BACKEND: "cloudflare",
+    BYE_DEPLOY_ENGINE: engine,
   });
+
+  if (engine === "alchemy") env.STATE_BACKEND = "cloudflare";
+  else {
+    for (const key of Object.keys(env))
+      if (
+        key.startsWith("BYE_STATE_") ||
+        ["STATE_BACKEND", "ALCHEMY_TELEMETRY_DISABLED", "NO_TRACK"].includes(key)
+      )
+        delete env[key];
+    env.BYE_CF_RESOURCE_MAP = join(ctx.homeDir, "resolved.cf-resources.json");
+    const adoptionPath = ctx.config.BYE_CF_ADOPTION ?? join(ctx.homeDir, "adoption.json");
+    env.BYE_CF_ADOPTION = existsSync(adoptionPath) ? adoptionPath : "";
+    env.BYE_CF_INITIAL_STAGE = env.BYE_CF_ADOPTION ? "" : "1";
+
+    if (parent.BYE_RELEASE_COMMIT) env.BYE_RELEASE_COMMIT = parent.BYE_RELEASE_COMMIT;
+    else delete env.BYE_RELEASE_COMMIT;
+
+    for (const key of ["BYE_CF_LOCK_URL", "BYE_CF_LOCK_CREDENTIAL"] as const)
+      if (parent[key]) env[key] = parent[key]!;
+    env.PROBE_BASE_URL = ctx.config.APP_ORIGIN ?? "";
+  }
 
   for (const k of FORCED_EMPTY) env[k] = "";
   // Only the installation's own chosen hostname, never a value inherited from elsewhere.
@@ -186,6 +222,19 @@ export const processExecutor = (
 ): DeployExecutor => ({
   async plan(ctx) {
     mkdirSync(ctx.homeDir, { recursive: true, mode: 0o700 });
+    const environment = childEnv(ctx, parentEnv);
+
+    if (environment.BYE_DEPLOY_ENGINE === "cf" && !existsSync(environment.BYE_CF_RESOURCE_MAP!))
+      writeArtifact(
+        environment.BYE_CF_RESOURCE_MAP!,
+        newResourceMap(
+          ctx.stage,
+          ctx.accountId,
+          ctx.config.BYE_WORKERS_DEV_NAME || undefined,
+          true,
+        ),
+      );
+
     const out = mkdtempSync(join(ctx.homeDir, "plan-"));
     const redact = redactor([ctx.apiToken, ...Object.values(ctx.config)]);
     const tail: Array<string> = [];
@@ -209,7 +258,15 @@ export const processExecutor = (
 
       const r = await run(
         process.execPath,
-        ["--experimental-strip-types", "infra/policies/plan-export.ts", out, "deploy"],
+        childEnv(ctx, parentEnv).BYE_DEPLOY_ENGINE === "cf"
+          ? [
+              "--experimental-strip-types",
+              "infra/cf/cli.ts",
+              "plan",
+              "--out",
+              join(out, "plan.json"),
+            ]
+          : ["--experimental-strip-types", "infra/policies/plan-export.ts", out, "deploy"],
         ctx.releaseDir,
         childEnv(ctx, parentEnv),
         ctx.signal,
@@ -221,7 +278,23 @@ export const processExecutor = (
       if (r.code !== 0)
         throw new Error(`planning failed: ${tail.slice(-5).join(" | ") || `exit ${r.code}`}`);
 
-      return JSON.parse(readFileSync(join(out, "plan-export.json"), "utf8")) as ExportedPlan;
+      const cf = childEnv(ctx, parentEnv).BYE_DEPLOY_ENGINE === "cf";
+
+      const plan = JSON.parse(
+        readFileSync(join(out, cf ? "plan.json.export.json" : "plan-export.json"), "utf8"),
+      ) as ExportedPlan;
+
+      if (cf) {
+        if (!/^[a-f0-9]{64}$/.test(plan.cfApprovalDigest ?? ""))
+          throw new Error("cf plan is missing its approval digest");
+        writeFileSync(
+          join(ctx.homeDir, "cf-approval.json"),
+          JSON.stringify({ digest: plan.cfApprovalDigest }),
+          { mode: 0o600 },
+        );
+      }
+
+      return plan;
     } finally {
       rmSync(out, { recursive: true, force: true });
     }
@@ -230,18 +303,40 @@ export const processExecutor = (
     mkdirSync(ctx.homeDir, { recursive: true, mode: 0o700 });
     const redact = redactor([ctx.apiToken, ...Object.values(ctx.config)]);
 
+    const extra: ApplyEnvironment = {
+      BYE_DEPLOY_WRITER: "onboarding",
+      BYE_RELEASE_MANIFEST_VERIFIED: "1",
+    };
+
+    if (childEnv(ctx, parentEnv).BYE_DEPLOY_ENGINE === "cf") {
+      const approved = Schema.decodeUnknownSync(Schema.Struct({ digest: Schema.NonEmptyString }))(
+        JSON.parse(readFileSync(join(ctx.homeDir, "cf-approval.json"), "utf8")),
+      );
+
+      extra.BYE_CF_APPROVED_DIGEST = approved.digest;
+      extra.BYE_CF_OUTPUT = mkdtempSync(join(ctx.homeDir, "cf-evidence-"));
+    }
+
     const r = await run(
       "pnpm",
       ["run", "deploy"],
       ctx.releaseDir,
       // The service verified the approval against a fresh plan just before this call.
-      childEnv(ctx, parentEnv, {
-        BYE_DEPLOY_WRITER: "onboarding",
-        BYE_RELEASE_MANIFEST_VERIFIED: "1",
-      }),
+      childEnv(ctx, parentEnv, extra),
       ctx.signal,
       (l) => onLine(redact(l)),
     );
+
+    if (r.code === 0 && !r.aborted && extra.BYE_CF_OUTPUT) {
+      copyFileSync(
+        join(extra.BYE_CF_OUTPUT, "final.cf-resources.json"),
+        join(ctx.homeDir, "resolved.cf-resources.json"),
+      );
+      copyFileSync(
+        join(extra.BYE_CF_OUTPUT, "final.adoption.json"),
+        join(ctx.homeDir, "adoption.json"),
+      );
+    }
 
     return {
       ok: r.code === 0 && !r.aborted,

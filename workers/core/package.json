@@ -14,5 +14,9 @@
     "@bye/mail-codec": "workspace:*",
     "@bye/platform-cloudflare": "workspace:*",
     "effect": "4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "2.0.0-beta.sha-52b0dc0e9",
+    "vite": "8.3.2"
   }
 }

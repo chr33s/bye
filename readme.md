@@ -32,6 +32,8 @@ Pinned baseline: `effect@4.0.0`, `alchemy@2.0.0-beta.79`, Node 24.18.1, pnpm 12.
 
 `patches/effect@4.0.0.patch` aliases Alchemy's legacy `effect/unstable/*` imports and the former `effect/Encoding` functions to the stable Effect modules. Repository code uses the stable paths; remove the patch when Alchemy and its provider dependencies adopt them. Native React pins match their bundled renderers, and Babel remains on 7 because React Native's transform plugins require it. The desktop platform family and AsyncStorage retain the versions supported by its native hosts and patches. Miniflare stays on its newest stable release (`latest` currently points to an alpha); WebView retains its newer 16.0.0 release from the `next` channel.
 
+The Cloudflare migration has an explicit `BYE_DEPLOY_ENGINE=cf` deployment lane with reviewed planning, provisioning, releases, probes and recovery. Staging and production are undeployed; use the reviewed first-deployment procedure in [`infra/cf/`](./infra/cf/README.md). The default Alchemy lane remains available until live acceptance and soak gates pass.
+
 ## Layout
 
 ```text

@@ -59,3 +59,22 @@ Spec §13.2–13.6 layers release profiles, requirements and gates on these rows
 | P1.6 Native release matrix                    | 5    | Open                                                                                                                          |
 | P2.1 C03 long recurrence rules                | —    | Done: COUNT ≤ 100,000 validated; COUNT rules expand to their last occurrence (`gaps.test.ts`)                                 |
 | P2.2 C05 resumable ICS import                 | —    | Done: per-command checkpoints (`calendar.hardening.test.ts`)                                                                  |
+
+## Cloudflare opt-in migration (2026-10-02)
+
+Implementation includes reviewed provisioning, serialized releases, D1 migration
+verification, hashed builds, version traffic/probes, R2 reconciliation, ephemeral
+destroy, foundation rule updates, an opt-in executor/image and manual CI lane.
+The shared SQLite writer authority is exercised through Miniflare, including
+competing writers, lost ownership, stale recovery and administrator authorization.
+Tests also cover stale approvals, incomplete discovery, first-deployment collisions,
+known canary rollback and retained leases after uncertain writes.
+
+Staging and production have not been deployed. Generated maps therefore use the
+explicit reviewed first-deployment path; no existing Bye identities are assumed.
+Typed Worker builds/dry runs use synthetic IDs and digest-shaped image references.
+They do not prove live data continuity, Container behavior, OAuth scope coverage,
+foundation no-op behavior or production readiness. Candidate scopes remain
+unverified. No resource writes or state decommission occurred during implementation.
+
+[Commands, contract limits and outstanding live gates](./cf/README.md).

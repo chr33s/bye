@@ -1,5 +1,7 @@
 # Infrastructure runbook
 
+The opt-in `cf` deployment and recovery procedures are documented in [infra/cf/README.md](./cf/README.md). Staging and production are undeployed: select the reviewed first-deployment path, which checks that all owned resources are absent. The procedures below remain the default/rollback lane until live acceptance and soak gates pass. Keep the state backend until its explicit archival/decommission gates pass.
+
 All commands use the pinned CLI through package scripts, which set `ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1` and run `infra/policies/guard-stage.ts` first. `deploy`, `deploy:plan` and `drift` also build the web client and the MIME container bundle (`pnpm build:deploy`: `build:web` + `build:mime`), because `containers/mime/Dockerfile` copies `dist/server.mjs`. `pnpm dev` runs the stack locally (readme "Local development"; `dev-<id>` stages only). `STAGE=<stage> pnpm logs` reads a deployed stage's Worker logs; add `-- --tail` to follow them.
 
 ## Account prerequisites (pre-flight, before the first deploy to an account)

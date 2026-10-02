@@ -20,6 +20,8 @@ export interface ExportedPlan {
   readonly stack: string;
   readonly stage: string;
   readonly operation: "deploy" | "destroy";
+  readonly deploymentEngine?: "cf";
+  readonly cfApprovalDigest?: string;
   readonly rows: ReadonlyArray<ExportedPlanRow>;
 }
 

@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 export const EFFECT_VERSION = "4.0.0";
 
+export const CF_VERSION = "1.0.0-beta.10";
+
 export const ALCHEMY_VERSION = "2.0.0-beta.79";
 
 const EXACT = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
@@ -44,6 +46,9 @@ export const checkManifest = (
       if (name.startsWith("@effect/") && spec !== EFFECT_VERSION) {
         issues.push({ file, message: `${name} must match effect ${EFFECT_VERSION}` });
       }
+
+      if (name === "cf" && spec !== CF_VERSION)
+        issues.push({ file, message: `cf must be ${CF_VERSION}` });
 
       if (name === "alchemy" && spec !== ALCHEMY_VERSION)
         issues.push({ file, message: `alchemy must be ${ALCHEMY_VERSION}` });

@@ -108,6 +108,7 @@ if (import.meta.main) {
     allowIdx >= 0 && allowIdx < sep ? (args[allowIdx + 1] ?? "").split(",").filter(Boolean) : [];
 
   const state = process.env.BYE_STATE_URL ? [new URL(process.env.BYE_STATE_URL).hostname] : [];
+  const locks = process.env.BYE_CF_LOCK_URL ? [new URL(process.env.BYE_CF_LOCK_URL).hostname] : [];
   const command = args.slice(sep + 1);
 
   if (sep < 0 || command.length === 0) {
@@ -115,7 +116,7 @@ if (import.meta.main) {
     process.exit(2);
   }
 
-  const proxy = await startEgressProxy([...DEFAULT_ALLOW, ...state, ...extra]);
+  const proxy = await startEgressProxy([...DEFAULT_ALLOW, ...state, ...locks, ...extra]);
 
   const child = spawn(command[0]!, command.slice(1), {
     stdio: "inherit",

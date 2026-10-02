@@ -17,6 +17,7 @@ export default defineConfig({
       "packages/*/test/**/*.test.ts",
       "workers/*/test/**/*.test.ts",
       "infra/tests/**/*.test.ts",
+      "infra/cf/test/**/*.test.ts",
       "infra/state/test/**/*.test.ts",
       "apps/*/test/**/*.test.ts",
       "containers/*/test/**/*.test.ts",
