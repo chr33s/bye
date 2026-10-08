@@ -9,6 +9,6 @@
   },
   "dependencies": {
     "@bye/domain": "workspace:*",
-    "effect": "4.0.0"
+    "effect": "4.0.2"
   }
 }

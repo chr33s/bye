@@ -140,7 +140,7 @@ The open decisions in spec.md §14 item 16 are resolved provisionally as follows
 
 - **OAuth client:** Bye's Cloudflare OAuth client registration, redirect URI, and whether a client secret is issued. The endpoints default to the dashboard ones Wrangler uses.
 - **Scope verification:** scope IDs follow Cloudflare's OAuth catalog as mirrored in Alchemy (`alchemy/src/Cloudflare/Auth/OAuthScopes.ts`), and every plan type is covered, including R2 (`workers-r2.write`), the state store's Secrets Store, and `zone.read` + `workers-routes.write` for the custom hostname. Every entry is still `verified: false`, so every `prod` install lands in `needs-review` with coverage blockers (never auto-approved) until a nonproduction deploy with exactly this set succeeds. Documentation does not prove OAuth compatibility. Record the run below and flip the flags.
-- **Custom domain:** a real custom-domain deploy, and recovery from an interrupted one, must succeed before release. Certificate issuance can delay the first health checks; retrying with the same approval reruns them. In alchemy `2.0.0-beta.79` the custom domain is part of the MailCore Worker row; a release that emits a separate `Cloudflare.Workers.CustomDomain` row is permitted only for MailCore.
+- **Custom domain:** a real custom-domain deploy, and recovery from an interrupted one, must succeed before release. Certificate issuance can delay the first health checks; retrying with the same approval reruns them. In alchemy `2.0.0-beta.81` the custom domain is part of the MailCore Worker row; a release that emits a separate `Cloudflare.Workers.CustomDomain` row is permitted only for MailCore.
 - **Token lifetime:** Alchemy's Cloudflare client sends an OAuth access token and an API token identically (`Authorization: Bearer`), so `CLOUDFLARE_API_TOKEN` works as the carrier. Alchemy treats that env token as non-expiring and cannot refresh it. The service therefore refreshes right before each run, and a single plan or deploy must finish within one access-token lifetime (about an hour). Measure a full first deploy, containers included, during the nonproduction run.
 - **Account prerequisites:** the Workers plan needed for Containers, Durable Objects and Queues is shown to the operator but not checked by the API.
 - **Hosted mode:** the open items in spec Part J §46: registry-credential and container-application coverage of the scope set, a plan job still running across a restart, and deployer teardown on disconnect.
@@ -153,7 +153,7 @@ Fill in after the nonproduction run the spec requires, including recovery from p
 | Field                         | Value           |
 | ----------------------------- | --------------- |
 | Bye release (tag, commit)     |                 |
-| Alchemy version               | `2.0.0-beta.79` |
+| Alchemy version               | `2.0.0-beta.81` |
 | Scope set granted             |                 |
 | Stage / account class         |                 |
 | Partial-provisioning recovery |                 |

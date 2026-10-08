@@ -45,7 +45,7 @@ export const isProhibited = (type: string): boolean =>
 
 /**
  * Custom-domain resource types the pinned Alchemy release may emit for MailCore's `domain`. In
- * alchemy 2.0.0-beta.79 the custom domain is part of the MailCore Worker row itself; a release
+ * alchemy 2.0.0-beta.81 the custom domain is part of the MailCore Worker row itself; a release
  * that splits it into its own row may use only these types, only for MailCore, and only on an
  * installation with a chosen Bye hostname. The hostname itself is checked per row by
  * `domainProblems` (from the plan export's `domains`), and APP_DOMAIN is part of the config

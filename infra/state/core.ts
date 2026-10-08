@@ -1,7 +1,7 @@
 // Telemetry-free Alchemy HTTP state backend (spec §15.6, §15.7).
 //
 // Implements the wire contract of `alchemy/State/HttpStateApi.ts` (StateApi, contract version 5)
-// consumed by `makeHttpStateStore` at alchemy@2.0.0-beta.79, so the strict Cloudflare-only profile
+// consumed by `makeHttpStateStore` at alchemy@2.0.0-beta.81, so the strict Cloudflare-only profile
 // can keep deployment state on Cloudflare with no third-party egress:
 //  - no `fetch`, no OTLP/metrics exporters, no outbound sockets; logs carry op + status only
 //  - bearer auth with a constant-time comparison against the STATE_TOKEN secret, optionally

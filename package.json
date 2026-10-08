@@ -42,7 +42,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "effect": "4.0.0"
+    "effect": "4.0.2"
   },
   "devDependencies": {
     "@bye/application": "workspace:*",
@@ -53,24 +53,24 @@
     "@bye/mail-codec": "workspace:*",
     "@bye/platform-cloudflare": "workspace:*",
     "@bye/testing": "workspace:*",
-    "@cloudflare/workers-types": "5.20261002.1",
-    "@effect/platform-bun": "4.0.0",
-    "@effect/platform-node": "4.0.0",
-    "@effect/vitest": "4.0.0",
-    "@oxlint/plugins": "1.86.0",
+    "@cloudflare/workers-types": "5.20261008.1",
+    "@effect/platform-bun": "4.0.2",
+    "@effect/platform-node": "4.0.2",
+    "@effect/vitest": "4.0.2",
+    "@oxlint/plugins": "1.87.0",
     "@types/node": "26.6.4",
     "@vitest/coverage-v8": "5.0.3",
-    "alchemy": "2.0.0-beta.79",
+    "alchemy": "2.0.0-beta.81",
     "miniflare": "4.20260730.0",
-    "oxfmt": "0.71.0",
-    "oxlint": "1.86.0",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
     "oxlint-tsgolint": "7.0.2003",
     "rolldown": "1.2.12",
     "typescript": "7.0.2",
     "vitest": "5.0.3"
   },
   "engines": {
-    "node": "24.18.1"
+    "node": "24.21.0"
   },
-  "packageManager": "pnpm@12.8.1"
+  "packageManager": "pnpm@12.10.1"
 }

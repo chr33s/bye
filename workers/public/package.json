@@ -13,6 +13,6 @@
     "@bye/domain": "workspace:*",
     "@bye/mail-codec": "workspace:*",
     "@bye/platform-cloudflare": "workspace:*",
-    "effect": "4.0.0"
+    "effect": "4.0.2"
   }
 }

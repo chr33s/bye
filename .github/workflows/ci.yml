@@ -43,8 +43,8 @@ env:
   ALCHEMY_TELEMETRY_DISABLED: "1"
   DO_NOT_TRACK: "1"
   NO_TRACK: "1"
-  NODE_VERSION: 24.18.1
-  PNPM_VERSION: 12.8.1
+  NODE_VERSION: 24.21.0
+  PNPM_VERSION: 12.10.1
   # Every `alchemy` call is wrapped: node --experimental-strip-types infra/policies/egress-proxy.ts -- …
   EGRESS: node --experimental-strip-types infra/policies/egress-proxy.ts --
 
@@ -718,7 +718,7 @@ jobs:
           version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.18.1
+          node-version: 24.21.0
           package-manager-cache: false
       - name: Install (exact lockfile)
         working-directory: apps/mobile
@@ -758,7 +758,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.18.1
+          node-version: 24.21.0
           package-manager-cache: false
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
@@ -783,7 +783,7 @@ jobs:
           version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.18.1
+          node-version: 24.21.0
           package-manager-cache: false
       - name: Install (exact lockfile)
         working-directory: apps/desktop
@@ -811,7 +811,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.18.1
+          node-version: 24.21.0
           package-manager-cache: false
       - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
       - name: Install (exact lockfile)

@@ -9,6 +9,6 @@
   "dependencies": {
     "@bye/domain": "workspace:*",
     "@bye/platform-cloudflare": "workspace:*",
-    "effect": "4.0.0"
+    "effect": "4.0.2"
   }
 }

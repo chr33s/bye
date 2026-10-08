@@ -15,13 +15,13 @@
   "dependencies": {
     "@fontsource-variable/dm-sans": "5.3.0",
     "@fontsource-variable/fraunces": "5.3.0",
-    "@remotion/transitions": "4.0.532",
+    "@remotion/transitions": "4.0.534",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "remotion": "4.0.532"
+    "remotion": "4.0.534"
   },
   "devDependencies": {
-    "@remotion/cli": "4.0.532",
+    "@remotion/cli": "4.0.534",
     "@types/node": "26.6.4",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",

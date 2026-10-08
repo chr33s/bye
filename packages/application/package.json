@@ -12,6 +12,6 @@
     "@bye/contracts": "workspace:*",
     "@bye/domain": "workspace:*",
     "@bye/mail-codec": "workspace:*",
-    "effect": "4.0.0"
+    "effect": "4.0.2"
   }
 }
