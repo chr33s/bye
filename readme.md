@@ -50,6 +50,7 @@ packages/contracts/            versioned Effect Schemas: mail/calendar/control/s
 packages/application/          Effect v4 use cases and service interfaces (auth, mail, calendar, sharing)
 packages/platform-cloudflare/  SQLite DO stores (mailbox, calendar, shared space, World, search, ingress
                                journal), durable kernel, D1 control plane, R2/Queue/transport adapters
+packages/jmap/                 JMAP protocol core: capabilities, errors, dispatch, state tokens, Mail methods, client
 packages/mail-codec/           MIME parse/build, sanitizer, threading, Speakeasy, proxy signing, MBOX, vCard
 packages/calendar-engine/      time zones, RRULE, ICS, iTIP, layout, free time, reminders
 packages/testing/              node:sqlite DO storage, D1 shim, clocks, fixtures, workerd module shims

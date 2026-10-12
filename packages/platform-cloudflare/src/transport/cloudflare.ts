@@ -56,7 +56,7 @@ export const classifyCloudflareSendError = (
 
   // Throttling/quota/transient provider errors mean "not accepted, try later" — checked before the
   // permanent patterns, which would otherwise match e.g. "rate limit exceeded".
-  if (phase === "before-request" || /rate|quota|temporar|try again/i.test(message))
+  if (phase === "before-request" || /rate|quota|daily|temporar|try again/i.test(message))
     return new TransportFailure({
       kind: "RetryableBeforeAcceptance",
       detail: message.slice(0, 300),

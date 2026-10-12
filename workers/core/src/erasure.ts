@@ -364,7 +364,8 @@ export const eraseWorldAuthor = async (
 
 export const eraseUserRows = async (env: CoreEnv, userId: string): Promise<void> => {
   // Every credential kind (sessions, API tokens, device sessions, support grants) through the one
-  // revocation table, so erasure can never drift from recovery or closure.
+  // revocation table, so erasure can never drift from recovery or closure; that revocation also
+  // deletes the user's JMAP PushSubscriptions (callback URLs and keys).
   const db: D1Like = env.DIRECTORY;
   await db.batch([
     ...revokeAllCredentials(db, kernelClock, userId, "erasure"),

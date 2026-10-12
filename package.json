@@ -39,7 +39,9 @@
     "lint": "oxlint",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "evidence:jmap": "BYE_JMAP_BENCH_MESSAGES=${BYE_JMAP_BENCH_MESSAGES:-1000} vitest run infra/tests/jmap-bench.test.ts",
+    "evidence:jmap:deployed": "vitest run infra/tests/jmap-deployed.test.ts"
   },
   "dependencies": {
     "effect": "4.0.2"
@@ -50,6 +52,7 @@
     "@bye/cli": "workspace:*",
     "@bye/contracts": "workspace:*",
     "@bye/domain": "workspace:*",
+    "@bye/jmap": "workspace:*",
     "@bye/mail-codec": "workspace:*",
     "@bye/platform-cloudflare": "workspace:*",
     "@bye/testing": "workspace:*",
@@ -61,6 +64,8 @@
     "@types/node": "26.6.4",
     "@vitest/coverage-v8": "5.0.3",
     "alchemy": "2.0.0-beta.81",
+    "jmap-client-ts": "1.0.0",
+    "jmap-jam": "0.13.8",
     "miniflare": "4.20260730.0",
     "oxfmt": "0.72.0",
     "oxlint": "1.87.0",

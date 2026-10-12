@@ -1349,7 +1349,8 @@ export const credentialKindOf = (token: string): CredentialKind => {
  * Statements revoking EVERY credential a user holds — browser sessions, API tokens, device
  * sessions (and their access tokens and unredeemed OAuth/device-code grants), support grants —
  * for recovery, closure and erasure. The user's push devices are disabled too: a registration
- * isn't bound to the credential that made it, so it must not outlive a revoke-everything.
+ * isn't bound to the credential that made it, so it must not outlive a revoke-everything. JMAP
+ * PushSubscriptions (callback URLs and keys) are deleted outright, as a revoked credential's are.
  */
 export const revokeAllCredentials = (
   db: D1SessionLike,
@@ -1370,5 +1371,6 @@ export const revokeAllCredentials = (
       [now, userId],
       guard,
     ),
+    guarded(db, "DELETE FROM jmap_push_subscriptions WHERE user_id = ?", [userId], guard),
   ];
 };

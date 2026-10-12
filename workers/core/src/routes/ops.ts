@@ -5,16 +5,31 @@ import {
   OpsDiscardRequest,
   OpsErasureRequest,
   OpsReindexRequest,
+  OpsJmapMailboxRequest,
+  OpsJmapMigrateRequest,
+  OpsJmapReplayRequest,
   OpsRestoreRequest,
 } from "@bye/contracts";
 import { isForbiddenProxyTarget } from "@bye/mail-codec";
-import { type ExternalCredential, timingSafeEqual } from "@bye/platform-cloudflare";
+import { type ExternalCredential, FULL_RIGHTS, timingSafeEqual } from "@bye/platform-cloudflare";
 import { calendar, mailbox, space } from "../authorities.ts";
 import { sweepBlobGc } from "../blobgc.ts";
 import { discardDeadLetter, listDeadLetters, replayDeadLetter } from "../dlq.ts";
 import type { CoreEnv } from "../env.ts";
 import { replayTombstones, replayTombstonesFor, startErasure } from "../erasure.ts";
 import { validateRestorePoint, awaitRestart } from "../restore.ts";
+import {
+  advanceRestoreGeneration,
+  directoryGrants,
+  armDispatchHold,
+  type DispatchHold,
+  dispatchHold,
+  holdDispatch,
+  RESTORE_HOLD_REASON,
+  revertDispatchHold,
+  syncMailboxGrants,
+} from "../generations.ts";
+import { reconcileRestoredMailbox } from "../sendevents.ts";
 import {
   errorResponse,
   Invocation,
@@ -207,24 +222,62 @@ export const opsRoutes: ReadonlyArray<Route> = [
         );
       }
 
-      const stub = Match.value(kind).pipe(
-        Match.when("mailbox", () => mailbox(env, id)),
-        Match.when("calendar", () => calendar(env, id)),
-        Match.orElse(() => space(env, id)),
-      );
+      // A stub is unusable once its object resets, so the restart is observed through new stubs.
+      const authority = () =>
+        Match.value(kind).pipe(
+          Match.when("mailbox", () => mailbox(env, id)),
+          Match.when("calendar", () => calendar(env, id)),
+          Match.orElse(() => space(env, id)),
+        );
+
+      const stub = authority();
 
       let restored: { bookmark: string; at: number };
+      let armed = false;
+      // The hold this restore replaces: an earlier restore's may still await reconciliation.
+      let prior: DispatchHold | null = null;
+      let heldAt: number | null = null;
 
       try {
+        // C2: stop new attempt admission and advance the recovery generation, both outside the
+        // snapshot, before the restore is armed.
+        if (kind === "mailbox") {
+          prior = await dispatchHold(env, id);
+          heldAt = await holdDispatch(env, id, RESTORE_HOLD_REASON);
+        }
+
+        await advanceRestoreGeneration(env, kind, id);
         const before = await stub.sessionEpoch();
         restored = await stub.restoreTo(at);
+        armed = true;
+
+        // The sweep reconciles only once the object restarted from this epoch (restored state).
+        if (heldAt !== null) await armDispatchHold(env, id, heldAt, before);
         // Replay only after the object is running on the restored storage (no race with the abort).
-        await awaitRestart(() => stub.sessionEpoch(), before);
+        await awaitRestart(() => authority().sessionEpoch(), before);
       } catch (e) {
+        // Never armed: nothing was restored, so the hold it replaced (or none) is put back. Once
+        // armed, the hold stays until reconciliation runs against the restored state (C2).
+        if (heldAt !== null && !armed)
+          await revertDispatchHold(env, id, heldAt, prior).catch(() => undefined);
+
         return errorResponse("unavailable", e instanceof Error ? e.message : "restore failed");
       }
 
+      // A failure from here on leaves the hold; the cron's restore-hold sweep reconciles (C2).
       const replay = await replayTombstonesFor(env, kind, id);
+
+      // C2: reconcile restored sends against the evidence outside the snapshot, then reopen.
+      let reconciled: { readonly accepted: number; readonly ambiguous: number } | null = null;
+
+      if (kind === "mailbox") {
+        try {
+          reconciled = await reconcileRestoredMailbox(env, id);
+        } catch {
+          // The hold stays (no attempt is admitted) until the restore-hold sweep reconciles (C2).
+          reconciled = null;
+        }
+      }
 
       return json(
         {
@@ -233,9 +286,95 @@ export const opsRoutes: ReadonlyArray<Route> = [
           bookmark: restored.bookmark,
           at: restored.at,
           tombstonesReplayed: replay.replayed,
+          sendsReconciled: reconciled,
+          dispatchHeld: kind === "mailbox" && reconciled === null,
         },
         202,
       );
+    }),
+  ),
+  // ---- JMAP per-account cutover (spec.md §16 C3, A3, B4) ----
+  // Migration is operator-driven and per account: `start` fences the legacy writers, backfills
+  // and verifies; `activate` is the separate, no-backend-rollback switch; `abort` resumes the
+  // legacy authority before activation. `confirm` repeats the mailbox ID.
+  route(
+    "POST",
+    "/v1/ops/jmap/migrate",
+    ops("jmap.migrate", async (request, _p, env) => {
+      const b = await opsBody(request, OpsJmapMigrateRequest);
+
+      if (!b || b.confirm !== b.mailboxId)
+        return errorResponse("bad_request", "mailboxId, matching confirm and action are required");
+      const grants = await directoryGrants(env, b.mailboxId);
+      const owner = grants.find((g) => g.owner) ?? grants[0];
+
+      const address = (
+        await env.DIRECTORY.prepare(
+          "SELECT address FROM address_routes WHERE mailbox_id = ? AND kind = 'primary' AND disabled_at IS NULL ORDER BY created_at LIMIT 1",
+        )
+          .bind(b.mailboxId)
+          .first<{ address: string }>()
+      )?.address;
+
+      if (!owner && b.action !== "status" && b.action !== "abort")
+        return errorResponse("conflict", "mailbox has no active principal to own its grants");
+
+      const status = await mailbox(env, b.mailboxId).jmapMigrate(b.action, {
+        grants: grants.map((g) => ({
+          principalId: g.principalId,
+          rights: { ...FULL_RIGHTS, maySubmit: g.canSend },
+        })),
+        ownerPrincipalId: owner?.principalId ?? "",
+        ...(address ? { address } : undefined),
+      });
+
+      // The fence captured the directory read above: converge with a fresh one, so a membership
+      // change racing the migration reaches the grants activation applies (A3, C3).
+      if (b.action !== "status") await syncMailboxGrants(env, b.mailboxId).catch(() => undefined);
+
+      return json(status);
+    }),
+  ),
+  route(
+    "POST",
+    "/v1/ops/jmap/grants",
+    ops("jmap.grants", async (request, _p, env) => {
+      const b = await opsBody(request, OpsJmapMailboxRequest);
+
+      if (!b) return errorResponse("bad_request", "mailboxId is required");
+      const out = await syncMailboxGrants(env, b.mailboxId);
+
+      // A grant change is complete only once the account committed it (A3); a fenced account
+      // records it for activation.
+      return json({
+        mailboxId: b.mailboxId,
+        committed: out.outcome === "committed" || out.outcome === "recorded",
+        outcome: out.outcome,
+        aclGeneration: out.aclGeneration,
+      });
+    }),
+  ),
+  route(
+    "POST",
+    "/v1/ops/jmap/parked",
+    ops("jmap.parked", async (request, _p, env) => {
+      const b = await opsBody(request, OpsJmapMailboxRequest);
+
+      if (!b) return errorResponse("bad_request", "mailboxId is required");
+
+      return json({ items: await mailbox(env, b.mailboxId).jmapParked() });
+    }),
+  ),
+  route(
+    "POST",
+    "/v1/ops/jmap/replay",
+    ops("jmap.replay", async (request, _p, env) => {
+      const b = await opsBody(request, OpsJmapReplayRequest);
+
+      if (!b) return errorResponse("bad_request", "mailboxId and arrivalId are required");
+      const out = await mailbox(env, b.mailboxId).jmapReplayArrival(b.arrivalId);
+
+      return out ? json(out) : errorResponse("not_found", "no parked arrival with that ID");
     }),
   ),
   route(

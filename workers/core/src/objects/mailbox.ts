@@ -9,6 +9,8 @@ import {
   type MailboxReadQuery,
   MailboxStore,
   makeMailboxRpcHandlers,
+  type JmapCallInput,
+  type JmapCallOutput,
   type SearchCandidate,
   type SearchDocument,
   searchShardHealth,
@@ -26,6 +28,7 @@ import {
   setAlarmAt,
   type StoredBody,
 } from "./common.ts";
+import { JmapHost, type MigrationAction, type MigrationInput } from "./jmap-host.ts";
 import { acceptLiveSocket, broadcastSeq, closeLiveSockets } from "./live.ts";
 
 /** UID of the first component in an iCalendar payload (moved to the codec; kept for callers). */
@@ -47,6 +50,55 @@ export const MAILBOX_METADATA_BUDGET_BYTES = 10 * 1024 * 1024 * 1024;
 
 const ERASED_KEY = "erased";
 
+/** C3: legacy writers are fenced while the account migrates. */
+const MIGRATING = {
+  ok: false as const,
+  code: "conflict" as const,
+  message: "account migration in progress; retry later",
+  details: { retryable: true },
+};
+
+/** C4: a client of the thread model can't represent JMAP state; it must upgrade. */
+const UPGRADE_REQUIRED = {
+  ok: false as const,
+  code: "conflict" as const,
+  message: "this account uses JMAP; upgrade the client",
+  details: { upgradeRequired: true, session: "/.well-known/jmap" },
+};
+
+/** Legacy commands that don't write the mail model and stay available after activation (C4). */
+const JMAP_LEGACY_COMMANDS: ReadonlySet<string> = new Set([
+  "SetPolicy",
+  "RevertPolicy",
+  "RotateSpeakeasy",
+  "DisableSpeakeasy",
+  "PutRule",
+  "DeleteRule",
+  "PutContact",
+  "DeleteContact",
+  "ImportContacts",
+  "SetPreference",
+  "SetNotifyOptIn",
+  "SetNotificationSettings",
+  "SetAway",
+  "AddForwardingDestination",
+  "VerifyForwardingDestination",
+  "PutForwardingRule",
+  "DeleteForwardingRule",
+  "AddIdentity",
+  "SetDefaultIdentity",
+  "VerifyIdentity",
+  "ResendIdentityChallenge",
+  "ClearRecentSearches",
+  "CancelSend",
+  "ResolveUnknownSend",
+  "ReserveUpload",
+  "CompleteUpload",
+  "AbortUpload",
+  "CreateFileLink",
+  "RevokeFileLink",
+]);
+
 const ERASED_REJECTION = {
   ok: false as const,
   code: "gone" as const,
@@ -58,6 +110,22 @@ export class MailboxDO extends DurableObject<CoreEnv> {
   private readonly epoch = crypto.randomUUID();
   sessionEpoch() {
     return this.epoch;
+  }
+
+  /** C2: reconcile restored send jobs with the attempt/acceptance evidence kept in D1. */
+  reconcileRestoredSends(
+    evidence: ReadonlyArray<{
+      readonly sendJobId: string;
+      readonly attempted: boolean;
+      readonly providerId: string | null;
+    }>,
+  ) {
+    return this.call(
+      () => this.store.ctx.sql.tx(() => this.store.sends.reconcileRestored(evidence)),
+      {
+        settle: true,
+      },
+    );
   }
 
   /** Operator point-in-time restore (§12); the ops route replays erasure tombstones afterwards. */
@@ -79,7 +147,17 @@ export class MailboxDO extends DurableObject<CoreEnv> {
       publishAddress: `world@${new URL(env.APP_ORIGIN).hostname.replace(/^app\./, "")}`,
     });
     this.rpc = makeMailboxRpcHandlers(this.store);
+    this.jmapHost = new JmapHost(
+      env,
+      this.store,
+      this.mailboxId,
+      () => this.ctx.waitUntil(this.afterCommit()),
+      (p) => this.ctx.waitUntil(p),
+      (input) => this.withOrganizerCheck(input),
+    );
   }
+
+  private readonly jmapHost: JmapHost;
 
   /** Run one store call; `settle` relays its outbox and re-arms the alarm after it commits. */
   private call<A>(f: () => A, options: { readonly settle?: boolean } = {}): A {
@@ -93,6 +171,7 @@ export class MailboxDO extends DurableObject<CoreEnv> {
   private async afterCommit(): Promise<void> {
     // Small invalidation only; clients catch up through the HTTP changes API (§8 Synchronization).
     broadcastSeq(this.ctx, this.store.kernel.currentSeq());
+    this.jmapHost.notify();
     await flush(this.env, this.store.kernel, `mailbox:${this.mailboxId}`);
     await setAlarmAt(
       this.ctx.storage,
@@ -106,6 +185,8 @@ export class MailboxDO extends DurableObject<CoreEnv> {
    * credential tag (`x-bye-credential`, set by the API) lets revocation close exactly those sockets.
    */
   override async fetch(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname === "/jmap-events") return this.jmapHost.openStream(request);
+
     return acceptLiveSocket(this.ctx, request, this.store.kernel.currentSeq());
   }
 
@@ -115,7 +196,9 @@ export class MailboxDO extends DurableObject<CoreEnv> {
 
   /** Close live sockets for a revoked credential (or all, when no credential is given). */
   closeSockets(credentialId?: string): number {
-    return closeLiveSockets(this.ctx, credentialId);
+    const streams = this.jmapHost.closeStreams(credentialId === undefined ? {} : { credentialId });
+
+    return closeLiveSockets(this.ctx, credentialId) + streams;
   }
 
   /** SQLite size of this authority (runtime `databaseSize`, else page_count × page_size). */
@@ -177,20 +260,134 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     return this.call(() => guardMailboxRead(this.store, query));
   }
 
+  /**
+   * Legacy commands (C3/C4): refused with a retry response while the account is fenced; once the
+   * JMAP core is the mail authority, commands that write the thread model are refused with an
+   * explicit upgrade-required response instead of silently diverging. Settings-level commands
+   * (policies, contacts, identities, away replies, uploads…) keep working.
+   */
   execute(command: MailboxCommand) {
-    return this.call(() => this.rpc.execute(command), { settle: true });
+    if (this.fenced()) return MIGRATING;
+
+    if (this.store.jmap.active() && !JMAP_LEGACY_COMMANDS.has(command._tag))
+      return UPGRADE_REQUIRED;
+
+    return this.call(
+      () => {
+        const before = new Set(this.store.identities.identities().map((i) => i.identityId));
+        const result = this.rpc.execute(command);
+
+        if (this.store.jmap.active()) this.jmapAfterLegacyCommand(command._tag, before);
+
+        return result;
+      },
+      { settle: true },
+    );
+  }
+
+  /**
+   * Identity and away-reply commands are visible to JMAP clients as Identity/VacationResponse
+   * changes, under the real object IDs (a JMAP Identity ID is the identity's ID).
+   */
+  private jmapAfterLegacyCommand(tag: string, identitiesBefore: ReadonlySet<string>): void {
+    const core = this.store.jmap.core;
+
+    if (tag === "SetAway") {
+      core.history.tx(() => core.history.record("VacationResponse", "singleton", "updated"));
+
+      return;
+    }
+
+    if (!["AddIdentity", "SetDefaultIdentity", "VerifyIdentity"].includes(tag)) return;
+
+    // Any of these may change another identity's default/verified state: report every one.
+    core.history.tx(() => {
+      for (const i of this.store.identities.identities())
+        core.history.record(
+          "Identity",
+          i.identityId,
+          identitiesBefore.has(i.identityId) ? "updated" : "created",
+        );
+    });
   }
 
   view(query: MailViewQuery) {
-    return this.rpc.view(query);
+    return this.store.jmap.active() ? UPGRADE_REQUIRED : this.rpc.view(query);
   }
 
   thread(threadId: string) {
-    return this.rpc.thread(threadId);
+    return this.store.jmap.active() ? UPGRADE_REQUIRED : this.rpc.thread(threadId);
   }
 
   changes(cursor: number) {
-    return this.rpc.changes(cursor);
+    return this.store.jmap.active() ? UPGRADE_REQUIRED : this.rpc.changes(cursor);
+  }
+
+  // ---- JMAP (spec.md §16); the API Worker authenticates and passes the principal ----
+
+  /** This account as the principal discovers it, or null when it has no effective grant (A3). */
+  jmapAccount(principalId: string, restoreGeneration: number) {
+    if (this.erased()) return null;
+
+    return this.jmapHost.accountFor(principalId, restoreGeneration);
+  }
+
+  /** One account-scoped method call, run next to the storage in one consistent pass (C1). */
+  jmapCall(input: JmapCallInput): JmapCallOutput {
+    return this.jmapHost.call(input);
+  }
+
+  /** Where a blob's bytes live, and whether the quarantine/scan gate allows them (A3). */
+  jmapBlob(principalId: string, blobId: string) {
+    return this.jmapHost.blob(principalId, blobId);
+  }
+
+  jmapEmailBlob(principalId: string, emailId: string) {
+    return this.jmapHost.emailBlob(principalId, emailId);
+  }
+
+  jmapRegisterUpload(
+    principalId: string,
+    blob: {
+      readonly blobId: string;
+      /** Where the bytes live: uploads go to parts, copied messages to originals. */
+      readonly bucket?: "originals" | "parts";
+      readonly r2Key: string;
+      readonly size: number;
+      readonly type: string;
+    },
+    owner?: string,
+  ) {
+    this.jmapHost.registerUpload(principalId, blob, owner);
+  }
+
+  /** Operator migration control (C3). */
+  jmapMigrate(action: MigrationAction, input: MigrationInput) {
+    return this.jmapHost.migrate(action, input);
+  }
+
+  /** Converge effective grants with one directory read taken at `readAt` (A3). */
+  jmapSyncGrants(
+    entries: ReadonlyArray<{ readonly principalId: string; readonly canSend: boolean }>,
+    readAt: number,
+  ) {
+    return this.jmapHost.syncGrants(entries, readAt);
+  }
+
+  /** Parked arrivals and operator replay (B4). */
+  jmapParked() {
+    return this.store.jmap.ingest.parked();
+  }
+
+  async jmapReplayArrival(arrivalId: string) {
+    if (!this.store.jmap.ingest.replay(arrivalId)) return null;
+
+    return this.jmapHost.process(arrivalId);
+  }
+
+  /** C3: the account is fenced for migration (writers refuse or buffer). */
+  private fenced(): boolean {
+    return this.store.jmap.migration.fenced();
   }
 
   /**
@@ -205,19 +402,46 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     // Permanent rejection: the ingest consumer records it and stops replaying the receipt.
     if (this.erased()) return ERASED_REJECTION;
 
-    // C04: an iTIP REPLY from an unscreened sender bypasses the Screener only when the owner's
-    // calendar authority confirms it organizes the event. REQUESTs are always screened.
+    // C3: a fenced account buffers the arrival durably with a stable event ID (acknowledged).
+    if (this.fenced()) {
+      this.jmapHost.buffer("arrival", `arrival:${this.jmapHost.arrivalId(input)}`, input);
+
+      return {
+        ok: true as const,
+        value: { deliveryId: "", threadId: "", disposition: "buffered", replayed: false },
+      };
+    }
+
+    // B4: on the JMAP core, staged then prepared and published; acknowledged once staged.
+    if (this.store.jmap.active()) {
+      const out = await this.jmapHost.deliver(input);
+
+      return {
+        ok: true as const,
+        value: {
+          deliveryId: out.emailId ?? "",
+          threadId: "",
+          disposition: out.state,
+          replayed: false,
+        },
+      };
+    }
+
+    const checked = await this.withOrganizerCheck(input);
+
+    return this.call(() => this.rpc.commitDelivery(checked), { settle: true });
+  }
+
+  /**
+   * C04: an iTIP REPLY from an unscreened sender bypasses the Screener only when the owner's
+   * calendar authority confirms it organizes the event. REQUESTs are always screened.
+   */
+  private async withOrganizerCheck<I extends MailboxDeliveryCommit>(input: I): Promise<I> {
     const organizerReply =
       this.store.ingest.needsOrganizerCheck(input.summary, input.ingestionId) &&
       (await this.ownerOrganizes(input.summary.calendarUid));
 
-    return this.call(
-      () =>
-        this.rpc.commitDelivery(
-          organizerReply ? { ...input, calendarOrganizerReply: true } : input,
-        ),
-      { settle: true },
-    );
+    return organizerReply ? { ...input, calendarOrganizerReply: true } : input;
   }
 
   /** Whether the owner's calendar organizes the event with this UID; fails closed (the reply waits in the Screener). */
@@ -245,19 +469,28 @@ export class MailboxDO extends DurableObject<CoreEnv> {
       return null;
     }
 
-    return this.call(
-      () =>
-        this.store.ingest.commitDelivery({
-          ...input,
-          ingestionId: `xfer:${input.transferId}`,
-          authorizedTransfer: true,
-        }),
-      { settle: true },
-    );
+    const transfer = {
+      ...input,
+      ingestionId: `xfer:${input.transferId}`,
+      authorizedTransfer: true,
+    };
+
+    if (this.fenced()) {
+      this.jmapHost.buffer("transfer", `transfer:${input.transferId}`, transfer);
+
+      return null;
+    }
+
+    if (this.store.jmap.active()) return this.jmapHost.deliver(transfer);
+
+    return this.call(() => this.store.ingest.commitDelivery(transfer), { settle: true });
   }
 
   // ---- send-job port (§7.3); the dispatch consumer calls these over RPC ----
   claim(sendJobId: string) {
+    // C3: no new external dispatch claims while fenced; the job stays ready and is re-emitted.
+    if (this.fenced()) return null;
+
     return this.call(() => this.store.sends.claim(sendJobId), { settle: true });
   }
 
@@ -266,6 +499,9 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     receipt: { readonly providerId: string; readonly wireMessageId?: string },
   ) {
     this.call(() => this.store.sends.accepted(sendJobId, receipt), { settle: true });
+
+    // A legacy send accepted after the cutover was staged for Sent: publish it now (C3).
+    if (this.store.jmap.active()) this.ctx.waitUntil(this.jmapHost.publishOutgoing(sendJobId));
   }
 
   failed(
@@ -348,6 +584,22 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     outcome: "clean" | "infected" | "failed",
     signature?: string,
   ) {
+    if (this.fenced()) {
+      this.jmapHost.buffer("scan", `scan:${deliveryId}:${outcome}`, {
+        deliveryId,
+        outcome,
+        signature,
+      });
+
+      return;
+    }
+
+    if (this.store.jmap.active()) {
+      this.jmapHost.recordScan(deliveryId, outcome);
+
+      return;
+    }
+
     this.call(() => this.store.ingest.recordDeliveryScan(deliveryId, outcome, signature), {
       settle: true,
     });
@@ -357,8 +609,76 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     return this.store.ingest.attachmentAccess(deliveryId);
   }
 
-  scanStatusForMessageKey(messageKey: string) {
-    return this.store.ingest.scanStatusForMessageKey(messageKey);
+  /**
+   * Scan state behind an original (forwarding gate, §10): the core's Emails once migrated. A
+   * forward is only made for a published Email, so when none (nor its legacy delivery) names the
+   * key any more it was destroyed before its verdict: no verdict means no forward (`failed`).
+   */
+  scanStatusForMessageKey(messageKey: string): string | null {
+    if (!this.store.jmap.active()) return this.store.ingest.scanStatusForMessageKey(messageKey);
+
+    return (
+      this.store.jmap.core.scanStatusForKey(messageKey) ??
+      this.store.ingest.scanStatusForMessageKey(messageKey) ??
+      "failed"
+    );
+  }
+
+  /** A JMAP Email as the delivery-topic consumers need it, or null (spec.md §16 B4). */
+  jmapEmailSummary(emailId: string) {
+    return this.store.jmap.core.emailSummary(emailId) ?? null;
+  }
+
+  /** A JMAP thread's subject and the requested Emails, in the shared-propagation shape. */
+  jmapSharedMessages(threadId: string, refs: ReadonlyArray<string>) {
+    const core = this.store.jmap.core;
+
+    const all = core.threadEmailIds(threadId).flatMap((id) => {
+      const s = core.emailSummary(id);
+
+      return s ? [s] : [];
+    });
+
+    if (all.length === 0) return null;
+    const wanted = new Set(refs);
+
+    return {
+      subject: all[0]!.subject,
+      messages: all
+        .filter((s) => wanted.has(s.emailId))
+        .map((s) => ({
+          messageRef: s.emailId,
+          from: s.from,
+          to: s.to,
+          cc: s.cc,
+          subject: s.subject,
+          snippet: s.preview,
+          contentKey: s.contentKey,
+          sentAt: s.sentAt,
+        })),
+    };
+  }
+
+  /**
+   * A delivery or a JMAP blob still points at this object: blob GC must keep it. Once the JMAP
+   * core is the authority, the frozen legacy rows no longer hold bytes (§16 C3): a destroyed
+   * Email's original goes even though the delivery it was backfilled from remains.
+   */
+  messageKeyReferenced(messageKey: string): boolean {
+    if (this.store.jmap.core.referencesKey(messageKey)) return true;
+
+    return (
+      !this.store.jmap.active() && this.store.ingest.scanStatusForMessageKey(messageKey) !== null
+    );
+  }
+
+  /** Blob GC claims a JMAP key it found unreferenced before deleting it (§12); see `claimGc`. */
+  jmapClaimGc(r2Key: string): boolean {
+    return this.store.jmap.core.claimGc(r2Key);
+  }
+
+  jmapReleaseGc(r2Key: string): void {
+    this.store.jmap.core.releaseGc(r2Key);
   }
 
   resolveFileLink(token: string) {
@@ -454,6 +774,14 @@ export class MailboxDO extends DurableObject<CoreEnv> {
 
   /** One page of every delivery (all dispositions) for export/reindex workflows (§12, A04). */
   exportManifestPage(cursor: string | null, limit = 500) {
+    // A migrated account's mail is the core's Emails; the legacy rows are a frozen snapshot.
+    return this.store.jmap.active()
+      ? this.store.jmap.core.exportManifestPage(cursor, limit)
+      : this.store.retention.exportManifestPage(cursor, limit);
+  }
+
+  /** One page of legacy deliveries for the legacy search reindex (§8). */
+  searchManifestPage(cursor: string | null, limit = 500) {
     return this.store.retention.exportManifestPage(cursor, limit);
   }
 
@@ -531,8 +859,16 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     this.store.search.replayPendingIndex();
     this.store.kernel.compactChanges(10_000);
 
+    // Once fenced or migrated the legacy tables are frozen: their scans, retention and blob
+    // collection belong to the JMAP core, whose Emails point at the same originals (§16 C3).
+    const legacy = !this.fenced() && !this.store.jmap.active();
+
     // Re-emit scans whose queue message was lost or dead-lettered (§6 replay from source state).
-    for (const p of this.store.ingest.pendingScans(now - 15 * 60_000, 50)) {
+    const pending = legacy
+      ? this.store.ingest.pendingScans(now - 15 * 60_000, 50)
+      : this.jmapHost.pendingScans(now - 15 * 60_000, 50);
+
+    for (const p of pending) {
       this.store.kernel.outbox("propagate", this.mailboxId, {
         topic: "scan-message",
         deliveryId: p.deliveryId,
@@ -540,8 +876,21 @@ export class MailboxDO extends DurableObject<CoreEnv> {
       });
     }
 
-    // Bounded: one batch here; a scheduled `retention-sweep` job drains any backlog via the alarm.
-    const purged = this.store.retention.sweepRetention(now).deleted;
+    // Bounded: one batch here; a scheduled sweep job drains any backlog via the alarm. Retention
+    // waits out a migration fence, then runs on whichever authority holds the mail.
+    const purged = legacy
+      ? this.store.retention.sweepRetention(now).deleted
+      : this.store.jmap.active()
+        ? this.store.ctx.sql.tx(() => this.store.jmapRetention(now)).deleted
+        : 0;
+
+    // The alarm runs only for due jobs: the cron is what guarantees JMAP housekeeping (blob and
+    // pin release) and history compaction also happen on an otherwise quiet account.
+    if (this.store.jmap.active()) {
+      this.jmapHost.housekeeping(now);
+      this.store.jmap.core.history.compact(now);
+    }
+
     await this.refreshExternalUsage().catch(() => 0);
     await this.afterCommit();
 
@@ -558,6 +907,13 @@ export class MailboxDO extends DurableObject<CoreEnv> {
     // finally re-arms the alarm and flushes the outbox even if something else here throws.
     try {
       const { failed } = this.store.runDueJobs(Date.now());
+
+      if (this.store.jmap.active()) {
+        await this.jmapHost.retryArrivals();
+        this.jmapHost.housekeeping();
+        // C1 retention: compaction raises each type's floor; it never silently shortens history.
+        this.store.jmap.core.history.compact(Date.now());
+      }
 
       for (const f of failed)
         console.error(

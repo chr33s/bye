@@ -52,6 +52,7 @@ import { metric } from "./metrics.ts";
 import { MIME_INLINE_MAX_BYTES, parseViaContainer } from "./mime.ts";
 import { recordUsage } from "./usage.ts";
 import { mailboxErased } from "./erasure.ts";
+import { dispatchHeld, recordAttempt } from "./generations.ts";
 
 // Queue consumers (§5.1 steps 5–7, §5.2, §6). Every handler is idempotent by (eventId, target);
 // acknowledgement follows the committed result. Messages are acked or retried individually so a
@@ -268,6 +269,8 @@ const dispatchLayers = (
       // Dispatch revalidates sender authority, membership and abuse budgets (§5.2, §10) BEFORE
       // claiming, so a directory outage retries cleanly instead of stranding a never-attempted job.
       claim: async (id) => {
+        // C2: no attempt is admitted while the authority is held for restore/reconciliation.
+        if (await dispatchHeld(env, mailboxId)) return null;
         const job = await stub.sendJob(id);
 
         if (!job || job.state !== "ready") return stub.claim(id);
@@ -323,6 +326,22 @@ const dispatchLayers = (
             "rejected",
             "suppressed: previous bounce or complaint",
           );
+        }
+
+        // C2: journal the attempt outside the account snapshot before contacting the provider.
+        // A failed journal write prevents the attempt (it is retried before acceptance).
+        try {
+          await recordAttempt(env, mailboxId, id, job.attempts + 1);
+        } catch {
+          await stub.failed(id, {
+            kind: "RetryableBeforeAcceptance",
+            detail: "attempt journal unavailable",
+          });
+
+          if (Predicate.isTagged(decision, "Proceed"))
+            await release(budgetUserId, job.from, decision.reserved);
+
+          return null;
         }
 
         jobInfo.set(id, {

@@ -81,6 +81,20 @@ export class MailboxIdentities extends IdentityDirectory {
   ) {
     super(ctx);
   }
+  /** Change an identity's display name and/or signature (JMAP Identity/set). */
+  updateIdentity(
+    identityId: string,
+    patch: { readonly name?: string | null; readonly signature?: string },
+  ): void {
+    const current = this.identity(identityId) ?? reject("not_found", "identity");
+
+    this.sql.run(
+      "UPDATE identities SET name = ?, signature = ? WHERE identity_id = ?",
+      patch.name === undefined ? current.name : patch.name,
+      patch.signature ?? current.signature,
+      identityId,
+    );
+  }
 
   addIdentity(input: {
     readonly address: string;

@@ -1,4 +1,4 @@
-import { type GcBucket, pinBlob, recordGcIntent, unpinBlob } from "../blobgc.ts";
+import { bucketOfKey, type GcBucket, pinBlob, recordGcIntent, unpinBlob } from "../blobgc.ts";
 import { startErasure } from "../erasure.ts";
 import { deliverNotification } from "../push.ts";
 import type { TopicHandlers } from "./types.ts";
@@ -11,14 +11,14 @@ export const opsTopics: TopicHandlers<"blob.pin" | "blob.unpin" | "account.erase
     "blob.pin": async ({ env, payload }) => {
       await pinBlob(
         env,
-        payload.bucket ?? "ORIGINALS",
+        payload.bucket ?? bucketOfKey(payload.key),
         payload.key,
         payload.holderKind,
         payload.holderId,
       );
     },
     "blob.unpin": async ({ env, payload, mailboxId }) => {
-      const bucket: GcBucket = payload.bucket ?? "ORIGINALS";
+      const bucket: GcBucket = payload.bucket ?? bucketOfKey(payload.key);
       await unpinBlob(env, bucket, payload.key, payload.holderKind, payload.holderId);
       // Unpinning never deletes: it only makes the key eligible for the next delayed, re-checked sweep.
       await recordGcIntent(env, {

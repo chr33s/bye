@@ -244,7 +244,8 @@ export class MailboxAutomation {
    * ourselves; apply a per-sender cooldown and mark replies Auto-Submitted.
    */
   maybeAwayReply(input: {
-    readonly threadId: string;
+    /** The legacy thread; null on the JMAP core, whose replies are not filed (§16 B4). */
+    readonly threadId: string | null;
     readonly from: string;
     readonly recipient: string;
     readonly summary: MessageSummary;
@@ -407,7 +408,7 @@ export class MailboxAutomation {
     readonly from: string;
     readonly recipient: string;
     readonly messageKey: string;
-    readonly threadId: string;
+    readonly threadId: string | null;
     readonly hops: number;
     readonly bytes: number;
   }): MaybeForwardResult {

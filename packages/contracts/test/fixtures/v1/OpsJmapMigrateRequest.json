@@ -1,0 +1,17 @@
+[
+  {
+    "mailboxId": "3-\\.",
+    "confirm": "\udc00",
+    "action": "start"
+  },
+  {
+    "mailboxId": ";>",
+    "confirm": "\t",
+    "action": "step"
+  },
+  {
+    "mailboxId": "0",
+    "confirm": " ",
+    "action": "start"
+  }
+]

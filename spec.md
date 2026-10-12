@@ -1428,6 +1428,330 @@ Release requires resolving §14 item 16, a successful nonproduction deployment, 
 | OB09 | Preview, destructive-plan, and error paths are exercised.                               | Production isolation holds, unapproved or prohibited destruction is blocked, and outputs contain no management credentials or customer payloads.   |
 | OB10 | A ready installation is opened or scanned in a native app.                              | The handoff contains only the HTTPS instance URL; the app validates and displays the server before saving it and signing in directly with it.      |
 
+## 16. JMAP mail core
+
+Folded in from `spec.md` §16 (refactor specification v2) on 12 October 2026. Contract labels (A1–D2) are unchanged; "§16.N" replaces that document's "§N".
+
+**Status:** Implemented (contracts A–D). Interoperability, cutover, measurements, concurrency, budgets, cost and a point-in-time restore drill have run locally and on a deployed Cloudflare stage; the platform constraints were rechecked, provider approval is recorded, and the release profile was signed off on 2026-10-12. See `jmap-release-profile.md` (profile version 1).
+**Updated:** 12 October 2026. Supersedes `bye-jmap-native-refactor-spec.md`.  
+**Basis:** Original spec, critical review R1–R9, and attached feasibility brief. Repository baseline remains `214588b`; this revision is not a new code audit.  
+**Decision provenance:** The architecture is retained. Contracts A–C explicitly select proposed resolutions to the review; they are not claims about existing Bye behavior or requirements imposed by JMAP. Contract D identifies evidence still needed. RFC references govern standard behavior; RFC checks for this revision were limited to the newly explicit protocol boundaries.
+
+### 16.1 Decision
+
+**JMAP is the canonical mail model, API, and synchronization contract. Bye is its opinionated client and extension layer—not a proprietary engine behind a JMAP facade.**
+
+RFC 8620 and RFC 8621 decide standard observable behavior. Refactor conflicting Bye behavior rather than reinterpret the protocol. Where JMAP permits choices, use the explicit Bye policies below. A valid external edit is authoritative; native projections must not silently restore the former thread-centric state. [Original §1; Review R6]
+
+Scope: ordinary mail in Bye web/mobile/desktop, independent clients, and integrations. Calendar, contacts, billing, and general administration remain outside this refactor; authorization and recovery changes needed for mail are included.
+
+### 16.2 One authoritative mail core
+
+```text
+Bye clients / independent JMAP clients / integrations
+                         |
+              JMAP Core + Mail + Bye extensions
+                         |
+                shared typed mail services
+                         |
+            existing MailboxDO, evolved in place
+               SQLite metadata + private R2
+                         |
+             durable outbox -> Queues -> workers
+```
+
+| Boundary          | Responsibility                                                                                                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Account authority | Each existing `MailboxDO` initially owns one JMAP Account. Preserve deployed object identity. A JMAP Mailbox is a folder/label within it.                                                         |
+| Account SQLite    | Standard metadata, membership, keywords, stable identity maps, effective rights, principal-specific fields, counts, query indexes, typed history, blob references, and jobs.                      |
+| Private R2        | Immutable raw messages, decoded parts, and large parsed content. Sanitized rendering is separate from original content.                                                                           |
+| D1                | Account/domain directory, credentials, administrative grant requests, and control/recovery records. Effective mail rights are committed in the account authority, not independently dual-written. |
+| Queues            | Triggers for durable account-owned work; not the job ledger or synchronization authority.                                                                                                         |
+
+Every writer uses the same services: JMAP, temporary legacy adapters, ingestion, timers, retention, scans, submission outcomes, and administrative repair. Background services call them directly, not through internal HTTP. [Original §2; Brief: Proposed components]
+
+### 16.3 Mail semantics and extensions
+
+Replace authoritative thread organization/read flags with per-email membership and keywords. Keep protocol Thread identity separate from editable Bye `Conversation` grouping. Immutable content changes create replacement Email identities. Contract A defines native operations and ownership; Contract B defines safe replacement and submission. [Original §3; Review R1, R6, R8]
+
+<a id="jmap-capability"></a>
+
+Advertise extensions under a vendor-owned capability URL (`https://github.com/chr33s/bye/blob/main/spec.md#jmap-capability`). They may coordinate workflows and editor continuity but must not redefine standard fields or introduce another authoritative mail model. Use standard `VacationResponse` when away replies migrate.
+
+### 16.4 Publication, queries, and synchronization
+
+Persist bytes and prepare content before publishing an Email. In a short account transaction, check current rights, writer generation, and state preconditions; commit applicable metadata, canonical indexes, counts, typed changes, blob pins, and outbox intentions together. Return creation success only after that commit. Do not hold SQL cursors or transactions over network awaits. [Original §4; Brief: Correctness rules]
+
+Honor ordered calls, result references, patches, per-object atomicity, and partial failures. A JMAP HTTP batch is not globally transactional. Cross-account copy has separate publication boundaries, defined in B3.
+
+**Account-local SQL/FTS5 is the provisional canonical-query implementation, not a proven capacity commitment.** Existing asynchronous shards remain auxiliary until coherent publication is demonstrated. Contract C specifies state/history; Contract D gates search capacity and completeness.
+
+### 16.5 Protocol and delivery boundary
+
+Expose authenticated `/.well-known/jmap`, the API, advertised upload/download endpoints, EventSource, and PushSubscription, including `EmailDelivery` state notifications. Custom `/v1/live` messages are not the public protocol. Budget event-stream lifetimes separately from hibernating sockets. [Original §5; Brief: Push and client compatibility]
+
+Core/Mail conformance and submission are separate release gates. Keep `Identity`/`EmailSubmission` behind the submission capability and a permitted transport. JMAP hosting requires no dedicated external JMAP server. Outbound-use approval, raw-MIME fidelity, actual serialized limits, envelope/Bcc behavior, and acceptance ambiguity remain independent delivery gates. Do not report relay acceptance as confirmed delivery into a recipient's mail store. [Brief: Outbound mail]
+
+### 16.6 Repository changes and delivery order
+
+Paths retain the reviewed snapshot; new names are proposed.
+
+| Area                                                 | Required change                                                                                         |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `packages/jmap` — new                                | Schemas, capabilities, method/error registry, dispatch, typed client, protocol fixtures.                |
+| `packages/platform-cloudflare/src/mailbox/*`         | Per-email authority, rights, native projections, extension state, draft/copy/submission lifecycles.     |
+| `packages/platform-cloudflare/src/durable/kernel.ts` | Typed history, receipts, retention, writer generations, migration checkpoints, restore fencing.         |
+| `packages/mail-codec`                                | Complete headers/body structure, bounded preparation, immutable blob mapping and fidelity fixtures.     |
+| `workers/core/src/routes/jmap.ts` — new; `api.ts`    | Endpoint registration, authentication, authorized blob access, push.                                    |
+| Send jobs/transports and Bye clients                 | Pinned submission content, outcome handling, standard mail calls, versioned caches and offline intents. |
+
+Order: shared core and invariant tests → read-only vertical slice labeled partial → writable mail and lifecycle contracts → native-client migration → canary cutover → wider rollout. Submission may progress separately. The irreversible account switch is governed by C3; a read-only prototype is not Mail conformance.
+
+### 16.7 Completion and approval
+
+Completion requires ordinary mail implemented once, exercised by Bye's own clients and the selected independent clients, with every applicable Contract D1 test passing. Production cutover additionally requires the populated D2 release profile and a successful migration/restore drill.
+
+**This revision resolves design ambiguities; it does not supply missing measurements, client test results, transport approval, or deployment evidence.** Those remain explicit release blockers, not assumed successes.
+
+---
+
+### Contract A — Behavior and ownership
+
+#### A1. Native mutation policy
+
+The following choices resolve R6. They apply to Bye actions; generic JMAP updates retain their requested, valid semantics.
+
+Use stable Mailbox IDs and explicit roles: `inbox`, `drafts`, `sent`, `trash`, `junk`, `archive`. Feed, Paper Trail, and Screener have no standard role. Maintain their IDs in account configuration; never infer roles or workflow targets from display names.
+
+| Operation                        | Defined result                                                                                                                                                                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Read/unread or star              | Update only selected Emails' `$seen` or `$flagged`. Reading does not archive or grant sender trust.                                                                                                                                              |
+| Label/unlabel                    | Add/remove the selected label Mailbox membership. Preserve other memberships; reject removal of the last membership unless the operation is an explicit destruction.                                                                             |
+| Native archive                   | For non-draft mail outside Trash/Spam/security quarantine, remove Inbox, Feed, Paper Trail, and Screener memberships; add Archive. Preserve labels, Sent, and unrelated custom memberships. Archiving Screener mail does not approve its sender. |
+| Native move                      | Remove explicitly selected source memberships and add the destination in one per-email update. Preserve unrelated memberships. Do not infer a whole-conversation move.                                                                           |
+| Move to Trash/Spam               | Remove native placement memberships, including Drafts/Sent/Archive; add Trash or Spam. Preserve user labels/custom memberships. Do not infer cancellation of a submission.                                                                       |
+| Native visibility                | Normal native views omit Emails in Trash/Spam even when they retain labels; dedicated views expose them. Generic JMAP queries still honor their explicit filters and actual memberships.                                                         |
+| Restore from Trash/Spam          | Remove that membership and require an explicit destination, defaulting in the native UI to Inbox; preserve labels/custom memberships. No guessed reconstruction of former placement.                                                             |
+| Delete permanently / empty Trash | Destroy the selected Emails across all memberships. Empty Trash selects the Emails actually in Trash at execution, applies per-email outcomes, and leaves submission/recovery pins intact.                                                       |
+| Accept in Screener               | Explicit policy command records sender trust and moves the selected Email set to its chosen destination. Moving out through ordinary JMAP alone changes no trust policy.                                                                         |
+| Delete a Mailbox                 | Follow standard `Mailbox/set` behavior, including its explicit nonempty-removal option and per-object errors. The last-membership rule above does not override this standard cascade.                                                            |
+| Rename/delete workflow target    | Rename preserves its ID. Successful deletion disables affected rules/timers with a visible reason; never recreate or retarget by name. Replacement requires an explicit configuration change.                                                    |
+| Native bulk action               | Capture exact Email IDs and relevant versions at selection. Return per-email results. Never include later arrivals merely because they join the same Conversation.                                                                               |
+
+Missing required native destination Mailboxes produce a repair/configuration error, not silent recreation. Role-protected Mailboxes must advertise accurate rights; do not make role-less workflow Mailboxes undeletable merely to simplify Bye.
+
+#### A2. Threads, counts, and extension ownership
+
+For new mail, use a versioned deterministic threading rule: compatible normalized subject plus a known reference, preferring the rightmost matching References entry, then In-Reply-To; otherwise create a Thread. Resolve duplicate-reference candidates by persisted first-seen order then ID. A bridge reply selects one existing Thread; it never reassigns older Emails. Migration uses C3's fixed mapping. This is a Bye policy, not a mandated JMAP algorithm. [Review R6; Mail §3]
+
+Choose the recommended unread-thread counting policy in Mail §2, including its Trash treatment. Email unread counts exclude `$seen` and `$draft`. Bye Conversation badges are separate, derived from visible constituent Emails; they must not be returned as Mailbox thread counts.
+
+All extensions below are proposed, capability-discovered objects with version preconditions, durable state/change notifications, account authorization, and tombstoned references. They never own membership or keywords.
+
+| Extension                         | Owner / references                                                                    | Lifecycle and concurrency                                                                                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Conversation`                    | Account; set of protocol Thread IDs                                                   | Group/title only. Merge/unmerge updates membership, not standard IDs. Preserve original Conversation references through reversible redirects; expand mail actions before execution. |
+| `DraftSession`                    | Account + editor principal; current and conflicting Email IDs                         | Compare-and-swap versioned head; retain conflicting saves for explicit resolution. B1 governs cleanup.                                                                              |
+| Workflow/timer                    | Account + creating principal; explicit Email IDs, presentation Conversation reference | Persist generation, expected placement versions, and any condition revision. Mail changes use the core.                                                                             |
+| Notes, clips, boards, collections | Preserve existing owner/ACL; typed Conversation, Email, or part references            | Missing targets remain identifiable until explicit cleanup; deletion never recreates mail. A merge changes presentation resolution, not the stored content target.                  |
+| Visit/new-for-you/preferences     | Principal within account                                                              | Presentation only; independent of standard read flags.                                                                                                                              |
+| Screener policy / label color     | Account; sender key / Mailbox ID                                                      | Policy changes are explicit; missing Mailbox targets disable routing actions.                                                                                                       |
+
+**Timer precedence:** A later placement edit or destruction invalidates a timer's mail-moving action. Read/star edits coexist unless the timer explicitly depends on them. Recheck generation, targets, rights, condition, and placement version at execution. Missing/quarantined/trashed targets cannot be resurrected or surfaced. Re-arming is explicit. A Conversation merge does not expand the captured Email set. [Review R8]
+
+#### A3. Rights and principal-specific state
+
+**Selected authority:** Account-local, versioned effective grants make final mail decisions. D1 records administrative intent and directory state; a grant change is complete only after the owning account commits its effective revision. No D1/account distributed transaction is implied. [Review R2]
+
+Authenticate credentials at the edge; recheck effective rights and credential denial at each authoritative read/write boundary, after content preparation. Check specific Mailbox rights and all relevant memberships, not one account-wide boolean. Keep existing access supported until its replacement is verified; an account with unmapped grants cannot cut over.
+
+`isSubscribed`, visibility-sensitive caches, and extension preferences are principal-scoped. Standard Email metadata is account-owned under the effective rights model. Scope response state to account/type plus principal visibility and its ACL generation. A visibility change invalidates old deltas for that principal and notifies it to resynchronize; full account loss also removes discovery access. Do not leak hidden IDs or counts in changes or errors.
+
+Revocation takes effect at the account grant/denial commit. Later staged user mutations fail authorization; already committed changes remain committed. Stop subsequent stream reads and notifications and close affected live connections; already released bytes cannot be recalled. Record/measure closure latency. Global credential revocation completes only after affected account barriers are acknowledged; partial propagation is reported pending, not complete.
+
+Credential scopes apply to JMAP as to the legacy commands: a call needs the scope its legacy equivalent needs. Creating drafts or importing/copying needs `draft`; moving, flagging and Mailbox edits need `screen`; destroying needs `delete`, except that a `draft` credential may destroy `$draft` Emails (legacy `DeleteDraft`); submission needs `send`, including its `onSuccess*` changes to the call's own submissions; and Identity/VacationResponse writes need `admin`. A missing scope is a `forbidden` method error.
+
+Queued user commands reauthorize at execution. Already created submissions are account-owned jobs and follow B2, not a stale user request. Security quarantine remains separate from Screener trust and applies consistently to bodies, raw downloads, parts, parse/import/copy, snippets, and submission. Push callbacks require destination validation and SSRF defenses. [Review R2]
+
+### Contract B — Lifecycle and failure
+
+#### B1. Draft replacement and native retries
+
+Use this native save lifecycle; standard clients retain ordinary per-object JMAP semantics. [Review R1]
+
+1. Persist candidate bytes and create the replacement Email. Until creation is confirmed, the previous saved Email remains the draft-session head and cannot be cleaned up.
+2. Advance the session head using its expected version. Competing saves retain their candidates as explicit conflicts; a losing save never destroys the winning head.
+3. Only after head advancement, attempt cleanup of the superseded draft with a checked revision/ownership guard. Failed cleanup leaves a recoverable old draft and pending cleanup record, not a failed save or lost content. An independently edited old draft becomes a conflict, not cleanup material.
+
+A native save/send uses a capability-discovered intent ID, scoped by principal, account, method, and payload digest. Persist its result with the corresponding mutation. Reuse with a different payload conflicts; lost-response recovery retrieves the existing result after reauthorization. Request-local JMAP call tags are never global receipt keys. Keep unresolved intents until reconciled; an expired receipt is not permission to retry an uncertain send automatically.
+
+Do not deduplicate arbitrary standard calls or intentional resends by Email ID, RFC Message-ID, or content hash. A resend is a new intent. [Review R1; Brief: Correctness rules]
+
+#### B2. Submission and content lifetime
+
+Submission creation commits an independent immutable content pin, envelope, identity, schedule, and durable job association. It may reference a draft or nondraft. Email deletion, replacement, or loss of mailbox membership does not release that pin or implicitly cancel sending. [Review R1; Mail §7.5]
+
+Keep five outcomes distinct: submission creation, requested post-submission Email changes, cancellation, transport acceptance, and delivery evidence. Return the standard separate implicit `Email/set` results; successful submission plus failed Email cleanup is not a failed submission.
+
+Cancellation succeeds only while dispatch has not crossed the durable attempt boundary. Once an external attempt may have occurred, preserve uncertainty unless provider evidence resolves it. Prevent new attempts during identity suspension or recovery holds without claiming a previously accepted message was unsent.
+
+Persist per-recipient progress where evidence permits. An interrupted external attempt becomes `ambiguous`, never automatically retryable merely because a Queue trigger repeats. Safe pre-acceptance retries reuse the same durable job; an operator-approved resend records a new intent and the duplication risk. Terminal pins are released only after delivery/job retention and the coordinated recovery window. [Review R1, R5]
+
+#### B3. Cross-account Email and Blob copy
+
+Copy is a persisted multi-phase operation, not a cross-account transaction. [Review R3]
+
+| Phase                       | Commit/failure contract                                                                                                                                                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source read                 | Authorize and apply the source-state precondition where supplied. Capture immutable source content/metadata and a bounded read pin; it protects bytes, not perpetual permission.                                              |
+| Destination preparation     | Create destination-owned R2 content/pins and prepare required metadata/indexes. Do not depend on the source Email remaining alive.                                                                                            |
+| Destination commit          | Recheck destination rights/state and source-read validity under A3. Commit a complete destination Email or available destination Blob. No success while this is only queued.                                                  |
+| Optional source destruction | For Email copy, attempt only after successful destination commits, using standard implicit `Email/set` ordering and supplied preconditions. Report its failures separately. Blob/copy does not implicitly destroy the source. |
+| Recovery                    | Track destination IDs and phase by internal operation ID. Lost responses do not undo committed destinations. Internal resumption does not imply arbitrary repeated external calls are idempotent.                             |
+
+Destination success followed by source-delete failure leaves two copies, not zero. Staged orphan cleanup respects active source/destination pins and never deletes a committed destination because the overall operation is incomplete. [Core §5.4]
+
+#### B4. Incoming mail and failed preparation
+
+Acknowledge ingress only after raw bytes and a recoverable staging record are durable. Stage each arrival independently: `received → preparing → ready → published`; failures enter bounded retry or parked states with a reason, retained raw content, and operator replay. Publication commits the Email and required query data together. Parsing/index failure cannot silently omit canonical fields or stall unrelated arrivals. [Brief: Receiving mail; Review R7]
+
+A published active arrival has the effects a legacy delivery has: the new-mail notification, shared-space and extension propagation, calendar invitations, sender redelivery, forwarding rules (no local copy kept → Trash) and the away reply. Their topic payloads keep their shape, with the Email and Thread IDs in place of the delivery and thread, and their consumers resolve those through the core. An away reply on a core account isn't filed as an Email in Sent; the frozen legacy ledger is never written after the fence. Sending through EmailSubmission approves its recipients as senders, as a legacy send does.
+
+An internal retry shares a stable job ID; a separate delivery with identical headers/content remains a separate arrival. Queue duplication must not duplicate the database effect. R2-before-SQL partial success leaves an orphan for delayed cleanup, never a visible record with missing bytes.
+
+### Contract C — State, migration, and recovery
+
+#### C1. State and change history
+
+Persist an opaque state domain containing account identity, type, restore generation, principal visibility generation where applicable, and monotonic revision. Avoid numeric precision loss; no timestamps or process epochs as substitutes. Query state additionally binds normalized query/sort/collapse parameters and the canonical index generation. [Original §4; Review R5]
+
+| Mutation                               | State/change dependencies                                                                                  |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Email create/destroy                   | Email; affected Thread membership/existence; affected Mailbox counts.                                      |
+| Membership update                      | Email and affected Mailbox counts; Thread changes only if its visible Email list changes.                  |
+| `$seen` / `$draft` update              | Email and all counts affected by the chosen unread policy; no Thread bump solely for read flags.           |
+| Other keyword update                   | Email and queries depending on it; no invented count change.                                               |
+| Mailbox definition/subscription/rights | Mailbox; affected principal visibility/query state; cascading mail edits record their actual dependencies. |
+| Identity/submission outcome            | Corresponding type; additional Email/Mailbox changes only when actually performed.                         |
+| Conversation/workflow metadata         | Its extension state, not unrelated standard types.                                                         |
+
+**Retention policy:** Support at least 30 days of offline catch-up during normal operation. Preserve the needed baseline (including a still-current older state), tombstones, and history for accepted states; compaction cannot silently shorten that guarantee. Capacity protection must act before history space is exhausted. Restore or rights-generation changes explicitly invalidate affected states. [Review R5]
+
+**Pagination:** Coalesce changes to each object's net lifecycle within a fixed target revision. Return bounded unique IDs and a durable intermediate token recording base, target, and progress; do not truncate a large commit and advance past omitted IDs. Continue the same target before later revisions. Retain the evidence needed by accepted intermediate tokens. Create-then-update returns created; update-then-delete returns destroyed; create-then-delete within the covered interval disappears. Preserve lifecycle order across pages. If a correct continuation is unavailable, return `cannotCalculateChanges`, never incomplete success. [Core §5.2]
+
+Read/query responses and their state describe one consistent logical view. Initial query profiles return `canCalculateChanges: false`; their `/queryChanges` implementation returns `cannotCalculateChanges`. This does not weaken ordinary query correctness. Changed query state requires native clients to restart/rebase pagination, not treat positions as a frozen snapshot.
+
+#### C2. Restore boundary
+
+Before restore, install a dispatch hold in the D1 recovery registry, stop new attempt admission, drain or classify in-flight attempts, and advance a recovery generation outside the snapshot being restored. After restore, reapply effective rights, erasure markers, and that generation before reopening access. Old state tokens and stale Queue generations cannot authorize replay. [Review R5]
+
+Keep submission-attempt/acceptance evidence in the D1 recovery registry, outside the restored account snapshot. Record the attempt before contacting the provider; a failed journal write prevents the attempt. Reconcile restored jobs against that registry; absence of acceptance evidence does **not** prove an external send never happened. Potentially affected jobs remain held/ambiguous until resolved. Only proven never-attempted work may resume automatically. A restored pending job must not bypass the hold through an old alarm.
+
+Retain R2 content/pins for the metadata recovery window. Restore verification checks bytes, indexes, IDs, ACLs, and erasure fences before opening writes. If an erased record would reappear or record-ID invariants cannot be preserved, do not expose it under the old account identity; repair or publish a fresh JMAP Account identity with explicit rediscovery. Changing synchronization generation alone cannot legitimize ID reuse. [Original §4; Core §1.6.2]
+
+#### C3. Per-account single-writer migration
+
+Persist this state machine with migration version, writer epoch, input snapshot/checksum, checkpoint, legacy-to-standard ID map, and buffered-work cursor:
+
+```text
+legacy → fencing → backfilling → verifying → activating → jmap
+                      └──────── failed/paused; resume from checkpoint
+```
+
+| State         | Required behavior                                                                                                                                                                                                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fencing       | Stop admission of old writes and new external dispatch claims. Drain in-flight work or classify ambiguous external attempts. Every writer checks the epoch at its authoritative boundary.                                                                                                               |
+| Buffered work | Store arrivals, outcomes, scans, timer/retention intents, and repair requests in an account staging ledger with stable event IDs and R2 pins. Preserve source order where meaningful. Old interactive commands are rejected with an explicit retry/upgrade response, not silently queued as successful. |
+| Backfilling   | Only the migration writer mutates target state. Bounded, idempotent checkpoints apply the versioned mapping below; read-only legacy state is the fixed input.                                                                                                                                           |
+| Verifying     | Check content references, grants, memberships, counts, search coverage, draft/session mappings, notes/workflows, and every outstanding job. Missing or contradictory mapping blocks activation.                                                                                                         |
+| Activating    | Atomically switch the account authority/epoch. Replay buffered work through the new services after translation and current checks. Never blindly restore old dispatch claims.                                                                                                                           |
+| JMAP          | Only new-core writers; keep old tables read-only until verified retention/cleanup permits removal. No independent dual-write model.                                                                                                                                                                     |
+
+**Backfill mapping v2 (proposed; fixture-verified before activation):**
+
+- Freeze each delivery's current resolved thread placement and labels; map them to per-email memberships. If placement is missing, use Archive and record the repair rather than publish an Email with no membership.
+- For revision-based read state, infer `$seen` from the fenced delivery's `thread_revision <= seen_revision` of its containing legacy thread. Missing/incomparable revision data, including unresolved merge history, maps conservatively to unread and is audited. This is an inference policy, not recovered per-message read history; fixtures must establish which merged rows are comparable.
+- Map each distinct preserved `original_thread_id` to a fixed protocol Thread; missing originals use the frozen current thread. Current merge groups become Conversations. Store the mapping, rather than recomputing it after activation.
+- Convert each current user draft to an immutable Email and DraftSession. Preserve all frozen content required by pending sends, existing send intent IDs, recipient evidence, and system-only draft restrictions; never expose secret system drafts as user mail.
+- Translate notes, clips, workflow targets, identities, and grants through typed ID maps. Audit every inferred value, unsupported reference, and deliberate behavioral change. Unresolved security references block activation.
+
+Before activation, abort may resume the fenced legacy authority after safe buffered-work replay and dispatch reconciliation. **Activation is the no-backend-rollback point.** After it, use forward repair or C2 recovery. Serving `/v1` over the new core is **legacy-client compatibility fallback**, not database/binary rollback. [Review R4]
+
+#### C4. Native and legacy clients
+
+Version caches by account/model generation. At cutover, reset proprietary cursors, download a JMAP baseline, and preserve unsent local edits/intents for explicit rebase. Translate queued legacy commands only when their original Email set and preconditions are recoverable; otherwise reject for user review. Never re-expand an old Conversation command against new membership. [Review R8]
+
+Legacy adapters read/write the new core. A client unable to represent mixed state receives an explicit upgrade-required response for the affected view/action, not a misleading uniform thread state. Remove adapters and redundant writers only after supported clients and unresolved intents have migrated.
+
+### Contract D — Conformance and operating envelope
+
+#### D1. Capability and regression matrix
+
+Each row is a required executable test group, not evidence of a current pass. The implementation registry must enumerate every property, argument, method, optional behavior, limit source, and request/method/per-object error for advertised capabilities. [Review R9]
+
+| Test group           | Surface / required fixtures                                                                                                                                                                                           |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| T01 Core             | Session/discovery, `Core/echo`, ordered calls, result/creation references, patches, partial failures, malformed input, state preconditions, account authorization, upload/download, Blob/copy.                        |
+| T02 Mailbox          | get/changes/query/queryChanges/set; roles, rights, per-user subscription, counts, nonempty deletion and cascades.                                                                                                     |
+| T03 Email/Thread     | Email get/changes/query/queryChanges/set/import/parse/copy; Thread get/changes; SearchSnippet/get; all required properties, MIME and attachment access. Thread IDs survive moves/merges.                              |
+| T04 Native policy    | Feed-only archive; labeled Trash; last-membership removal; mixed-state Conversation; deleted workflow target; timer versus later external edit; bridge replies.                                                       |
+| T05 Draft/submission | Failed replacement creation/cleanup, competing editors, lost response, intentional resend, deleted submitted Email, failed implicit Email update, cancellation and ambiguous partial acceptance.                      |
+| T06 Authorization    | Rights revoked during preparation/streaming; partial grant loss; independent user subscriptions; all quarantine paths; cross-account blobs and push SSRF.                                                             |
+| T07 Copy/recovery    | Destination committed/source deletion failed; interrupted copy pins; duplicate jobs; restore before a subsequently accepted send; stale alarms, erasure and rights rollback.                                          |
+| T08 Sync/query       | More changed IDs than a page, multi-edit/delete coalescing, large commit paging, concurrent mutations, expired/visibility-invalid states, index failure, expensive collapse, chunk-boundary and multilingual matches. |
+| T09 Push             | EventSource and PushSubscription/get/set; verification, expiry, revocation, StateChange/EmailDelivery, reconnect and bounded streams.                                                                                 |
+| T10 Cutover/clients  | Crash at every checkpoint with arrivals/outcomes; deterministic replay; read-only legacy fallback; old offline commands; native cache reset; each versioned independent client/auth flow.                             |
+
+Submission coverage includes Identity/get/changes/set and EmailSubmission/get/changes/query/queryChanges/set when advertised. VacationResponse/get/set is required when that separate capability is enabled. Do not hide missing mandatory behavior behind an optional-feature flag.
+
+Baseline optional policy: correct ordinary queries; no incremental query diffs initially. Use standard `cannotCalculateChanges` for that fallback, `stateMismatch` for failed state preconditions, and the method-specific standard errors for unsupported filters/sorts and per-object failures. Do not invent one universal HTTP error envelope for all JMAP failures. [Original §5; Core §§3, 5]
+
+Pair client tests with an independent invariant/reference-model suite. Passing two clients alone is insufficient proof of complete advertised capabilities.
+
+#### D2. Release profile and empirical gates
+
+Create versioned `jmap-release-profile.md` before production activation. **The sources supply no measured thresholds or named/versioned target-client results; none are invented here.** The profile is incomplete until all fields below are concrete and their tests pass.
+
+| Required field           | Evidence / release rule                                                                                                                                                                                                                                                                               |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client/auth profile      | At least two independently implemented clients: exact name/version, tested capability set, and credential provisioning flow. Baseline service authentication uses revocable bearer credentials; retain existing native login. A client needing another scheme is not claimed compatible until tested. |
+| Account envelope         | Supported metadata/index/history volume, message distribution, active users/concurrency, and ingestion/query rates; reserve migration/recovery headroom. Every canary must fit.                                                                                                                       |
+| Query/preparation limits | Text representation, parser limits, supported filter/sort semantics, bounded scan/chunk work, CPU/memory and latency budgets. Measure combined ingestion plus reads/writes.                                                                                                                           |
+| Migration and recovery   | Maximum write interruption, buffered-arrival capacity, backlog recovery time, retained history and blob recovery windows, and dispatch reconciliation procedure.                                                                                                                                      |
+| Security and push        | Maximum revocation/stream closure latency, callback policy, concurrent streams, reconnect and cost measurements.                                                                                                                                                                                      |
+| Sending, when enabled    | Permitted traffic, provider evidence, serialized size/recipient limits, raw-MIME/Bcc and signed/encrypted fidelity, cancellation and ambiguity fixtures.                                                                                                                                              |
+| Approval                 | Named owners for core, clients, security, and operations; artifact links and pass/fail output for T01–T10 as applicable. No blank or unmeasured gate counts as passed.                                                                                                                                |
+
+The brief's sizing baseline is 10 GB per Paid SQLite object, 2 MB per SQL row/string/BLOB, and 128 MB Worker-isolate memory. These are sourced planning constraints, **not application quotas or newly verified deployment values**. Recheck actual platform/transport limits for the release profile. [Brief: Limits; Review R7]
+
+FTS5 must demonstrate complete declared matching semantics over bounded representations. Chunked indexes must preserve message-level matches across boundaries; silently truncating searchable text is not an acceptable way to pass capacity tests. Canonical publication remains staged until required indexing succeeds. Exhausted resources yield explicit rejection/backpressure or parked ingestion with retained recovery data, never false success.
+
+If the measured envelope does not fit, revise storage execution before increasing supported limits; preserve JMAP semantics. Do not preemptively add in-account sharding, a second mail authority, global batch transactions, or unrelated protocol scope. [Review R7; What should remain unchanged]
+
+### 16.8 Review traceability
+
+| Finding                           | Resolution contract |
+| --------------------------------- | ------------------- |
+| R1 — Draft/submission lifetimes   | B1–B2; T05          |
+| R2 — Rights/principal state       | A3; C2; T06         |
+| R3 — Cross-account copy           | B3; T01/T07         |
+| R4 — Writer fencing/fallback      | C3–C4; T10          |
+| R5 — History/restore side effects | C1–C2; T07/T08      |
+| R6 — Native semantics             | A1–A2; T04          |
+| R7 — Search/capacity              | B4; D2; T08         |
+| R8 — Extensions/offline clients   | A2; C4; T10         |
+| R9 — Executable acceptance        | D1–D2               |
+
+### 16.9 Sources and scope
+
+- **Original:** `bye-jmap-native-refactor-spec.md`, proposed spec based on repository `214588b`. Retained architectural/source baseline; not a new branch-head audit.
+- **Review:** `bye-jmap-spec-critical-review.md`, reviewed 12 October 2026. R1–R9 identify missing contracts; the policy selections above are proposed resolutions, not findings that the old implementation already behaves this way.
+- **Brief:** `cloudflare-jmap-feasibility(1).md`, reviewed 9 October 2026. Documentation-based architecture and constraints; no deployment/interoperability evidence.
+- **Core:** [RFC 8620 — JMAP Core](https://www.rfc-editor.org/rfc/rfc8620.html), especially §§1.6.2, 3, 5–7.
+- **Mail:** [RFC 8621 — JMAP Mail](https://www.rfc-editor.org/rfc/rfc8621.html), especially §§2–4 and 6–8.
+
+**Release principle:** JMAP decides standard mail behavior. Explicit Bye policies decide product choices. Tests and measurements—not the existence of this specification—decide readiness.
+
 ## Sources
 
 The HEY/Cloudflare product and transport baseline is retained from revision 0.1. Revision 0.2 checks Effect v4 and Alchemy v2 beta against the primary release notes, documentation, and selected source below. Revision 0.2.1 corrects only the Alchemy telemetry/state-factory claims using additional pinned sources. Live documentation can advance beyond, or lag behind, the pinned packages; the installed declarations, versioned source, and acceptance tests control implementation. Recheck limits and product availability before launch.

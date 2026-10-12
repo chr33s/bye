@@ -100,7 +100,7 @@ export const appendMboxPage = async (
 
   for (const d of page.deliveries) {
     // One message in memory at a time (≤ the 25 MiB inbound limit), never the whole page.
-    const original = await env.ORIGINALS.get(d.messageKey);
+    const original = await (d.bucket === "parts" ? env.PARTS : env.ORIGINALS).get(d.messageKey);
 
     if (original)
       await push(

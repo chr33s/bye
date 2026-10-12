@@ -338,6 +338,10 @@ export const revokeCredentialPush = async (env: CoreEnv, credentialId: string): 
     await env.DIRECTORY.prepare("DELETE FROM push_devices WHERE session_id = ?")
       .bind(credentialId)
       .run();
+    // JMAP PushSubscriptions made by the revoked credential stop with it (spec.md §16 A3).
+    await env.DIRECTORY.prepare("DELETE FROM jmap_push_subscriptions WHERE session_id = ?")
+      .bind(credentialId)
+      .run();
   } catch {
     console.warn(JSON.stringify({ level: "warn", op: "push.revoke-failed" }));
   }

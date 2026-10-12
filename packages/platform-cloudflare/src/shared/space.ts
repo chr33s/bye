@@ -518,11 +518,11 @@ export class SharedSpaceStore {
 
     // The space now references the source mailbox's stored message (original, body, parts): pin it,
     // in the same transaction via the outbox, so the owner's retention/trash can't garbage-collect
-    // content space members and public links still read (§12).
+    // content space members and public links still read (§12). The bucket follows from the key
+    // (a migrated account's imported Email lives in PARTS).
     if (inserted) {
       const spaceId = this.meta("space_id") ?? "";
       this.kernel.emit("blob.pin", spaceId, {
-        bucket: "ORIGINALS",
         key: m.contentKey,
         holderKind: "space",
         holderId: spaceId,

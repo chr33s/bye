@@ -35,6 +35,7 @@ import {
   registerDevicePush,
   unregisterDevicePush,
 } from "../push.ts";
+import { accountProfile, fetchOverByeClient, JmapClient, memoryCacheStore } from "../jmap.ts";
 import { DEFAULT_ROUTE, type NativeRoute, parseRoute } from "../routes.ts";
 import { sealedStore } from "../sealed-store.ts";
 import type { MeWire } from "../wire.ts";
@@ -51,6 +52,7 @@ import { describeProbe, Servers } from "./Servers.tsx";
 import { Settings } from "./Settings.tsx";
 import { describeSession, SignIn } from "./SignIn.tsx";
 import { Thread } from "./Thread.tsx";
+import { JmapEmail, JmapMailList } from "./JmapMail.tsx";
 import { colors, s } from "./theme.ts";
 
 // Native app root shared by iOS, Android, macOS and Windows (X01). Genuinely native screens over the
@@ -200,6 +202,51 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
 
   const scope = instance && me ? accountScope(instance.key, me.userId) : null;
   // Drafts are mail content: sealed with the secure-store key, and cleared with the scope on sign-out.
+  // spec.md §16 C4: a migrated account reads mail through JMAP over the same device session.
+  const jmap = useMemo(
+    () =>
+      client && instance
+        ? new JmapClient({
+            origin: instance.baseUrl,
+            fetch: fetchOverByeClient(client),
+            headers: () => ({}),
+            store: memoryCacheStore(),
+          })
+        : null,
+    [client, instance],
+  );
+
+  // The account whose profile is "core": the decision is bound to that account, so a screen for
+  // any other account never takes the JMAP path by mistake.
+  const [jmapCore, setJmapCore] = useState<string | null>(null);
+
+  useEffect(() => {
+    const accountId = me?.mailboxIds[0];
+
+    if (!jmap || !accountId) {
+      setJmapCore(null);
+
+      return;
+    }
+
+    let live = true;
+    void jmap.sessionResource().then(
+      (session) => {
+        const account = session.accounts[accountId];
+
+        if (live)
+          setJmapCore(
+            account !== undefined && accountProfile(account) === "core" ? accountId : null,
+          );
+      },
+      () => live && setJmapCore(null),
+    );
+
+    return () => {
+      live = false;
+    };
+  }, [jmap, me]);
+
   const drafts = useMemo(() => {
     if (!scope || !instance) return null;
     const scoped = scopedStore(platform.storage, scope, instance.key);
@@ -483,7 +530,26 @@ const ByeAppRoot = ({ platform }: { platform: Platform }) => {
 
   const body = (() => {
     switch (route.screen) {
+      case "email":
+        return jmap ? (
+          <JmapEmail
+            jmap={jmap}
+            accountId={mailboxId}
+            emailId={route.emailId}
+            onDone={() => setRoute(DEFAULT_ROUTE)}
+          />
+        ) : null;
       case "mail":
+        if (jmapCore === mailboxId && jmap)
+          return (
+            <JmapMailList
+              jmap={jmap}
+              accountId={mailboxId}
+              refreshKey={refreshKey}
+              onOpen={(emailId) => setRoute({ screen: "email", emailId })}
+            />
+          );
+
         return (
           <MailList
             client={client}

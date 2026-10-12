@@ -41,3 +41,5 @@ export * from "./proxy.ts";
 export * from "./mbox.ts";
 
 export * from "./vcard.ts";
+
+export * from "./jmap.ts";

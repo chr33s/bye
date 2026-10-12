@@ -192,6 +192,9 @@ importers:
       '@bye/domain':
         specifier: workspace:*
         version: link:packages/domain
+      '@bye/jmap':
+        specifier: workspace:*
+        version: link:packages/jmap
       '@bye/mail-codec':
         specifier: workspace:*
         version: link:packages/mail-codec
@@ -225,6 +228,12 @@ importers:
       alchemy:
         specifier: 2.0.0-beta.81
         version: 2.0.0-beta.81(@effect/platform-bun@4.0.2(effect@4.0.2))(@effect/platform-node@4.0.2(effect@4.0.2)(redis@6.2.1))(@effect/vitest@4.0.2(effect@4.0.2)(vitest@5.0.3))(@types/node@26.6.4)(effect@4.0.2)(hono@4.11.4)(typescript@7.0.2)(vite@8.3.0(@types/node@26.6.4)(yaml@2.9.1))(ws@8.22.0)
+      jmap-client-ts:
+        specifier: 1.0.0
+        version: 1.0.0
+      jmap-jam:
+        specifier: 0.13.8
+        version: 0.13.8
       miniflare:
         specifier: 4.20260730.0
         version: 4.20260730.0
@@ -330,6 +339,12 @@ importers:
         specifier: 4.0.2
         version: 4.0.2
 
+  packages/jmap:
+    dependencies:
+      effect:
+        specifier: 4.0.2
+        version: 4.0.2
+
   packages/mail-codec:
     dependencies:
       '@bye/domain':
@@ -366,6 +381,9 @@ importers:
       '@bye/domain':
         specifier: workspace:*
         version: link:../domain
+      '@bye/jmap':
+        specifier: workspace:*
+        version: link:../jmap
       '@bye/mail-codec':
         specifier: workspace:*
         version: link:../mail-codec
@@ -411,6 +429,9 @@ importers:
       '@bye/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@bye/jmap':
+        specifier: workspace:*
+        version: link:../../packages/jmap
       '@bye/mail-codec':
         specifier: workspace:*
         version: link:../../packages/mail-codec
@@ -2252,6 +2273,15 @@ packages:
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
 
+  jmap-client-ts@1.0.0:
+    resolution: {integrity: sha512-qL31lYUpLAqrVFMaMsogorcAcpZRTSjWPwnxdl61mDNY9DINQvrKIkYCMstva4cxTbL1kQFG4aT8K9wOesrj7g==}
+
+  jmap-jam@0.13.8:
+    resolution: {integrity: sha512-ffcpPrQLRikdvfhe3SKdPj1DQDA0djBAoyjdjv9pSXF4DDnKqQ46wx0EILHY5JdfXWh9xINWLcQxBNpndAtCCw==}
+
+  jmap-rfc-types@0.5.0:
+    resolution: {integrity: sha512-/x6xiTaV7EvX6lA2aFiRaJG5dmfALWcHCNiDH5YVIqf3Yitkfq0RQr1M8kLNA5RDmT5gmTpziTluJY8qcOeJAg==}
+
   js-base64@3.9.4:
     resolution: {integrity: sha512-PtOMXpEGuP0RRiRXsjzHzl44dMHxSu2CPvAhinupR1tBa88me+1DPqsobl7eupn5UukjLkln1ZnAOAOXOrYG0Q==}
 
@@ -2564,6 +2594,10 @@ packages:
     resolution: {integrity: sha512-SS+jx45GF1QjgEXQx4NJZV9ImqmO2NPz5FNsIHrsDjh2YsHnawpan7SNQ1o8NuhrbHZy9AZhIoCUiCeaW/C80g==}
     engines: {node: '>=18'}
 
+  tagged-tag@1.0.0:
+    resolution: {integrity: sha512-yEFYrVhod+hdNyx7g5Bnkkb0G6si8HJurOoOEgC8B/O0uXLHlaey/65KRv6cuWBNhBgHKAROVpc7QyYqE5gFng==}
+    engines: {node: '>=20'}
+
   tinybench@6.1.4:
     resolution: {integrity: sha512-9APumHG7r4yOk4X4WlkmE71aZcv1gvin1czO3OQ1U9iJcFA5Ja/ygyb0vPOVHTthFozUYs8CLoLUlM8grb2lTQ==}
     engines: {node: '>=20.0.0'}
@@ -2605,6 +2639,10 @@ packages:
 
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
+
+  type-fest@5.10.0:
+    resolution: {integrity: sha512-NoSdpq/WEiAg5sjmBkmV/hfxv6HJH4NqPNrqjtSO5CwRmpsDfaf4begxW34KdJykH/l1yHtwBWQkCRdoXO8mPA==}
+    engines: {node: '>=20'}
 
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
@@ -4105,6 +4143,17 @@ snapshots:
 
   isexe@2.0.0: {}
 
+  jmap-client-ts@1.0.0: {}
+
+  jmap-jam@0.13.8:
+    dependencies:
+      jmap-rfc-types: 0.5.0
+      type-fest: 5.10.0
+
+  jmap-rfc-types@0.5.0:
+    dependencies:
+      type-fest: 5.10.0
+
   js-base64@3.9.4: {}
 
   js-tokens@10.0.0: {}
@@ -4503,6 +4552,8 @@ snapshots:
 
   supports-color@10.2.2: {}
 
+  tagged-tag@1.0.0: {}
+
   tinybench@6.1.4: {}
 
   tinyexec@1.3.0: {}
@@ -4535,6 +4586,10 @@ snapshots:
       punycode: 2.3.1
 
   tslib@2.8.1: {}
+
+  type-fest@5.10.0:
+    dependencies:
+      tagged-tag: 1.0.0
 
   typescript@7.0.2:
     optionalDependencies:

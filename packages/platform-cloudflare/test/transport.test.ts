@@ -152,6 +152,9 @@ describe("transport adapters (§5.3)", () => {
     for (const message of [
       "rate limit exceeded",
       "daily sending quota reached",
+      // The binding's documented codes, which may arrive without prose.
+      "E_RATE_LIMIT_EXCEEDED",
+      "E_DAILY_LIMIT_EXCEEDED",
       "temporary failure, try again later",
     ]) {
       const t = makeCloudflareTransactionalTransport(

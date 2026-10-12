@@ -90,6 +90,8 @@ interface ComposeRouteBuilder {
 export type NativeRoute =
   | { readonly screen: "mail"; readonly view: MailView }
   | { readonly screen: "thread"; readonly threadId: string }
+  /** One Email of an account served by the JMAP core (spec.md §16 C4). */
+  | { readonly screen: "email"; readonly emailId: string }
   | {
       readonly screen: "compose";
       readonly to?: string;

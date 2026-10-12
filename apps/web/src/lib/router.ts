@@ -7,6 +7,8 @@ import { type HashMatch, matchHash, type RouteTable } from "@bye/native-shared/r
 // without a DOM.
 
 export const WEB_ROUTES = [
+  ["jmap/email/:emailId", "jmap-email"],
+  ["jmap/:mailboxId?", "jmap"],
   ["mail/feed", "feed"],
   ["mail/:view?", "view"],
   ["label/:label?", "label"],

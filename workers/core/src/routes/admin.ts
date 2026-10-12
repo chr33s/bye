@@ -37,6 +37,7 @@ import type { CoreEnv } from "../env.ts";
 import { errorResponse, Invocation, route, type Route } from "../http.ts";
 import { ok, publicly } from "../httpapi.ts";
 import { requestErasure } from "../erasure.ts";
+import { orgMailboxIds, requestOrgGrantSync, syncGrantsFor } from "../generations.ts";
 import { sendSystemEmail } from "../publishing.ts";
 import {
   onboardingDeps,
@@ -269,6 +270,33 @@ export const adminRoutes: ReadonlyArray<Route> = [
   }),
 ];
 
+/**
+ * spec.md §16 A3: a directory change to who may use an organization's mailboxes is committed by
+ * each migrated account authority as its effective grants. The membership change has already
+ * committed, so this never fails the request: the org's mailboxes are durably marked first, then
+ * converged after the response; any that don't finish are retried by the cron until committed.
+ */
+const syncOrgGrants = (orgId: string) =>
+  Effect.gen(function* () {
+    const { env, ctx } = yield* Invocation;
+
+    // Unmarked (e.g. a D1 write error), the mailboxes are still synced now, best effort.
+    const marked = yield* Effect.promise(() =>
+      requestOrgGrantSync(env, orgId).catch(() => {
+        console.warn(JSON.stringify({ level: "warn", op: "jmap.grants.unmarked", orgId }));
+
+        return orgMailboxIds(env, orgId).catch(() => []);
+      }),
+    );
+
+    ctx.waitUntil(
+      syncGrantsFor(env, marked).then((failed) => {
+        if (failed > 0)
+          console.warn(JSON.stringify({ level: "warn", op: "jmap.grants.pending", orgId, failed }));
+      }),
+    );
+  });
+
 export const AdminHandlers = HttpApiBuilder.group(CoreApi, "admin", (handlers) =>
   handlers
     // ---- organizations and team administration (A01, O02) ----
@@ -330,19 +358,32 @@ export const AdminHandlers = HttpApiBuilder.group(CoreApi, "admin", (handlers) =
         yield* setTeamMemberRole(params.orgId, params.userId, role);
 
         return { userId: params.userId, role };
-      }).pipe(publicly),
+      }).pipe(
+        Effect.tap(() => syncOrgGrants(params.orgId)),
+        publicly,
+      ),
     )
     .handle("suspendMember", ({ params }) =>
-      suspendTeamMember(params.orgId, params.userId).pipe(Effect.as(ok), publicly),
+      suspendTeamMember(params.orgId, params.userId).pipe(
+        Effect.tap(() => syncOrgGrants(params.orgId)),
+        Effect.as(ok),
+        publicly,
+      ),
     )
     .handle("reactivateMember", ({ params }) =>
       Effect.map(reactivateTeamMember(params.orgId, params.userId), () => ({
         userId: params.userId,
         status: "active",
-      })).pipe(publicly),
+      })).pipe(
+        Effect.tap(() => syncOrgGrants(params.orgId)),
+        publicly,
+      ),
     )
     .handle("removeMember", ({ params }) =>
-      removeTeamMember(params.orgId, params.userId).pipe(publicly),
+      removeTeamMember(params.orgId, params.userId).pipe(
+        Effect.tap(() => syncOrgGrants(params.orgId)),
+        publicly,
+      ),
     )
     .handle("seats", ({ params }) =>
       Effect.gen(function* () {
@@ -399,7 +440,10 @@ export const AdminHandlers = HttpApiBuilder.group(CoreApi, "admin", (handlers) =
         const principal = yield* requireUser();
         const orgs = yield* OrgsService;
 
-        return yield* orgs.acceptInvitation(payload.token, principal.userId);
+        const accepted = yield* orgs.acceptInvitation(payload.token, principal.userId);
+        yield* syncOrgGrants(accepted.orgId);
+
+        return accepted;
       }).pipe(publicly),
     )
     // Legacy paths kept for existing clients.
@@ -407,7 +451,11 @@ export const AdminHandlers = HttpApiBuilder.group(CoreApi, "admin", (handlers) =
       inviteTeamMember(params.orgId, payload.address, payload.role ?? "member").pipe(publicly),
     )
     .handle("legacySuspendMember", ({ params, payload }) =>
-      suspendTeamMember(params.orgId, payload.userId).pipe(Effect.as(ok), publicly),
+      suspendTeamMember(params.orgId, payload.userId).pipe(
+        Effect.tap(() => syncOrgGrants(params.orgId)),
+        Effect.as(ok),
+        publicly,
+      ),
     )
     // Extension (shared-address) mailboxes backed by a shared space (O03).
     .handle("createExtension", ({ params, payload }) =>
@@ -430,6 +478,7 @@ export const AdminHandlers = HttpApiBuilder.group(CoreApi, "admin", (handlers) =
           return yield* badRequest("extension members must be active organization members");
 
         const mailboxId = yield* orgs.createExtensionMailbox(orgId, actorOf(principal), memberIds);
+        yield* syncOrgGrants(orgId);
 
         const { address } = yield* domains.addAlias(domain.id, principal.userId, {
           localPart: payload.localPart,

@@ -2,7 +2,7 @@ import { ControlSharedRegistry } from "@bye/platform-cloudflare";
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { Schema } from "effect";
 import { mailbox, space } from "../authorities.ts";
-import { pinBlob } from "../blobgc.ts";
+import { bucketOfKey, pinBlob } from "../blobgc.ts";
 import { kernelClock } from "../durable-host.ts";
 import type { CoreEnv } from "../env.ts";
 import { mailboxShardNames } from "../erasure.ts";
@@ -54,7 +54,7 @@ export class ReindexWorkflow extends WorkflowEntrypoint<CoreEnv, ReindexParams> 
       const current: string | null = cursor;
 
       const result = await promiseStep(step, `v1:deliveries:${page++}`, PageResult, async () => {
-        const p = await mailbox(env, mailboxId).exportManifestPage(current, 100);
+        const p = await mailbox(env, mailboxId).searchManifestPage(current, 100);
 
         if (p.deliveries.length)
           await enqueue(p.deliveries.map((d) => ({ kind: "delivery", id: d.deliveryId })));
@@ -105,7 +105,7 @@ export class ReindexWorkflow extends WorkflowEntrypoint<CoreEnv, ReindexParams> 
           if (!r.ok) throw new Error(`space ${spaceId} content keys unavailable`);
           const keys = r.value;
 
-          for (const key of keys) await pinBlob(env, "ORIGINALS", key, "space", spaceId);
+          for (const key of keys) await pinBlob(env, bucketOfKey(key), key, "space", spaceId);
           count += keys.length;
 
           if (keys.length < 500) return count;

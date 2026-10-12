@@ -45,3 +45,5 @@ export * from "./repository.ts";
 export * from "./reads.ts";
 
 export * from "./zip.ts";
+
+export * from "./jmap.ts";

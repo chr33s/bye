@@ -424,6 +424,22 @@ export const OpsRestoreRequest = Schema.Struct({
   at: Schema.Number,
 });
 
+/** JMAP per-account migration control (spec.md §16 C3); `confirm` repeats the mailbox ID. */
+export const OpsJmapMigrateRequest = Schema.Struct({
+  mailboxId: Bounded(84),
+  confirm: Bounded(84),
+  action: Schema.Literals(["start", "step", "activate", "abort", "status"]),
+});
+
+/** Re-derive one mailbox's effective JMAP grants from the directory (spec.md §16 A3). */
+export const OpsJmapMailboxRequest = Schema.Struct({ mailboxId: Bounded(84) });
+
+/** Replay one parked JMAP arrival (spec.md §16 B4). */
+export const OpsJmapReplayRequest = Schema.Struct({
+  mailboxId: Bounded(84),
+  arrivalId: Bounded(400),
+});
+
 // ---- identity, credentials and security settings: responses (A03, X02) ----
 
 /** The verified principal behind the request (`GET /v1/me`). */

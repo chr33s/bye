@@ -46,12 +46,15 @@ export class MailboxTransfers {
     targetMailboxId: string,
     mode: "copy" | "move",
     summary: MessageSummary,
+    /** The original, when the source is a JMAP Email rather than a legacy delivery. */
+    source?: { readonly messageKey: string; readonly rawSize: number },
   ): string {
-    const d =
-      this.sql.one<{ message_key: string; raw_size: number }>(
-        "SELECT message_key, raw_size FROM deliveries WHERE delivery_id = ?",
-        deliveryId,
-      ) ?? reject("not_found", "delivery");
+    const d = source
+      ? { message_key: source.messageKey, raw_size: source.rawSize }
+      : (this.sql.one<{ message_key: string; raw_size: number }>(
+          "SELECT message_key, raw_size FROM deliveries WHERE delivery_id = ?",
+          deliveryId,
+        ) ?? reject("not_found", "delivery"));
 
     const transferId = this.ctx.id("xfr");
     this.sql.run(

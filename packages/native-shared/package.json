@@ -19,7 +19,8 @@
     "./platform": "./src/ui/host.ts",
     "./routes": "./src/routes.ts",
     "./app": "./src/ui/App.tsx",
-    "./push": "./src/push.ts"
+    "./push": "./src/push.ts",
+    "./jmap": "./src/jmap.ts"
   },
   "dependencies": {
     "@bye/domain": "workspace:*",

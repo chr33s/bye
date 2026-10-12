@@ -507,14 +507,22 @@ export const closeLiveSockets = async (
   env: CoreEnv,
   userId: string,
   credentialId: string | null,
-): Promise<void> => {
+): Promise<{ readonly authorities: number; readonly pending: number }> => {
   type Live = { closeSockets(id?: string): Promise<number> };
 
+  let pending = 0;
+
+  // spec.md §16 A3: an authority that didn't acknowledge the closure leaves the revocation
+  // pending (reported and measured), never silently complete.
   const close = <S>(stub: S) => {
     const live = stub as Live;
 
     return (credentialId === null ? live.closeSockets() : live.closeSockets(credentialId)).catch(
-      () => 0,
+      () => {
+        pending++;
+
+        return 0;
+      },
     );
   };
 
@@ -546,6 +554,18 @@ export const closeLiveSockets = async (
 
   for (let i = 0; i < stubs.length; i += LIVE_CLOSE_CONCURRENCY)
     await Promise.all(stubs.slice(i, i + LIVE_CLOSE_CONCURRENCY).map(close));
+
+  if (pending > 0)
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        op: "revocation.pending",
+        authorities: stubs.length,
+        pending,
+      }),
+    );
+
+  return { authorities: stubs.length, pending };
 };
 
 const LIVE_CLOSE_CONCURRENCY = 8;

@@ -37,6 +37,13 @@ export interface MimePart {
   readonly opaque: boolean;
 }
 
+/** A multipart entity; its children are the parts whose ID extends `partId` by one level. */
+export interface MimeContainer {
+  /** "" for the top-level entity. */
+  readonly partId: string;
+  readonly contentType: string;
+}
+
 export interface AttachmentMeta {
   readonly partId: string;
   readonly filename: string;
@@ -73,6 +80,8 @@ export interface ParsedMessage {
   readonly html: string | undefined;
   readonly attachments: ReadonlyArray<AttachmentMeta>;
   readonly parts: ReadonlyArray<MimePart>;
+  /** Multipart entities in document order (structure for JMAP `bodyStructure`). */
+  readonly containers: ReadonlyArray<MimeContainer>;
   /** text/calendar payload if present, with its METHOD. */
   readonly calendar: { readonly method: string | undefined; readonly ics: string } | undefined;
   readonly warnings: ReadonlyArray<Warning>;

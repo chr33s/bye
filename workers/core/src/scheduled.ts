@@ -16,7 +16,8 @@ import { mailboxErased, replayUnverifiedTombstones } from "./erasure.ts";
 import { metric, storageLevel } from "./metrics.ts";
 import { MAILBOX_METADATA_BUDGET_BYTES } from "./objects/mailbox.ts";
 import { reconcileNewsletters } from "./newsletter.ts";
-import { reconcileUnknownSends } from "./sendevents.ts";
+import { convergeGrants } from "./generations.ts";
+import { reconcileRestoreHolds, reconcileUnknownSends } from "./sendevents.ts";
 import { replayPendingPropagation } from "./topics/shared.ts";
 import { sweepUsage } from "./usage.ts";
 import { authConfig } from "./services.ts";
@@ -520,6 +521,25 @@ export const runDaily = async (
   return { gc, tombstones: replayed, usage };
 };
 
+/** A reconciler whose failure is logged and counted as one, without rejecting the cron run. */
+const isolated = <A extends { readonly failed: number }>(
+  name: string,
+  run: Promise<A>,
+): Promise<A | { readonly reconciled: 0; readonly converged: 0; readonly failed: 1 }> =>
+  run.catch((e) => {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        op: "reconcile",
+        step: name,
+        error: e instanceof Error ? e.message : "failed",
+      }),
+    );
+    metric(`cron.${name}.failed`, 1);
+
+    return { reconciled: 0, converged: 0, failed: 1 };
+  });
+
 export const handleScheduled = async (
   controller: ScheduledController,
   env: CoreEnv,
@@ -540,13 +560,19 @@ export const handleScheduled = async (
     return;
   }
 
-  const [catalog, ingress, unknown, propagation, newsletters] = await Promise.all([
-    reconcileCatalog(env, controller.scheduledTime),
-    reconcileIngress(env),
-    reconcileUnknownSends(env),
-    replayPendingPropagation(env, controller.scheduledTime),
-    reconcileNewsletters(env, controller.scheduledTime),
-  ]);
+  const [catalog, ingress, unknown, propagation, newsletters, restores, grants] = await Promise.all(
+    [
+      reconcileCatalog(env, controller.scheduledTime),
+      reconcileIngress(env),
+      reconcileUnknownSends(env),
+      replayPendingPropagation(env, controller.scheduledTime),
+      reconcileNewsletters(env, controller.scheduledTime),
+      // Isolated: either failing (D1 unavailable, a migration not yet applied) must not cost
+      // the other reconcilers their run or the summary below.
+      isolated("restore_holds", reconcileRestoreHolds(env, controller.scheduledTime)),
+      isolated("grants", convergeGrants(env)),
+    ],
+  );
 
   console.log(
     JSON.stringify({
@@ -563,6 +589,10 @@ export const handleScheduled = async (
       newsletterEvents: newsletters.events,
       newsletterCreators: newsletters.creators,
       newsletterFailures: newsletters.failures,
+      restoresReconciled: restores.reconciled,
+      restoreReconcileFailures: restores.failed,
+      grantsConverged: grants.converged,
+      grantConvergeFailures: grants.failed,
     }),
   );
 };

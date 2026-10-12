@@ -13,12 +13,14 @@ export interface ManifestEntry {
   readonly date: number;
   readonly from: string;
   readonly direction: "in" | "out";
+  /** Where the original lives; absent means ORIGINALS (every legacy delivery). */
+  readonly bucket?: "originals" | "parts";
 }
 
 /** Threads purged per retention/empty batch; the rest continue from a scheduled job. */
 export const RETENTION_BATCH = 200;
 
-type ExportManifestPageResult = {
+export type ExportManifestPageResult = {
   readonly deliveries: ReadonlyArray<ManifestEntry>;
   readonly nextCursor: string | null;
 };

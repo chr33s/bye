@@ -7,6 +7,7 @@ import { metric } from "./metrics.ts";
 import { buildTransportAdapters } from "./transports.ts";
 import type { QueueBody } from "./queueref.ts";
 import { mailbox } from "./authorities.ts";
+import { dispatchEvidence, dispatchHeldAt, liftDispatchHold, restoreHolds } from "./generations.ts";
 
 // Provider evidence for sends (§5.2, §5.3): acceptance IDs map provider events back to send jobs;
 // asynchronous delivery events record per-recipient outcomes (and resolve an Unknown submission
@@ -38,6 +39,57 @@ export const recordUnknown = (
   )
     .bind(mailboxId, sendJobId, transport, Date.now())
     .run();
+
+/**
+ * After a point-in-time restore (C2): reconcile the restored mailbox's send jobs with the attempt
+ * and acceptance evidence kept outside its snapshot, register every job left ambiguous for
+ * provider reconciliation (so the reconciler and delivery webhooks know it), then lift the hold.
+ * Any failure keeps the hold; the restore-hold sweep retries until it succeeds.
+ */
+export const reconcileRestoredMailbox = async (
+  env: CoreEnv,
+  mailboxId: string,
+): Promise<{ readonly accepted: number; readonly ambiguous: number }> => {
+  // Captured first: a restore re-armed while this runs keeps its own (newer) hold.
+  const heldAt = await dispatchHeldAt(env, mailboxId);
+  const evidence = await dispatchEvidence(env, mailboxId);
+  const out = await mailbox(env, mailboxId).reconcileRestoredSends(evidence);
+
+  for (const u of out.unknown) await recordUnknown(env, mailboxId, u.sendJobId, u.trafficClass);
+
+  if (heldAt !== null) await liftDispatchHold(env, mailboxId, heldAt);
+
+  return { accepted: out.accepted, ambiguous: out.ambiguous };
+};
+
+/** Restored mailboxes whose reconciliation failed or never ran: retried from the cron. */
+export const reconcileRestoreHolds = async (
+  env: CoreEnv,
+  now = Date.now(),
+): Promise<{ readonly reconciled: number; readonly failed: number }> => {
+  let reconciled = 0;
+  let failed = 0;
+
+  // A restore in progress reconciles itself within minutes; leave recent holds be.
+  for (const hold of await restoreHolds(env, now, 10 * 60_000)) {
+    try {
+      // Until the object restarted from its armed epoch it may still serve the old state.
+      if (
+        hold.armedEpoch !== null &&
+        (await mailbox(env, hold.mailboxId).sessionEpoch()) === hold.armedEpoch
+      )
+        continue;
+
+      await reconcileRestoredMailbox(env, hold.mailboxId);
+      reconciled++;
+    } catch {
+      failed++;
+      metric("send.restore_reconcile.failed", 1);
+    }
+  }
+
+  return { reconciled, failed };
+};
 
 export interface ProviderEvent {
   readonly eventId: string;

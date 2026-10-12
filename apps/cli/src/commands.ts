@@ -29,7 +29,7 @@ import {
   UsageError,
 } from "./args.ts";
 import type { CliApi } from "./client.ts";
-import type { JsonValue } from "./json.ts";
+import { isJsonObject, type JsonValue } from "./json.ts";
 import { OPS_COMMANDS } from "./ops.ts";
 import { UPLOAD_COMMANDS } from "./upload.ts";
 
@@ -745,6 +745,116 @@ const cal = group("cal", "Calendar: events, planning, timer and feeds", [
   ),
 ]);
 
+const JMAP_USING = [
+  "urn:ietf:params:jmap:core",
+  "urn:ietf:params:jmap:mail",
+  "urn:ietf:params:jmap:submission",
+  "urn:ietf:params:jmap:vacationresponse",
+  "https://github.com/chr33s/bye/blob/main/spec.md#jmap-capability",
+];
+
+/** One JMAP batch through the standard API (spec.md §16.5). */
+const jmapCall = (calls: ReadonlyArray<readonly [string, JsonValue, string]>) =>
+  post("/jmap/api", { using: JMAP_USING, methodCalls: calls.map((c) => [...c]) });
+
+const parseJsonArg = (text: string): JsonValue => {
+  try {
+    return JSON.parse(text) as JsonValue;
+  } catch {
+    throw new UsageError("arguments must be a JSON object");
+  }
+};
+
+const jmap = group(
+  "jmap",
+  "JMAP: the standard mail API (session, raw calls, mail listing, native actions)",
+  [
+    action("session", { summary: "Show the JMAP session resource" }, {}, () =>
+      get("/.well-known/jmap"),
+    ),
+    action(
+      "call",
+      { summary: "Make one JMAP method call; `accountId` defaults to the selected mailbox" },
+      {
+        method: Argument.String("method"),
+        args: Argument.String("args").pipe(Argument.withDefault("{}")),
+      },
+      ({ method, args }) =>
+        Effect.gen(function* () {
+          const accountId = yield* mailbox;
+          const parsed = parseJsonArg(args);
+
+          if (!isJsonObject(parsed))
+            return yield* Effect.fail(new UsageError("arguments must be a JSON object"));
+
+          return yield* jmapCall([[method, { accountId, ...parsed }, "c0"]]);
+        }),
+    ),
+    action(
+      "list",
+      { summary: "List Emails in a Mailbox (by ID or role) with subject and sender" },
+      {
+        mailbox: Argument.String("mailbox").pipe(Argument.withDefault("inbox")),
+        limit: optInt("limit"),
+      },
+      ({ mailbox: target, limit }) =>
+        Effect.flatMap(mailbox, (accountId) =>
+          jmapCall([
+            ["Mailbox/query", { accountId, filter: { role: target } }, "m"],
+            [
+              "Email/query",
+              {
+                accountId,
+                filter: { inMailbox: target },
+                limit: limit ?? 50,
+                calculateTotal: true,
+              },
+              "q",
+            ],
+            [
+              "Email/get",
+              {
+                accountId,
+                "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
+                properties: ["subject", "from", "receivedAt", "keywords", "threadId"],
+              },
+              "g",
+            ],
+          ]),
+        ),
+    ),
+    action(
+      "apply",
+      {
+        summary: "Apply a native action (archive, trash, spam, seen, unseen) to Emails",
+        consequential: true,
+      },
+      {
+        action: Argument.Literals("action", ["archive", "trash", "spam", "seen", "unseen"]),
+        emailIds: Argument.String("emailId").pipe(Argument.variadic({ min: 1 })),
+      },
+      ({ action: verb, emailIds }) =>
+        Effect.flatMap(Effect.zip(mailbox, commandId), ([accountId, intentId]) =>
+          jmapCall([
+            [
+              "EmailAction/apply",
+              {
+                accountId,
+                emails: Object.fromEntries(emailIds.map((id) => [id, null])),
+                action:
+                  verb === "seen" || verb === "unseen"
+                    ? { type: "seen", value: verb === "seen" }
+                    : { type: verb },
+                intentId,
+              },
+              "a",
+            ],
+          ]),
+        ),
+    ),
+  ],
+);
+
 /** Every command that calls the API; `bye tui` sends exactly these. */
 export const COMMANDS: ReadonlyArray<Command.Command.Any> = [
   action("whoami", { summary: "Show the authenticated principal and credential scopes" }, {}, () =>
@@ -759,6 +869,7 @@ export const COMMANDS: ReadonlyArray<Command.Command.Any> = [
   policy,
   contacts,
   cal,
+  jmap,
   ...OPS_COMMANDS,
   ...UPLOAD_COMMANDS,
 ];

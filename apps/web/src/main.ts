@@ -4,7 +4,7 @@ import { bindLocalOwner, isSignedOut, onSignedOut } from "./auth.ts";
 import { announce, errorState, h, main } from "./core/dom.ts";
 import { installGlobalErrorHandlers } from "./core/errors.ts";
 import { registerServiceWorker } from "./core/update.ts";
-import { remember, state } from "./core/state.ts";
+import { mb, remember, state } from "./core/state.ts";
 import { matchRoute, type RouteName } from "./lib/router.ts";
 import { connectLive } from "./live.ts";
 import {
@@ -54,6 +54,7 @@ import {
   renderWorld,
 } from "./views/sharing.ts";
 import { renderThread } from "./views/thread.ts";
+import { jmapProfile, renderJmapEmail, renderJmapMailbox } from "./views/jmap-mail.ts";
 
 // Web/PWA client (X01). Untrusted strings only ever enter the DOM via textContent; message HTML
 // renders in sandboxed iframes on the separate render origin (§10). Views live in ./views/*.
@@ -70,6 +71,8 @@ type RouteHandler = (
 
 /** One view per route name (lib/router.ts); a route row without a handler fails to compile. */
 const HANDLERS: Readonly<Record<RouteName, RouteHandler>> = {
+  jmap: (p, _q, signal) => renderJmapMailbox(mb(), p.mailboxId, signal),
+  "jmap-email": (p, _q, signal) => renderJmapEmail(mb(), p.emailId!, signal),
   view: (p, _q, signal) => renderView(p.view ?? "imbox", signal),
   label: (p, _q, signal) => renderView("label", signal, p.label),
   feed: (_p, _q, signal) => renderFeed(signal),
@@ -110,8 +113,26 @@ const HANDLERS: Readonly<Record<RouteName, RouteHandler>> = {
   "calendar-manage": (_p, _q, signal) => renderCalendarManage(signal),
 };
 
-const dispatch = (signal: AbortSignal): Promise<void> => {
+/** Thread-model mail views; a migrated account reads the same mail through JMAP (C4). */
+const THREAD_MODEL_ROUTES: ReadonlySet<RouteName> = new Set([
+  "view",
+  "label",
+  "feed",
+  "unified",
+  "thread",
+  "batch",
+  "bundle",
+]);
+
+const dispatch = async (signal: AbortSignal): Promise<void> => {
   const { name, params, query } = matchRoute(location.hash);
+
+  if (
+    THREAD_MODEL_ROUTES.has(name) &&
+    state.mailboxId &&
+    (await jmapProfile(state.mailboxId)) === "core"
+  )
+    return renderJmapMailbox(state.mailboxId, undefined, signal);
 
   return HANDLERS[name](params, query, signal);
 };

@@ -20,6 +20,7 @@ import { NewsletterConfigHandlers } from "./routes/newsletter-config.ts";
 import { OpsHandlers, opsRoutes } from "./routes/ops.ts";
 import { probeRoutes } from "./routes/probe.ts";
 import { discoveryRoutes } from "./routes/discovery.ts";
+import { jmapRoutes } from "./routes/jmap.ts";
 import { authenticate, bearer, requestId, serviceDomain } from "./routes/common.ts";
 
 // HTTP API (§8). The conventional JSON API is one HttpApi (./spec/*, handlers in ./routes/*); the
@@ -39,6 +40,7 @@ export const NATIVE_ROUTES = [
   ...opsRoutes,
   ...probeRoutes,
   ...discoveryRoutes,
+  ...jmapRoutes,
 ];
 
 const ApiLive = HttpApiBuilder.layer(CoreApi).pipe(

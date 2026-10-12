@@ -25,10 +25,17 @@ export type CalendarMethod = "REQUEST" | "REPLY" | "CANCEL" | "PUBLISH" | "COUNT
 
 export interface BuildMessageInput {
   readonly from: Address;
+  /** The agent that sent it for `from` (RFC 5322 §3.6.2), e.g. JMAP Email `sender`. */
+  readonly sender?: Address;
   readonly to: ReadonlyArray<Address>;
   readonly cc?: ReadonlyArray<Address>;
-  /** Envelope-only; never written to headers. */
+  /** Envelope-only; never written to headers unless `draftBcc` is set. */
   readonly bcc?: ReadonlyArray<Address>;
+  /**
+   * Write Bcc as a header: only for stored drafts (JMAP Email/set), whose bytes must keep it.
+   * Submission strips it again before sending (`withoutBcc`, spec.md §16 B2).
+   */
+  readonly draftBcc?: boolean;
   readonly replyTo?: ReadonlyArray<Address>;
   readonly subject: string;
   readonly text?: string;
@@ -45,7 +52,74 @@ export interface BuildMessageInput {
   /** Deterministic boundary source for tests; defaults to random. */
   readonly boundary?: (index: number) => string;
   readonly extraHeaders?: ReadonlyArray<readonly [string, string]>;
+  /** An explicit body tree; when set, text/html/attachments/inline are ignored. */
+  readonly structure?: OutboundPart;
 }
+
+/**
+ * An explicit MIME tree (JMAP Email/set `bodyStructure`, RFC 8621 §4.6): replaces the text/html/
+ * attachment layout when given.
+ */
+export type OutboundPart =
+  | {
+      readonly kind: "text";
+      readonly type: string;
+      readonly text: string;
+      readonly disposition?: "inline" | "attachment";
+      readonly filename?: string;
+    }
+  | {
+      readonly kind: "binary";
+      readonly type: string;
+      readonly content: Uint8Array;
+      readonly filename: string;
+      readonly disposition: "inline" | "attachment";
+      readonly contentId?: string;
+    }
+  | {
+      readonly kind: "multipart";
+      readonly subtype: string;
+      readonly parts: ReadonlyArray<OutboundPart>;
+    };
+
+const MULTIPART_SUBTYPE = /^[a-z0-9][a-z0-9.+-]{0,63}$/;
+
+const fromStructure = (part: OutboundPart): Entity => {
+  switch (part.kind) {
+    case "text": {
+      const leaf = textLeaf(stripNewlines(part.type).toLowerCase() || "text/plain", part.text);
+
+      return part.disposition === undefined
+        ? leaf
+        : {
+            kind: "leaf",
+            headers: [
+              ...(leaf.kind === "leaf" ? leaf.headers : []),
+              [
+                "Content-Disposition",
+                part.filename
+                  ? `${part.disposition}; ${filenameParams("filename", part.filename)}`
+                  : part.disposition,
+              ],
+            ],
+            body: leaf.kind === "leaf" ? leaf.body : "",
+          };
+    }
+
+    case "binary":
+      return binaryLeaf(
+        { filename: part.filename, contentType: part.type, content: part.content },
+        part.disposition,
+        part.contentId,
+      );
+    case "multipart":
+      return {
+        kind: "multipart",
+        subtype: MULTIPART_SUBTYPE.test(part.subtype) ? part.subtype : "mixed",
+        children: part.parts.map(fromStructure),
+      };
+  }
+};
 
 export interface BuiltMessage {
   readonly bytes: Uint8Array;
@@ -277,6 +351,7 @@ export const buildMessage = (input: BuildMessageInput): BuiltMessage => {
     };
   }
 
+  if (input.structure) body = fromStructure(input.structure);
   const messageId = bare(input.messageId);
 
   const headers: Array<readonly [string, string]> = [
@@ -284,12 +359,17 @@ export const buildMessage = (input: BuildMessageInput): BuiltMessage => {
     ["From", formatAddress(input.from)],
   ];
 
+  if (input.sender) headers.push(["Sender", formatAddress(input.sender)]);
+
   if (input.replyTo && input.replyTo.length > 0)
     headers.push(["Reply-To", input.replyTo.map(formatAddress).join(", ")]);
 
   if (input.to.length > 0) headers.push(["To", input.to.map(formatAddress).join(", ")]);
 
   if (input.cc && input.cc.length > 0) headers.push(["Cc", input.cc.map(formatAddress).join(", ")]);
+
+  if (input.draftBcc && input.bcc && input.bcc.length > 0)
+    headers.push(["Bcc", input.bcc.map(formatAddress).join(", ")]);
   headers.push(
     ["Subject", encodeHeaderWords(stripNewlines(input.subject))],
     ["Message-ID", `<${messageId}>`],

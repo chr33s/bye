@@ -79,6 +79,8 @@ export type BlobKeyClass =
   | { readonly kind: "part"; readonly mailboxId: string; readonly ingestionId: string }
   | { readonly kind: "upload"; readonly mailboxId: string; readonly uploadId: string }
   | { readonly kind: "export"; readonly userId: string }
+  /** JMAP-owned bytes (spec.md §16 B2/B3): messages, submissions, drafts in ORIGINALS; uploads and copies in PARTS. */
+  | { readonly kind: "jmap"; readonly mailboxId: string; readonly bucket: GcBucket }
   | { readonly kind: "unknown" };
 
 export const classifyKey = (key: string): BlobKeyClass => {
@@ -104,7 +106,21 @@ export const classifyKey = (key: string): BlobKeyClass => {
 
   if ((m = /^t\/([^/]+)\/export\//.exec(key))) return { kind: "export", userId: m[1]! };
 
+  if ((m = /^t\/([^/]+)\/jmap\/(msg|sub|draft|up|blob)\/[^/]+$/.exec(key)))
+    return {
+      kind: "jmap",
+      mailboxId: m[1]!,
+      bucket: m[2] === "up" || m[2] === "blob" ? "PARTS" : "ORIGINALS",
+    };
+
   return { kind: "unknown" };
+};
+
+/** The bucket a stored key lives in: JMAP uploads and copies in PARTS, other originals not. */
+export const bucketOfKey = (key: string): GcBucket => {
+  const parsed = classifyKey(key);
+
+  return parsed.kind === "jmap" ? parsed.bucket : "ORIGINALS";
 };
 
 const TERMINAL_JOB = new Set(["accepted", "rejected", "cancelled"]);
@@ -139,10 +155,9 @@ export const isReferenced = async (
             .first())
         )
           return true;
-        // Any delivery (inbound or redelivered copy) still pointing at the original keeps it.
-        const status = await mailbox(env, parsed.mailboxId).scanStatusForMessageKey(original);
+        // Any delivery (inbound or redelivered copy) or JMAP Email still pointing at it keeps it.
 
-        return status !== null;
+        return await mailbox(env, parsed.mailboxId).messageKeyReferenced(original);
       }
 
       case "outbound-body":
@@ -157,9 +172,8 @@ export const isReferenced = async (
         const job = await mailbox(env, parsed.mailboxId).sendJob(parsed.sendJobId);
 
         if (job && !TERMINAL_JOB.has(job.state ?? "")) return true;
-        const status = await mailbox(env, parsed.mailboxId).scanStatusForMessageKey(key);
 
-        return status !== null;
+        return await mailbox(env, parsed.mailboxId).messageKeyReferenced(key);
       }
 
       case "upload":
@@ -167,6 +181,9 @@ export const isReferenced = async (
         return !/^upload-(failed|aborted)$/.test(reason);
       case "export":
         return false; // exports are pinned while downloadable; unpinned + expired → collectable
+      case "jmap":
+        // Any blob row of the account (an Email, submission, upload or copy) keeps the bytes.
+        return await mailbox(env, parsed.mailboxId).messageKeyReferenced(key);
       case "unknown":
         return true;
     }
@@ -239,7 +256,16 @@ export const sweepBlobGc = async (
   let retained = 0;
 
   for (const intent of due) {
-    const referenced = await isReferenced(env, intent.bucket, intent.object_key, intent.reason);
+    const parsed = classifyKey(intent.object_key);
+
+    // A content-addressed JMAP key can be stored and registered again at any time: the account
+    // authority claims it (re-checking references) so nothing registers it while it is deleted.
+    const referenced =
+      (await isReferenced(env, intent.bucket, intent.object_key, intent.reason)) ||
+      (parsed.kind === "jmap" &&
+        !(await mailbox(env, parsed.mailboxId)
+          .jmapClaimGc(intent.object_key)
+          .catch(() => false)));
 
     if (referenced) {
       retained++;
@@ -255,6 +281,11 @@ export const sweepBlobGc = async (
     const head = await bucket.head(intent.object_key);
     await bucket.delete(intent.object_key);
     await deleteDerived(env, intent.object_key);
+
+    if (parsed.kind === "jmap")
+      await mailbox(env, parsed.mailboxId)
+        .jmapReleaseGc(intent.object_key)
+        .catch(() => undefined);
 
     if (head && intent.bucket === "EXPORTS")
       await recordUsage(env, "user", intent.owner_id, "exports", -head.size);

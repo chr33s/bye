@@ -21,6 +21,7 @@ import {
   type AttachmentMeta,
   DEFAULT_PARSE_LIMITS,
   type MessageSummary,
+  type MimeContainer,
   type MimePart,
   type ParsedMessage,
   type ParseLimits,
@@ -32,6 +33,7 @@ interface ParseCtx {
   readonly warnings: Array<Warning>;
   readonly parts: Array<MimePart>;
   readonly attachments: Array<AttachmentMeta>;
+  readonly containers: Array<MimeContainer>;
   partCount: number;
   decodedBytes: number;
   truncated: boolean;
@@ -288,6 +290,8 @@ const parseEntity = (
 
     if (split.malformed) pushWarning(ctx.warnings, { _tag: "MalformedBoundary", partId });
 
+    if (split.parts.length > 0) ctx.containers.push({ partId, contentType });
+
     if (split.parts.length === 0) {
       // Best effort: expose the body as text so content is not silently lost.
       recordLeaf(
@@ -439,6 +443,7 @@ export const parseMessage = (
     warnings: [],
     parts: [],
     attachments: [],
+    containers: [],
     partCount: 0,
     decodedBytes: 0,
     truncated: false,
@@ -501,6 +506,7 @@ export const parseMessage = (
     html: ctx.html,
     attachments: ctx.attachments,
     parts: ctx.parts,
+    containers: ctx.containers,
     calendar: ctx.calendar,
     warnings: ctx.warnings,
     truncated: ctx.truncated,

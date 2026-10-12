@@ -75,7 +75,18 @@ export const calendarTopics: TopicHandlers<
     const parsed = parseMessage(new Uint8Array(await original.arrayBuffer()));
 
     if (!parsed.calendar) return;
-    const delivery = await mailbox(env, mailboxId).delivery(payload.deliveryId);
+    const legacy = await mailbox(env, mailboxId).delivery(payload.deliveryId);
+
+    // On a migrated account the delivery is a JMAP Email (spec.md §16 B4).
+    const email = legacy
+      ? null
+      : await mailbox(env, mailboxId).jmapEmailSummary(payload.deliveryId);
+
+    const delivery = legacy
+      ? { deliveryId: legacy.deliveryId, threadId: legacy.threadId }
+      : email
+        ? { deliveryId: email.emailId, threadId: email.threadId }
+        : null;
 
     if (!delivery) return;
     const calendar = calendarAuthority(env, owner.calendar_id);

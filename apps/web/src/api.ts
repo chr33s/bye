@@ -9,6 +9,7 @@ import {
 } from "@bye/native-shared";
 import type { MailThreadSummary, MailViewPage } from "@bye/contracts";
 import type { MeWire } from "@bye/native-shared/wire";
+import { toast } from "./core/toast.ts";
 
 // Browser API access through the shared client (X01). The session is an HTTP-only cookie; CSRF
 // protection is Origin-based on the server (browsers always send Origin on these requests). Every
@@ -23,12 +24,34 @@ export const client = new ByeClient({
 /** Errors carry the envelope's `details` (e.g. `stepUp`), which drive the step-up retry. */
 export { ByeApiError as ApiRequestError, newCommandId };
 
+let upgradeNoticeShown = false;
+
+/**
+ * spec.md §16 C4: once an account has moved to JMAP, thread-model routes answer an explicit
+ * upgrade-required refusal. Tell the user once instead of showing a misleading uniform state.
+ */
+const upgradeNotice = (error: Error): never => {
+  if (
+    error instanceof ByeApiError &&
+    error.details?.["upgradeRequired"] === true &&
+    !upgradeNoticeShown
+  ) {
+    upgradeNoticeShown = true;
+    toast(
+      "This account now uses the standard JMAP mail service. Update the app to keep reading mail here.",
+    );
+  }
+
+  throw error;
+};
+
 export const api = <T = unknown>(
   method: Method,
   path: string,
   body?: RequestBody,
   signal?: AbortSignal,
-): Promise<T> => client.request<T>(method, path, body, signal ? { signal } : {});
+): Promise<T> =>
+  client.request<T>(method, path, body, signal ? { signal } : {}).catch(upgradeNotice);
 
 /** A list route's items: every list route answers `{ items }`. */
 export const list = <T = JsonObject>(path: string, signal?: AbortSignal): Promise<Array<T>> =>

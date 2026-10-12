@@ -12,6 +12,7 @@
     "@bye/calendar-engine": "workspace:*",
     "@bye/contracts": "workspace:*",
     "@bye/domain": "workspace:*",
+    "@bye/jmap": "workspace:*",
     "@bye/mail-codec": "workspace:*",
     "effect": "4.0.2"
   }

@@ -110,11 +110,13 @@ export const mailTopics: TopicHandlers<"mailbox.redeliver" | "scan-message" | "s
           : (payload.reason ?? "unspecified");
 
       const bucket =
-        parsed.kind === "upload" || parsed.kind === "body" || parsed.kind === "part"
-          ? "PARTS"
-          : parsed.kind === "export"
-            ? "EXPORTS"
-            : "ORIGINALS";
+        parsed.kind === "jmap"
+          ? parsed.bucket
+          : parsed.kind === "upload" || parsed.kind === "body" || parsed.kind === "part"
+            ? "PARTS"
+            : parsed.kind === "export"
+              ? "EXPORTS"
+              : "ORIGINALS";
 
       await recordGcIntent(env, { bucket, key, ownerKind: "mailbox", ownerId: mailboxId, reason });
     },

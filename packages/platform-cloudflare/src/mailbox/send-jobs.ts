@@ -15,6 +15,7 @@ import {
 } from "@bye/domain";
 import type { Address } from "@bye/mail-codec";
 import { json } from "../durable/sql.ts";
+import type { ArrivalInput } from "../jmap/ingest.ts";
 import { type MailboxContext, reject } from "./context.ts";
 import type { MailboxDrafts } from "./drafts.ts";
 import type { IdentityDirectory } from "./identities.ts";
@@ -48,6 +49,33 @@ const RETRY_BACKOFF_MS = [30_000, 120_000, 600_000, 1_800_000];
 
 /** Pseudo job IDs issued before publish jobs existed; only in-flight scheduled publishes still use them. */
 const LEGACY_PUBLISH_PREFIX = "wpub_";
+
+/** Jobs settled by post-restore reconciliation: accepted from evidence, or left ambiguous (C2). */
+export interface RestoreReconciliation {
+  readonly accepted: number;
+  readonly ambiguous: number;
+  /** The ambiguous jobs: the caller registers them for provider reconciliation (send_unknowns). */
+  readonly unknown: ReadonlyArray<{ readonly sendJobId: string; readonly trafficClass: string }>;
+}
+
+/** What sending needs from the account's JMAP side (spec.md §16 B2, C3). */
+export interface SendJmapHooks {
+  /** The legacy thread ledger is frozen (account fenced or migrated to JMAP, §16 C3). */
+  legacyFrozen(): boolean;
+  /** A legacy job was accepted while frozen: its message must still land in Sent. */
+  recordOutgoing(sendJobId: string): void;
+  /** A job's state or recipient outcomes moved (EmailSubmission history). */
+  jobChanged(sendJobId: string): void;
+}
+
+const NO_JMAP: SendJmapHooks = {
+  legacyFrozen: () => false,
+  recordOutgoing: () => undefined,
+  jobChanged: () => undefined,
+};
+
+/** Draft-ID prefix of send jobs created by JMAP EmailSubmission (B2). */
+export const JMAP_SUBMISSION_PREFIX = "jmap:";
 
 interface NewJob {
   readonly draftId: string;
@@ -91,6 +119,7 @@ export class MailboxSends {
     private readonly recordRecipients: (addresses: ReadonlyArray<Address>) => void,
     /** The service's World publishing address (`world@<service domain>`); null disables publish-by-mail. */
     private readonly publishAddress: string | null,
+    private readonly jmap: SendJmapHooks = NO_JMAP,
   ) {}
 
   private get sql() {
@@ -258,6 +287,39 @@ export class MailboxSends {
     return { _tag: "Queued", sendJobIds: ids, dueAt, deduplicated: false };
   }
 
+  /**
+   * A JMAP EmailSubmission's job (spec.md §16 B2): it sends the submission's own pinned bytes
+   * (`contentKey`), so rendering is skipped and the Email may change or vanish without affecting
+   * it. Its synthetic draft ID never names a user draft.
+   */
+  createSubmissionJob(input: {
+    readonly submissionId: string;
+    readonly identityId: string;
+    readonly from: string;
+    readonly recipients: ReadonlyArray<string>;
+    readonly contentKey: string;
+    readonly bytes: number;
+    readonly sendAt: number;
+    readonly threadId: string | null;
+  }): string {
+    const scheduled = input.sendAt > this.ctx.now();
+
+    return this.insertJob({
+      draftId: `${JMAP_SUBMISSION_PREFIX}${input.submissionId}`,
+      revision: 1,
+      splitKey: "",
+      state: scheduled ? "scheduled" : "ready",
+      dueAt: scheduled ? input.sendAt : this.ctx.now(),
+      identityId: input.identityId,
+      from: input.from,
+      recipients: input.recipients.map(normalizeAddress),
+      threadId: input.threadId,
+      trafficClass: "personal",
+      contentKey: input.contentKey,
+      bytes: input.bytes,
+    });
+  }
+
   /** The single send-job insert. Due jobs are scheduled; `ready` jobs are dispatched now. */
   private insertJob(j: NewJob): string {
     const id = this.ctx.id("snd");
@@ -350,7 +412,7 @@ export class MailboxSends {
     readonly destination: string;
     readonly recipient: string;
     readonly messageKey: string;
-    readonly threadId: string;
+    readonly threadId: string | null;
     readonly bytes: number;
   }): string {
     const draftId = this.drafts.insertDraft(input.threadId, {
@@ -579,8 +641,17 @@ export class MailboxSends {
 
       // Transactional system mail (verification codes) never becomes a readable outgoing
       // delivery or snippet in the requester's threads, nor approves its recipient as a sender.
-      if (job.trafficClass !== "forwarding" && job.trafficClass !== "transactional")
-        this.recordOutgoing(job, receipt.wireMessageId);
+      // JMAP submissions keep their own Email. A legacy job accepted once the ledger is frozen
+      // (C3) still approves its recipients — sender policies outlive the cutover — and its
+      // message goes to Sent on the JMAP side instead of the frozen ledger.
+      if (job.draftId.startsWith(JMAP_SUBMISSION_PREFIX)) this.approveRecipients(job);
+      else if (job.trafficClass !== "forwarding" && job.trafficClass !== "transactional") {
+        if (this.jmap.legacyFrozen()) {
+          this.approveRecipients(job);
+          this.jmap.recordOutgoing(sendJobId);
+        } else this.recordOutgoing(job, receipt.wireMessageId);
+      }
+
       this.ctx.change("send", "accepted", { sendJobId });
     });
   }
@@ -681,6 +752,52 @@ export class MailboxSends {
     });
   }
 
+  /**
+   * After a point-in-time restore (spec.md §16 C2): reconcile restored jobs with the attempt and
+   * acceptance evidence kept outside the snapshot. Accepted evidence wins; an attempted job with
+   * no acceptance becomes `unknown` (absence of evidence never proves it wasn't sent); only a
+   * job never attempted may resume on its own.
+   */
+  reconcileRestored(
+    evidence: ReadonlyArray<{
+      readonly sendJobId: string;
+      readonly attempted: boolean;
+      readonly providerId: string | null;
+    }>,
+  ): RestoreReconciliation {
+    let accepted = 0;
+    const unknown: Array<{ sendJobId: string; trafficClass: string }> = [];
+
+    for (const e of evidence) {
+      const job = this.job(e.sendJobId);
+
+      if (!job || ["accepted", "rejected", "cancelled"].includes(job.state)) continue;
+
+      if (job.state !== "unknown") {
+        this.sql.run(
+          "UPDATE send_jobs SET state = 'unknown', failure = ?, updated_at = ? WHERE send_job_id = ?",
+          JSON.stringify({
+            kind: "Unknown",
+            detail: "attempted before restore; outcome reconciled from evidence",
+          }),
+          this.ctx.now(),
+          e.sendJobId,
+        );
+        this.ctx.kernel.cancelJob("send", e.sendJobId);
+        this.ctx.kernel.cancelJob("send-retry", e.sendJobId);
+        this.ctx.change("send", "unknown", { sendJobId: e.sendJobId });
+        this.jmap.jobChanged(e.sendJobId);
+      }
+
+      if (e.providerId !== null) {
+        this.accepted(e.sendJobId, { providerId: e.providerId });
+        accepted++;
+      } else unknown.push({ sendJobId: e.sendJobId, trafficClass: job.trafficClass });
+    }
+
+    return { accepted, ambiguous: unknown.length, unknown };
+  }
+
   /** Explicit decision for an Unknown send after inspecting provider evidence. */
   resolveUnknown(
     sendJobId: string,
@@ -736,6 +853,7 @@ export class MailboxSends {
           a,
         );
         this.ctx.change("send", "recipient", { sendJobId });
+        this.jmap.jobChanged(sendJobId);
 
         return next;
       }),
@@ -834,6 +952,80 @@ export class MailboxSends {
 
     if (n === 0) reject("conflict", "send job changed concurrently");
     this.ctx.change("send", to, { sendJobId });
+    this.jmap.jobChanged(sendJobId);
+  }
+
+  /**
+   * Emailing someone approves them as a sender (they skip the Screener when they reply). An
+   * existing decision — including a block — is never overridden; new approvals are recorded in
+   * the policy history like any other decision (E02).
+   */
+  private approveRecipients(job: MailboxSendJob): void {
+    for (const r of job.recipients) {
+      this.ledger.writePolicy(
+        "address",
+        r,
+        { decision: "allowed", destination: "imbox", labels: [], bundle: false, notify: false },
+        { onlyIfAbsent: true },
+      );
+    }
+  }
+
+  /**
+   * A legacy job accepted while the ledger was frozen, replayed after the migration was aborted
+   * (C3): it joins its thread now, as it would have at acceptance.
+   */
+  recordFrozenOutgoing(sendJobId: string): void {
+    const job = this.job(sendJobId);
+
+    if (job?.state === "accepted") this.recordOutgoing(job, job.wireMessageId ?? undefined);
+  }
+
+  /**
+   * The message of a legacy job accepted after the cutover, as a JMAP arrival that publishes into
+   * Sent (C3): its bytes are the job's rendered original; Bcc never appears in the summary.
+   */
+  outgoingArrival(sendJobId: string, acceptedAt = this.ctx.now()): ArrivalInput | undefined {
+    const frozen = this.frozenContent(sendJobId);
+
+    // Only user mail with its own frozen draft: submissions have their Email, system mail none.
+    if (
+      !frozen ||
+      frozen.job.draftId.startsWith(JMAP_SUBMISSION_PREFIX) ||
+      frozen.job.trafficClass === "forwarding" ||
+      frozen.job.trafficClass === "transactional"
+    )
+      return undefined;
+    const { job, content: c } = frozen;
+    const now = acceptedAt;
+
+    return {
+      ingestionId: `send:${job.sendJobId}`,
+      recipient: job.from,
+      messageKey: job.contentKey,
+      rawSize: job.bytes,
+      summary: {
+        from: { name: frozen.identity?.name ?? undefined, address: job.from },
+        to: c.to,
+        cc: c.cc,
+        replyTo: [],
+        subject: c.subject,
+        date: now,
+        messageIdHeader: job.wireMessageId ?? undefined,
+        inReplyTo: c.inReplyTo ? [c.inReplyTo] : [],
+        references: c.references ?? [],
+        listId: undefined,
+        listUnsubscribe: undefined,
+        automated: false,
+        snippet: c.text.slice(0, 200),
+        attachments: [],
+        hasCalendar: false,
+        calendarMethod: undefined,
+      },
+      safety: { _tag: "Clean" },
+      receivedAt: now,
+      outgoing: true,
+    };
   }
 
   /** The accepted message joins its thread (or opens one); recipients become approved senders. */
@@ -881,26 +1073,19 @@ export class MailboxSends {
     });
     this.ledger.recordOutgoing(threadId, now);
 
-    // Emailing someone approves them as a sender (they skip the Screener when they reply). An
-    // existing decision — including a block — is never overridden; new approvals are recorded in
-    // the policy history like any other decision (E02).
-    for (const r of job.recipients) {
-      this.ledger.writePolicy(
-        "address",
-        r,
-        { decision: "allowed", destination: "imbox", labels: [], bundle: false, notify: false },
-        { onlyIfAbsent: true },
-      );
-    }
+    this.approveRecipients(job);
 
-    const afterSend = json<MailboxAfterSend>(
+    this.triage.afterSend(threadId, this.afterSendOf(job.sendJobId));
+  }
+
+  /** The action a job applies to its thread once accepted (E09). */
+  afterSendOf(sendJobId: string): MailboxAfterSend {
+    return json<MailboxAfterSend>(
       this.sql.one<{ after_send: string }>(
         "SELECT after_send FROM send_jobs WHERE send_job_id = ?",
-        job.sendJobId,
+        sendJobId,
       )?.after_send,
       { _tag: "None" },
     );
-
-    this.triage.afterSend(threadId, afterSend);
   }
 }

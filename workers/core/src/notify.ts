@@ -32,9 +32,24 @@ export const handleNotify = async (env: CoreEnv, m: NotifyMessage): Promise<void
       // fall back to a generic notification
     }
 
-    title = thread.ok ? thread.value.thread.sender : "New mail";
-    body = thread.ok ? thread.value.thread.subject || "(no subject)" : "You have new mail";
-    url = `${env.APP_ORIGIN}/#/thread/${encodeURIComponent(m.resource)}`;
+    // A migrated account's resource is a JMAP Email (spec.md §16 B4), not a legacy thread.
+    const email = thread.ok
+      ? null
+      : await mailbox(env, m.userId)
+          .jmapEmailSummary(m.resource)
+          .catch(() => null);
+
+    title = thread.ok
+      ? thread.value.thread.sender
+      : (email?.from.name ?? email?.from.address ?? "New mail");
+    body = thread.ok
+      ? thread.value.thread.subject || "(no subject)"
+      : email
+        ? email.subject || "(no subject)"
+        : "You have new mail";
+    url = email
+      ? `${env.APP_ORIGIN}/#/jmap/email/${encodeURIComponent(m.resource)}`
+      : `${env.APP_ORIGIN}/#/thread/${encodeURIComponent(m.resource)}`;
   } else if (m.kind === "forwarding-verification") {
     // Verification is sent by mail, not push (control/mail areas); nothing to notify here.
     return;

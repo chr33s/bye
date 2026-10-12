@@ -95,7 +95,15 @@ export const sharedMessageOf = async (
   readonly subject: string;
   readonly messages: ReadonlyArray<SharedMessage>;
 } | null> => {
-  const detail = (await settleOr(mailbox(env, mailboxId).thread(threadId), "not_found")) as {
+  const stub = mailbox(env, mailboxId);
+  const reply = await stub.thread(threadId);
+
+  // A migrated account refuses thread reads as upgrade-required: its threads and messages live
+  // in the JMAP core (spec.md §16 B4, C4).
+  if (!reply.ok && reply.details?.["upgradeRequired"] === true)
+    return await stub.jmapSharedMessages(threadId, refs);
+
+  const detail = (await settleOr(Promise.resolve(reply), "not_found")) as {
     readonly thread: MailboxThread;
     readonly deliveries: ReadonlyArray<MailboxDelivery>;
   } | null;

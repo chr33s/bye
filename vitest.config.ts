@@ -26,6 +26,8 @@ export default defineConfig({
     exclude: [
       ...configDefaults.exclude,
       ...(process.env.BYE_BENCH_MESSAGES ? [] : ["infra/tests/evidence-bench.test.ts"]),
+      ...(process.env.BYE_JMAP_BENCH_MESSAGES ? [] : ["infra/tests/jmap-bench.test.ts"]),
+      ...(process.env.BYE_JMAP_DEPLOYED_ORIGIN ? [] : ["infra/tests/jmap-deployed.test.ts"]),
     ],
     environment: "node",
     testTimeout: 20_000,

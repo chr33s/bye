@@ -525,11 +525,13 @@ export class Kernel {
     return r ? toDueJob(r) : undefined;
   }
 
-  dueJobs(now: number, limit: number): ReadonlyArray<DueJob> {
+  /** Due jobs, oldest first; `deferred` kinds are left pending and don't take batch slots. */
+  dueJobs(now: number, limit: number, deferred: ReadonlyArray<string> = []): ReadonlyArray<DueJob> {
     return this.sql
       .all<JobRow>(
-        "SELECT kind, job_key, due_at, generation, payload FROM scheduled_jobs WHERE state = 'pending' AND due_at <= ? ORDER BY due_at, kind, job_key LIMIT ?",
+        "SELECT kind, job_key, due_at, generation, payload FROM scheduled_jobs WHERE state = 'pending' AND due_at <= ? AND kind NOT IN (SELECT value FROM json_each(?)) ORDER BY due_at, kind, job_key LIMIT ?",
         now,
+        JSON.stringify(deferred),
         limit,
       )
       .map(toDueJob);
@@ -598,9 +600,11 @@ export class Kernel {
       .map((r) => ({ ...toDueJob(r), error: r.last_error }));
   }
 
-  nextDueAt(): number | null {
+  /** The earliest pending job, ignoring `deferred` kinds (they must not re-arm the alarm). */
+  nextDueAt(deferred: ReadonlyArray<string> = []): number | null {
     const r = this.sql.one<{ due: number | null }>(
-      "SELECT MIN(due_at) AS due FROM scheduled_jobs WHERE state = 'pending'",
+      "SELECT MIN(due_at) AS due FROM scheduled_jobs WHERE state = 'pending' AND kind NOT IN (SELECT value FROM json_each(?))",
+      JSON.stringify(deferred),
     );
 
     return r?.due == null ? null : Number(r.due);

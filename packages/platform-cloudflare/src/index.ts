@@ -19,3 +19,5 @@ export * from "./blob/index.ts";
 export * from "./queue/index.ts";
 
 export * from "./newsletter/index.ts";
+
+export * from "./jmap/index.ts";
