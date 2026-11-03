@@ -7,7 +7,7 @@
 // and the resulting `.alchemy/` directory is backed up by the operator.
 import { stateBuildHash } from "../state/build-hash.ts";
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { localState } from "alchemy/State";
 import { Config, Effect, Redacted } from "effect";
 import type { StateStoreObject } from "../state/worker.ts";

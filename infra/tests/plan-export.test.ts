@@ -1,5 +1,5 @@
 // plan-export maps the Alchemy engine's plan snapshot to reviewable rows. The engine itself needs
-// cloud credentials, so its `Stack.plan` is replaced by a fixed snapshot here.
+// cloud credentials, so its `plan` is replaced by a fixed snapshot here.
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import {

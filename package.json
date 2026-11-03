@@ -44,9 +44,10 @@
     "evidence:jmap:deployed": "vitest run infra/tests/jmap-deployed.test.ts"
   },
   "dependencies": {
-    "effect": "4.0.2"
+    "effect": "4.1.2"
   },
   "devDependencies": {
+    "@alchemy.run/cloudflare": "2.0.0-beta.85",
     "@bye/application": "workspace:*",
     "@bye/calendar-engine": "workspace:*",
     "@bye/cli": "workspace:*",
@@ -56,26 +57,26 @@
     "@bye/mail-codec": "workspace:*",
     "@bye/platform-cloudflare": "workspace:*",
     "@bye/testing": "workspace:*",
-    "@cloudflare/workers-types": "5.20261008.1",
-    "@effect/platform-bun": "4.0.2",
-    "@effect/platform-node": "4.0.2",
-    "@effect/vitest": "4.0.2",
-    "@oxlint/plugins": "1.87.0",
-    "@types/node": "26.6.4",
-    "@vitest/coverage-v8": "5.0.3",
-    "alchemy": "2.0.0-beta.81",
+    "@cloudflare/workers-types": "5.20261102.1",
+    "@effect/platform-bun": "4.1.2",
+    "@effect/platform-node": "4.1.2",
+    "@effect/vitest": "4.1.2",
+    "@oxlint/plugins": "1.90.0",
+    "@types/node": "26.6.6",
+    "@vitest/coverage-v8": "5.0.5",
+    "alchemy": "2.0.0-beta.85",
     "jmap-client-ts": "1.0.0",
     "jmap-jam": "0.13.8",
     "miniflare": "4.20260730.0",
-    "oxfmt": "0.72.0",
-    "oxlint": "1.87.0",
-    "oxlint-tsgolint": "7.0.2003",
-    "rolldown": "1.2.12",
+    "oxfmt": "0.75.0",
+    "oxlint": "1.90.0",
+    "oxlint-tsgolint": "7.0.2005",
+    "rolldown": "1.2.16",
     "typescript": "7.0.2",
-    "vitest": "5.0.3"
+    "vitest": "5.0.5"
   },
   "engines": {
-    "node": "24.21.0"
+    "node": "24.22.2"
   },
-  "packageManager": "pnpm@12.10.1"
+  "packageManager": "pnpm@12.16.1"
 }

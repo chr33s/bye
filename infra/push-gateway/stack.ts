@@ -8,7 +8,7 @@
 //
 // Usage: DOMAIN=bye.software RELAY_SEAL_KEY=… APNS_…=… FCM_SERVICE_ACCOUNT=… pnpm deploy:push-gateway
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { Config, Effect, Redacted } from "effect";
 import { COMPATIBILITY } from "../resources/compat.ts";
 import { parseDomain } from "../resources/domain.ts";

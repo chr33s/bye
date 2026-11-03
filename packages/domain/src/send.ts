@@ -71,7 +71,5 @@ const OUTCOME_RANK: Readonly<Record<RecipientOutcome, number>> = {
   complained: 4,
 };
 
-export const mergeOutcome = (
-  current: RecipientOutcome,
-  next: RecipientOutcome,
-): RecipientOutcome => (OUTCOME_RANK[next] >= OUTCOME_RANK[current] ? next : current);
+export const mergeOutcome = (current: RecipientOutcome, next: RecipientOutcome): RecipientOutcome =>
+  OUTCOME_RANK[next] >= OUTCOME_RANK[current] ? next : current;

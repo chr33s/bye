@@ -1,7 +1,7 @@
 // Authoritative state and long-running orchestration (§15.4). One namespace per authority
 // class, all hosted by MailCore; object instances are selected dynamically by opaque ID (§15.2).
 // Class names are compatibility-sensitive identities: see infra/migrations/durable.
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import type { CoreClasses } from "./runtime-types.ts";
 import type {
   DomainParams,

@@ -217,6 +217,7 @@ const environment = Layer.mergeAll(
     Terminal.make({
       columns: Effect.sync(() => process.stdout.columns || 80),
       rows: Effect.sync(() => process.stdout.rows || 24),
+      size: unused,
       readInput: unused,
       readLine: unused,
       display: () => Effect.void,

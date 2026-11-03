@@ -4,9 +4,9 @@
 # workspace, which is outside this build context, so the bundle cannot be built in a stage here).
 # `pnpm deploy`, `pnpm deploy:plan`, `pnpm drift` and every CI plan/deploy job run it first via
 # `pnpm build:deploy`; a missing bundle fails the image build at the COPY below.
-# Base image pinned by multi-arch index digest (resolved 2026-09-26 from registry-1.docker.io);
+# Base image pinned by multi-arch index digest (resolved 2026-11-03 from registry-1.docker.io);
 # Dependabot (docker ecosystem) proposes digest bumps. Keep the tag for readability.
-FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+FROM node:24.22.2-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
 WORKDIR /app
 COPY dist/server.mjs /app/server.mjs
 ENV NODE_ENV=production PORT=8080 MIME_TIMEOUT_MS=60000 NODE_OPTIONS=--max-old-space-size=768

@@ -15,7 +15,7 @@ export interface ScopeGrant {
 }
 
 // Scope IDs are Cloudflare's OAuth scope catalog names, as mirrored in Alchemy's own OAuth client
-// (alchemy/src/Cloudflare/Auth/OAuthScopes.ts), not Wrangler's legacy `x:write` names.
+// (@alchemy.run/cloudflare/src/Auth/OAuthScopes.ts), not Wrangler's legacy `x:write` names.
 // No offline_access: Cloudflare refuses it (invalid_scope) for third-party clients, so a refresh
 // token arrives only if the token response carries one anyway; without it an expired authorization
 // asks the operator to reconnect.

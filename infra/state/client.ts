@@ -3,7 +3,7 @@
 // server (infra/state/worker.ts) is ours. Credentials come from protected deploy config.
 import { State } from "alchemy/State";
 import { makeHttpStateStore } from "alchemy/State/HttpStateStore";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { Config, Effect, Layer, Redacted } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 

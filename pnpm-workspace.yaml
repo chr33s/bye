@@ -9,18 +9,31 @@ packages:
 allowBuilds:
   workerd: true
 minimumReleaseAgeExclude:
-  - "@cloudflare/workers-types@5.20261008.1"
-  - "@types/node@26.6.4"
-  - effect@4.0.2
-  - "@effect/platform-bun@4.0.2"
-  - "@effect/platform-node-shared@4.0.2"
-  - "@effect/platform-node@4.0.2"
-  - "@effect/sql-d1@4.0.2"
-  - "@effect/sql-sqlite-do@4.0.2"
-  - "@effect/vitest@4.0.2"
+  - "@cloudflare/workers-types@5.20261102.1"
+  - "@types/node@26.6.6"
+  - effect@4.1.2
+  - "@effect/platform-bun@4.1.2"
+  - "@effect/platform-node-shared@4.1.2"
+  - "@effect/platform-node@4.1.2"
+  - "@effect/sql-d1@4.1.2"
+  - "@effect/sql-sqlite-do@4.1.2"
+  - "@effect/vitest@4.1.2"
+  - "@alchemy.run/acme@2.0.0-beta.85"
+  - "@alchemy.run/cloudflare-runtime@2.0.0-beta.85"
+  - "@alchemy.run/cloudflare@2.0.0-beta.85"
+  - "@alchemy.run/docker@2.0.0-beta.85"
+  - "@alchemy.run/node-utils@2.0.0-beta.85"
+  - "@alchemy.run/sql@2.0.0-beta.85"
+  - "@distilled.cloud/acme@1.0.0-rc.18"
+  - "@distilled.cloud/aws4signer@1.0.0-rc.18"
+  - "@distilled.cloud/aws@1.0.0-rc.18"
+  - "@distilled.cloud/cloudflare@1.0.0-rc.18"
+  - "@distilled.cloud/core@1.0.0-rc.18"
+  - "@distilled.cloud/iceberg@1.0.0-rc.18"
+  - alchemy@2.0.0-beta.85
 overrides:
-  "@effect/sql-d1": 4.0.2
-  "@effect/sql-sqlite-do": 4.0.2
-  "@effect/platform-node-shared": 4.0.2
-  "@effect/vitest": 4.0.2
-  effect: 4.0.2
+  "@effect/sql-d1": 4.1.2
+  "@effect/sql-sqlite-do": 4.1.2
+  "@effect/platform-node-shared": 4.1.2
+  "@effect/vitest": 4.1.2
+  effect: 4.1.2

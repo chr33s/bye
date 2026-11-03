@@ -1,7 +1,7 @@
 // Application stack per stage (§15.2). The foundation stack (state backend bootstrap, zones,
 // account-level WAF) is administered separately; this stack references it, never owns it.
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { Config, Effect, Predicate } from "effect";
 import {
   CONSUMER_POLICY,

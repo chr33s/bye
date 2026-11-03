@@ -15,14 +15,14 @@
   "dependencies": {
     "@fontsource-variable/dm-sans": "5.3.0",
     "@fontsource-variable/fraunces": "5.3.0",
-    "@remotion/transitions": "4.0.534",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "remotion": "4.0.534"
+    "@remotion/transitions": "4.0.540",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "remotion": "4.0.540"
   },
   "devDependencies": {
-    "@remotion/cli": "4.0.534",
-    "@types/node": "26.6.4",
+    "@remotion/cli": "4.0.540",
+    "@types/node": "26.6.6",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "typescript": "7.0.2"

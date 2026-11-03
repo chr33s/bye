@@ -7,7 +7,7 @@
 //                      SigMirror (infra/resources/sigmirror.ts); no runtime egress.
 //   baked            — the daily CI image (.github/workflows/scanner-image.yml) with signatures
 //                      baked in, referenced by SCANNER_IMAGE; no runtime egress, no mirror needed.
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import type { CoreClasses } from "./runtime-types.ts";
 import { scannerSignatureSource } from "./scanner-source.ts";
 

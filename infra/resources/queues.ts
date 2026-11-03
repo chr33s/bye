@@ -5,7 +5,7 @@
 // wiring in stack.ts, the local drills and the DLQ replay mapping (workers/core/src/dlq.ts, checked
 // against this table at compile time) all derive from it. Logical IDs are the table keys and must
 // never change: renaming one replaces the queue and drops in-flight messages.
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 
 export interface ConsumerPolicy {
   readonly batchSize: number;

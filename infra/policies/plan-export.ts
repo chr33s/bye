@@ -1,5 +1,5 @@
 // Produce a normalized, reviewable plan from the REAL Alchemy engine (not a hand-made file).
-// The CLI's `plan` only renders to a terminal, so this runs alchemy/Alchemist `Stack.plan`
+// The CLI's `plan` only renders to a terminal, so this runs alchemy/Alchemist `plan`
 // programmatically with the same stack entrypoint, stage and profile as `alchemy deploy`.
 //
 // Usage: STAGE=<stage> node --experimental-strip-types infra/policies/plan-export.ts <out-dir> [deploy|destroy]
@@ -100,13 +100,17 @@ export interface PlanRequest {
 }
 
 /** Runs the engine plan for a request; injectable so tests can supply a fixed snapshot. */
-export type PlanRunner = (request: PlanRequest) => Effect.Effect<Alchemist.Stack.PlanSnapshot>;
+export type PlanSnapshot = Pick<Alchemist.StackPlan, "stack" | "resources" | "native">;
 
-const alchemistPlan: PlanRunner = (request) =>
-  Alchemist.Stack.plan(request).pipe(
+export type PlanRunner = (request: PlanRequest) => Effect.Effect<PlanSnapshot>;
+
+const alchemistPlan: PlanRunner = ({ target, operation }) =>
+  Alchemist.importStack(target.entrypoint).pipe(
+    Effect.flatMap((stack) => Alchemist.plan({ stack, stage: target.stage, operation })),
     Effect.provide(Alchemist.layer()),
     Effect.scoped,
-  ) as Effect.Effect<Alchemist.Stack.PlanSnapshot>;
+    Effect.orDie,
+  );
 
 export const exportPlan = async (
   stage: string,

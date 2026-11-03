@@ -1,7 +1,7 @@
 // Control-plane database, content buckets, and the config cache (§15.4 Control plane,
 // Content storage, Protection and caching). Deployment code only; never imported by Workers
 // except as `import type`.
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 
 export const Directory = Cloudflare.D1.Database("Directory", {
   migrations: "./infra/migrations/d1",

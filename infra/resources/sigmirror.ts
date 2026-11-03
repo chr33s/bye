@@ -8,7 +8,7 @@
 //   Scanner containers (enableInternet: false, SCANNER_SIGNATURES=mirror)
 //
 // The mirror job is the single audited egress point for signatures; scanners have none.
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { Config } from "effect";
 import type { SigMirrorJob as SigMirrorJobClass } from "../../workers/sigmirror/src/index.ts";
 import { COMPATIBILITY } from "./compat.ts";

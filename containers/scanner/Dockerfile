@@ -7,9 +7,9 @@
 #                      internet egress at runtime.
 #   baked            — signatures are downloaded at build time (CI, daily) and never refreshed at
 #                      runtime; no runtime egress at all, freshness = image rebuild cadence.
-# Base image pinned by multi-arch index digest (resolved 2026-09-26 from registry-1.docker.io);
+# Base image pinned by multi-arch index digest (resolved 2026-11-03 from registry-1.docker.io);
 # Dependabot (docker ecosystem) proposes digest bumps. Keep the tag for readability.
-FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+FROM node:24.22.2-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG SCANNER_SIGNATURES=mirror

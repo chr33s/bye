@@ -2,9 +2,9 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const EFFECT_VERSION = "4.0.2";
+export const EFFECT_VERSION = "4.1.2";
 
-export const ALCHEMY_VERSION = "2.0.0-beta.81";
+export const ALCHEMY_VERSION = "2.0.0-beta.85";
 
 const EXACT = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
@@ -47,6 +47,9 @@ export const checkManifest = (
 
       if (name === "alchemy" && spec !== ALCHEMY_VERSION)
         issues.push({ file, message: `alchemy must be ${ALCHEMY_VERSION}` });
+
+      if (name.startsWith("@alchemy.run/") && spec !== ALCHEMY_VERSION)
+        issues.push({ file, message: `${name} must match alchemy ${ALCHEMY_VERSION}` });
     }
   }
 

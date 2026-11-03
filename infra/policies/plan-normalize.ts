@@ -1,4 +1,4 @@
-// Adapter: Alchemy's real plan (alchemy/Alchemist `Stack.plan` → `PlanSnapshot`) → the
+// Adapter: Alchemy's real plan (alchemy/Alchemist `plan` → `StackPlan`) → the
 // normalized `Plan` evaluated by plan-policy.ts (§15.6 "review desired state"). Pure and
 // tested; infra/policies/plan-export.ts runs Alchemy and feeds this.
 import type { Plan, PlanAction, PlanEntry } from "./plan-policy.ts";

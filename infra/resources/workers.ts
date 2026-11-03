@@ -1,7 +1,7 @@
 // API and clients, inbound mail, scheduling, transport, observability (§15.4).
 // MailCore is the single host for every authority namespace and Workflow class so namespace
 // ownership is unambiguous (§15.3). The Public worker receives only published-content bindings.
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { Config, Redacted } from "effect";
 import {
   EraseAccount,

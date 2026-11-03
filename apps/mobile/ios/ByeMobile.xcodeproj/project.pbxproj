@@ -20,6 +20,7 @@
 		37DEA9B2A2F39E5BF6F7B803 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 85BD064BFBF54C923578CA60 /* PrivacyInfo.xcprivacy */; };
 		38645CC60089CD1779D696BC /* Fixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AE32042A6F28F73631CB4EE /* Fixtures.swift */; };
 		474586C5F72B4D7210E895EC /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58FEC9579312D3DD921ADDC0 /* main.swift */; };
+		496239AF7A42261745A33147 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 		4E144E45499D6C657F538747 /* ByePushCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0F7748FA98B4E8469D81B7 /* ByePushCrypto.swift */; };
 		5CBFFD20677BF05014A64235 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B984B300713DC67C658011CD /* Foundation.framework */; };
 		5E90872C3A5F21A53AD8EA31 /* ByePush.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE7E381DFA7760ADFBB80A35 /* ByePush.swift */; };
@@ -558,6 +559,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				496239AF7A42261745A33147 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

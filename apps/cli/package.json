@@ -29,13 +29,13 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
-    "effect": "4.0.2"
+    "effect": "4.1.2"
   },
   "devDependencies": {
     "@bye/domain": "workspace:*",
     "@bye/mail-codec": "workspace:*",
     "@bye/native-shared": "workspace:*",
-    "rolldown": "1.2.12"
+    "rolldown": "1.2.16"
   },
   "engines": {
     "node": ">=24"
