@@ -5,7 +5,7 @@
 # onboarding copies the manifest byte for byte; an index is refused):
 #   docker build --platform linux/amd64 --provenance=false --sbom=false \
 #     -f infra/onboarding/deployer/Dockerfile --build-arg BYE_RELEASE_COMMIT=$(git rev-parse HEAD) .
-FROM node:24.22.2-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 ARG BYE_RELEASE_COMMIT
 RUN test -n "$BYE_RELEASE_COMMIT"
 # /srv/bye is DEPLOYER_RELEASE_DIR in infra/onboarding/hosted-release.ts.
@@ -13,7 +13,7 @@ ENV BYE_RELEASE_DIR=/srv/bye BYE_RELEASE_COMMIT=$BYE_RELEASE_COMMIT PORT=8080 \
     CI=true ALCHEMY_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 NO_TRACK=1
 # pnpm as a plain global binary, not a corepack shim: jobs run with a fresh HOME and only an
 # allowlisted environment (executor.ts childEnv), where a shim would download pnpm again.
-RUN npm install --global pnpm@12.16.1 && npm cache clean --force
+RUN npm install --global pnpm@12.21.0 && npm cache clean --force
 # The checkout belongs to the unprivileged user that installs, builds and runs it.
 RUN mkdir -p /srv/bye && chown node:node /srv/bye
 WORKDIR /srv/bye

@@ -6,7 +6,7 @@
 # `pnpm build:deploy`; a missing bundle fails the image build at the COPY below.
 # Base image pinned by multi-arch index digest (resolved 2026-11-03 from registry-1.docker.io);
 # Dependabot (docker ecosystem) proposes digest bumps. Keep the tag for readability.
-FROM node:24.22.2-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 WORKDIR /app
 COPY dist/server.mjs /app/server.mjs
 ENV NODE_ENV=production PORT=8080 MIME_TIMEOUT_MS=60000 NODE_OPTIONS=--max-old-space-size=768

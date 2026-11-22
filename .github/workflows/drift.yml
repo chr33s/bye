@@ -20,8 +20,8 @@ env:
   ALCHEMY_TELEMETRY_DISABLED: "1"
   DO_NOT_TRACK: "1"
   NO_TRACK: "1"
-  NODE_VERSION: 24.22.2
-  PNPM_VERSION: 12.16.1
+  NODE_VERSION: 24.22.3
+  PNPM_VERSION: 12.21.0
   EGRESS: node --experimental-strip-types infra/policies/egress-proxy.ts --
 
 jobs:

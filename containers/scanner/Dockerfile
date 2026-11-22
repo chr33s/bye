@@ -9,7 +9,7 @@
 #                      runtime; no runtime egress at all, freshness = image rebuild cadence.
 # Base image pinned by multi-arch index digest (resolved 2026-11-03 from registry-1.docker.io);
 # Dependabot (docker ecosystem) proposes digest bumps. Keep the tag for readability.
-FROM node:24.22.2-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG SCANNER_SIGNATURES=mirror

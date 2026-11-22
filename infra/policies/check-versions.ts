@@ -2,9 +2,9 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const EFFECT_VERSION = "4.1.2";
+export const EFFECT_VERSION = "4.1.5";
 
-export const ALCHEMY_VERSION = "2.0.0-beta.85";
+export const ALCHEMY_VERSION = "2.0.0-beta.87";
 
 const EXACT = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 

@@ -22,12 +22,12 @@
     "react-native-macos": "0.81.9",
     "react-native-url-polyfill": "4.0.0",
     "react-native-webview": "16.0.0",
-    "react-native-windows": "0.81.37"
+    "react-native-windows": "0.81.42"
   },
   "devDependencies": {
-    "@babel/core": "7.29.7",
-    "@babel/preset-env": "7.29.7",
-    "@babel/runtime": "7.29.7",
+    "@babel/core": "7.29.13",
+    "@babel/preset-env": "7.29.14",
+    "@babel/runtime": "7.29.15",
     "@react-native-community/cli": "20.2.0",
     "@react-native/babel-preset": "0.81.6",
     "@react-native/metro-config": "0.81.6",
